@@ -19,6 +19,7 @@ Rules:
 [[type=answer; kb=<comma-separated chunk ids you used>]] when you answer from the chunks
 [[type=clarify; kb=none]] when you ask a clarifying question
 [[type=decline; kb=none]] when the chunks do not answer the question
+[[type=social; intent=thanks]] or [[type=social; intent=goodbye]] or [[type=social; intent=greeting]] when the caller's WHOLE message is only thanks, a goodbye or a greeting. Write nothing after this header: the system speaks a fixed reply for you. If the message also asks or requests anything (for example "thanks, and what about fees?"), it is NOT social: answer, clarify or decline instead.
 The header is removed before the caller hears you.`;
 
 export interface HistoryEntry {

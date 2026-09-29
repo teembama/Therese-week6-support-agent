@@ -18,21 +18,37 @@
 // nothing after the tool_use start is ever written). With the current agent config there are
 // no tools, so this path cannot occur in production today (docs/decisions.md D23).
 
-import { HEADER_WINDOW_CHARS } from "./config.js";
+import { HEADER_WINDOW_CHARS, SOCIAL_LINES } from "./config.js";
 
-export type ReplyType = "answer" | "clarify" | "decline";
+export type ReplyType = "answer" | "clarify" | "decline" | "social";
+export type SocialIntent = keyof typeof SOCIAL_LINES;
 
 export interface ParsedHeader {
   type: ReplyType;
   kbIds: string[];
+  /** Only for type=social. */
+  intent?: SocialIntent;
   rest: string;
 }
 
 const HEADER_RE = /^\s*\[\[\s*type\s*=\s*(answer|clarify|decline)\s*;\s*kb\s*=\s*([^\]]*?)\s*\]\]/i;
+// Social header carries an intent and NO kb field; anything else (unknown intent, kb=..., extra
+// fields) does not match and is treated as a malformed header.
+const SOCIAL_HEADER_RE = /^\s*\[\[\s*type\s*=\s*social\s*;\s*intent\s*=\s*(thanks|goodbye|greeting)\s*\]\]/i;
+
+/** The fixed line the backend speaks for a social intent. */
+export function socialLine(intent: SocialIntent): string {
+  return SOCIAL_LINES[intent];
+}
 const CHUNK_ID_RE = /^[a-z0-9-]+$/;
 
 /** The header at the very start of the reply, or null if missing, malformed or too late. */
 export function parseHeader(text: string, windowChars: number = HEADER_WINDOW_CHARS): ParsedHeader | null {
+  const social = SOCIAL_HEADER_RE.exec(text);
+  if (social) {
+    if (social[0].length > windowChars) return null;
+    return { type: "social", kbIds: [], intent: social[1]!.toLowerCase() as SocialIntent, rest: text.slice(social[0].length) };
+  }
   const m = HEADER_RE.exec(text);
   if (!m || m[0].length > windowChars) return null;
   const type = m[1]!.toLowerCase() as ReplyType;
@@ -89,6 +105,7 @@ export function evaluateReply(text: string, retrievedIds: ReadonlySet<string>): 
   if (!header) return { ok: false, reason: "missing, malformed or late header" };
   const verdict = validateHeader(header, retrievedIds);
   if (!verdict.ok) return verdict;
+  if (header.type === "social") return { ...verdict, spoken: socialLine(header.intent!) }; // model text discarded
   const spoken = stripForSpeech(header.rest);
   if (!spoken) return { ok: false, reason: "empty reply after header" };
   return { ...verdict, spoken };
@@ -117,6 +134,7 @@ export class StreamingGate {
   private spokenInMessage: string[] = [];
   private stoppedByTool = false;
   private verdict: Extract<HeaderVerdict, { ok: true }> | null = null;
+  private socialIntent: SocialIntent | null = null;
 
   constructor(private readonly retrievedIds: ReadonlySet<string>, private readonly windowChars: number = HEADER_WINDOW_CHARS) {}
 
@@ -128,12 +146,14 @@ export class StreamingGate {
     this.spokenInMessage = [];
     this.stoppedByTool = false;
     this.verdict = null;
+    this.socialIntent = null;
   }
 
   /** Sentences that became speakable with this delta (header already validated). */
   text(delta: string): string[] {
     this.raw += delta;
     if (this.stoppedByTool || this.headerState === "invalid") return [];
+    if (this.socialIntent) return []; // social: the fixed line was already spoken; model text is discarded
     if (this.headerState === "pending") {
       const lead = this.raw.trimStart();
       if (lead.length > 0 && !lead.startsWith("[")) return this.invalidate("text before header");
@@ -149,6 +169,13 @@ export class StreamingGate {
       if (!verdict.ok) return this.invalidate(verdict.reason);
       this.headerState = "valid";
       this.verdict = verdict;
+      if (header.type === "social") {
+        // Speak the backend's fixed line now; never speak (or even keep) the model's own words.
+        this.socialIntent = header.intent!;
+        const line = socialLine(header.intent!);
+        this.spokenInMessage.push(line);
+        return [line];
+      }
       this.body = header.rest;
     } else {
       this.body += delta;
@@ -174,7 +201,7 @@ export class StreamingGate {
     if (this.headerState !== "valid" || !this.verdict) {
       return { kind: "blocked", reason: this.invalidReason || "missing, malformed or late header", raw: this.raw.trim() };
     }
-    const speak = this.drain(true);
+    const speak = this.socialIntent ? [] : this.drain(true);
     if (this.spokenInMessage.length === 0) return { kind: "blocked", reason: "empty reply after header", raw: this.raw.trim() };
     return { kind: "final", type: this.verdict.type, validKbIds: this.verdict.validKbIds, unknownKbIds: this.verdict.unknownKbIds, speak };
   }

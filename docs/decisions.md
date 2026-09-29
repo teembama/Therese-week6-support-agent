@@ -408,6 +408,16 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - Vapi's first message is sent as an `assistant` message (roles `[system, assistant, user]`).
   - `x-stainless-timeout` is 600000 and every request had retry-count 0, while the transcript grew between requests. So the cancellations are speculative-request replacements, not timeouts, which supports D28's keep-alive deferral.
 
+### D31. `social` reply type: the model picks the intent, the backend speaks a fixed line
+
+- **Why:** in live call `01a0ef14…`, "All right. Thank you." was blocked, because the model labelled a pleasantry `type=answer; kb=none` (D30).
+- **Header:** `[[type=social; intent=thanks|goodbye|greeting]]`, with no `kb` field. Any other form, unknown intent or extra field is a malformed header and is blocked.
+- **The backend speaks a fixed line** from `SOCIAL_LINES` in `backend/src/config.ts`.
+  - It is spoken as soon as the header is parsed.
+  - Every model word after the header is discarded, never spoken or stored. So no free text is ever spoken ungrounded.
+- **Rule (prompt):** use `social` only when the caller's **whole** message is thanks, a goodbye or a greeting. "Thanks, and what about fees?" is a question.
+- **Storage:** stored as `answer_type = 'social'`, which migration 004 adds to the CHECK constraint. It is only this change; Phase 2 gets its own migration.
+
 ### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
 
 - **Observed in Task 4 step 1 (D18):** the MCP server failed to start because of the inherited API key, and the agent lost its only approved tool. It still answered, fabricating "RelayPay charges a 2% fee on international payments", which is plausible and wrong.

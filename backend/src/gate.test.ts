@@ -173,3 +173,42 @@ describe("StreamingGate (lever 4: sentence streaming after a valid header)", () 
     assert.equal(r.outcome.kind, "blocked");
   });
 });
+
+describe("social reply type (D31)", () => {
+  const THANKS = "You're welcome. Is there anything else I can help you with?";
+
+  it("speaks the backend's fixed line and discards the model's text", () => {
+    const v = evaluateReply("[[type=social; intent=thanks]] You're welcome! Our fees are 2%.", RETRIEVED);
+    assert.equal(v.ok, true);
+    if (!v.ok) return;
+    assert.equal(v.type, "social");
+    assert.equal(v.spoken, THANKS);
+    assert.ok(!v.spoken.includes("2%"));
+  });
+
+  it("streaming: the fixed line is spoken as soon as the header is parsed; later model text is ignored", () => {
+    const g = new StreamingGate(RETRIEVED);
+    g.start();
+    assert.deepEqual(g.text("[[type=social; intent=good"), []);
+    assert.deepEqual(g.text("bye]]"), ["Thanks for calling RelayPay. Goodbye."]);
+    assert.deepEqual(g.text(" Bye! By the way, fees are waived today. "), []);
+    const end = g.end("end_turn");
+    assert.equal(end.kind, "final");
+    if (end.kind === "final") {
+      assert.equal(end.type, "social");
+      assert.deepEqual(end.speak, []);
+      assert.deepEqual(end.validKbIds, []);
+    }
+  });
+
+  it("blocks unknown intents, a kb field, and a social header that is not at the start", () => {
+    assert.equal(evaluateReply("[[type=social; intent=smalltalk]] Nice weather.", RETRIEVED).ok, false);
+    assert.equal(evaluateReply(`[[type=social; intent=thanks; kb=${FEES}]] Welcome.`, RETRIEVED).ok, false);
+    assert.equal(evaluateReply("Sure. [[type=social; intent=thanks]]", RETRIEVED).ok, false);
+  });
+
+  it("greeting intent speaks the greeting line", () => {
+    const v = evaluateReply("[[type=social; intent=greeting]]", RETRIEVED);
+    assert.equal(v.ok && v.spoken, "Hello, how can I help you with RelayPay today?");
+  });
+});

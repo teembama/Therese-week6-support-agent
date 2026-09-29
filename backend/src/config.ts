@@ -51,6 +51,17 @@ export const HEADER_WINDOW_CHARS = 200;
 
 export const MAX_BODY_BYTES = 1_000_000;
 
+/**
+ * Social replies (D31): the model only picks the intent via [[type=social; intent=...]]; the
+ * backend speaks one of these fixed lines and discards any model text, so no free text is ever
+ * spoken ungrounded.
+ */
+export const SOCIAL_LINES = {
+  thanks: "You're welcome. Is there anything else I can help you with?",
+  goodbye: "Thanks for calling RelayPay. Goodbye.",
+  greeting: "Hello, how can I help you with RelayPay today?",
+} as const;
+
 /** Spoken when the gate blocks a reply. */
 export const SAFE_DECLINE_LINE =
   "I'm sorry, I can't confirm that from our support information. I can connect you with a RelayPay support specialist if you'd like.";

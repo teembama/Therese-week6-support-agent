@@ -3,7 +3,7 @@
 
 import type { Db } from "@relaypay/shared";
 
-export type AnswerType = "answer" | "clarify" | "escalate" | "decline" | "blocked" | "error";
+export type AnswerType = "answer" | "clarify" | "escalate" | "decline" | "blocked" | "error" | "social";
 export type AttemptFinalStatus = "completed" | "aborted" | "failed";
 
 export interface BeginAttemptInput {

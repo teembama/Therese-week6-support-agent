@@ -145,5 +145,11 @@ for fn in "begin_turn_attempt(text,text,text,integer,text,text,text)" "finish_tu
   eq "$(q "select has_function_privilege('anon','$fn','execute')")|$(q "select has_function_privilege('service_role','$fn','execute')")" "f|t" "only service_role executes ${fn%%(*}"
 done
 
+echo "--- social answer type (migration 004)"
+pg -c "insert into conversations(conversation_id,channel) values ('call-social','voice')"
+if pg -c "insert into conversation_turns(conversation_id,turn_index,answer_type) values ('call-social',0,'social')" >/dev/null 2>&1; then ok "answer_type 'social' accepted"; else bad "answer_type 'social' rejected"; fi
+neg "insert into conversation_turns(conversation_id,turn_index,answer_type) values ('call-social',1,'smalltalk')" "unknown answer_type still rejected"
+eq "$(q "select count(*) from pg_constraint where conname='conversation_turns_answer_type_check'")" 1 "exactly one answer_type check constraint"
+
 echo "--- failures: $FAILS"
 exit $FAILS
