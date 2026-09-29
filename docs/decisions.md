@@ -129,7 +129,7 @@ Once `001_schema.sql` is applied, all schema changes go in new numbered files (`
 - **Tuned 2026-09-29, evidence in `docs/retrieval-eval.md`:**
   - normalization changed from 32 to **34** (2|32);
   - `KB_MATCH_COUNT` changed from 4 to **6**;
-  - `KB_MIN_RANK` = **0.05**.
+  - `KB_MIN_RANK` = **0.04**. It was 0.05 first; it was lowered for margin, recall-first, and the lowest correct chunk (S2, .0526) now has .0126 headroom.
 - `KB_QUERY_SYNONYMS` is applied in app code before `search_kb`, with no migration and no prefix matching.
   - It appends a synonym when a key appears as a whole word.
   - Each entry must name the failing eval case that justified it. Speculative entries are not allowed.
@@ -141,6 +141,15 @@ Once `001_schema.sql` is applied, all schema changes go in new numbered files (`
 - `insufficient_knowledge` means exactly one thing: zero chunks above the floor.
 - Deciding that retrieved chunks don't actually answer the question is the agent's job. The agent then answers with `type = decline`.
 - **Known limit:** the grounding gate verifies that an answer cites retrieved chunks, not that those chunks are relevant to the question. The Task 6 evals check relevance.
+
+### D17. Known limitation: X1 ("do you support crypto wallets") doesn't retrieve its answer chunk
+
+- **Evidence (`docs/retrieval-eval.md`, Runs 2–4):**
+  - The answer is in "Product Features Overview > Feature Availability And Limitations": "RelayPay does not support: Cryptocurrency payments".
+  - With the `crypto → cryptocurrency` synonym, that chunk now matches. Its rank doubles from .0104 to .0206, and it moves from #11 to **#8**.
+  - It is still outside `KB_MATCH_COUNT = 6` and below the 0.04 floor. The query word "support" pulls in six short FAQ chunks with "Support" in their heading, which outrank the long limitations list.
+- **Decision:** leave it to the agent. X1 gets support-contact chunks with `insufficient_knowledge = false`. None of them answers the question, so the agent must decline (`type = decline`). There is no retuning; excluding "support" would break "How do I contact support".
+- **Fix, with more time:** when a synonym fires, run a supplementary `search_kb` on the synonym alone ("cryptocurrency" matches only the right chunk, at #1). Merge its top results into the main result set before the floor and match-count cut.
 
 ## Migration log
 

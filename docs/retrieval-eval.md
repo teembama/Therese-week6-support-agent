@@ -163,3 +163,31 @@ Conversation: `test-retrieval-eval-2026-09-29T14-09-09-721Z`.
 1. **The margin is thin (.0026, about 5% of S2's rank).** A knowledge-base edit that lengthens "Why Is My Payment Delayed?", or changes its wording, could push it under the floor. Rerun `npm run eval:retrieval` after any KB or retrieval change.
 2. **The floor interacts with X1.** X1's correct chunk ranks .0206, below 0.05. Raising the match count to 8 would not bring it back while the floor is 0.05. Fixing X1 means changing both settings: roughly match count 8 and a floor at or below .02, which would let far more noise through. Or the agent handles it: X1 still gets `insufficient_knowledge = false` with support-contact chunks, and should decline because none of them answers.
 3. **The judgments of "correct chunk" are mine**, made from the chunk text. The Task 6 evals should check them end to end.
+
+## Run 4 (final floor): normalization 34, min_rank 0.04, match_count 6, synonyms on
+
+Conversation: `test-retrieval-eval-2026-09-29T15-23-23-734Z`.
+
+- **Why the floor was lowered:** from 0.05 to 0.04 for margin, recall-first (D16). The margin to the lowest correct chunk (S2, .0526) grows from .0026 to .0126.
+
+| Q | Chunks at 0.05 | Chunks at 0.04 | Correct chunk |
+| --- | --- | --- | --- |
+| S1 | 5 | 6 | #1 .1379 |
+| S2 | 3 | 4 | #3 .0526 |
+| S3 | 4 | 4 | not in results (as at min 0) |
+| S4 | 2 | 2 | #1 .0558 |
+| S5 | 1 | 1 | not matched (as at min 0) |
+| S6 | 6 | 6 | #1 .1322 |
+| S7 | 5 | 5 | #2 .0873 |
+| S8 | 2 | 2 | #1 .0625 |
+| X1 | 4 | 4 | not in results (as at min 0) |
+| X2 | 0 | 0, `insufficient_knowledge = true` | none expected |
+| X3 | 3 | 3 | #1 .1176 |
+
+**Result:**
+
+- No correct chunk is lost.
+- X2 is still the only question with `insufficient_knowledge = true`.
+- The lower floor adds back two low-ranked chunks: S1's "How Long Do Payments Take To Process?" (.0493) and S2's "International Payments" (.0429).
+
+**X1 decision:** left to the agent to decline, with no retuning. It is recorded as a known limitation in `docs/decisions.md` (D17).

@@ -13,11 +13,12 @@ export const KB_MATCH_COUNT = 6;
  * Noise floor for ts_rank_cd scores (with KB_RANK_NORMALIZATION). Chunks below it are dropped;
  * if none remain, retrieval reports insufficient_knowledge. It is NOT an off-topic detector:
  * judging that retrieved chunks don't answer the question is the agent's job (D16).
- * 0.05 is the highest round value that keeps every judged-correct chunk in the eval; the
- * lowest is S2 at 0.0526, so the margin is 0.0026. Re-run `npm run eval:retrieval` after any
- * KB or retrieval change. Evidence: docs/retrieval-eval.md.
+ * The lowest judged-correct chunk in the eval is S2 at 0.0526. 0.05 kept it with only
+ * 0.0026 margin, so the floor was lowered to 0.04 for margin (0.0126), recall-first (D16).
+ * Re-run `npm run eval:retrieval` after any KB or retrieval change. Evidence:
+ * docs/retrieval-eval.md.
  */
-export const KB_MIN_RANK = 0.05;
+export const KB_MIN_RANK = 0.04;
 
 /**
  * ts_rank_cd normalization bitmask: 2 (divide by the number of unique words in the chunk) |
