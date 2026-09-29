@@ -14,7 +14,7 @@ Each script:
 
 | Script | Checks |
 | --- | --- |
-| `schema-suite.sh` | 48 checks: seed load, RLS on with no policies, CHECK and FK rejections, `search_kb` (OR semantics, stopword-only and excluded-word queries, min rank, match count, quoting, privileges), `create_escalation_with_ticket` (idempotency, no orphan ticket, `P0001 ESCALATION_KEY_CONFLICT`), and privileges (anon can't execute the functions or read any rows) |
+| `schema-suite.sh` | 80 checks: seed load, RLS on (every table) with no policies, CHECK and FK rejections, `search_kb` (OR semantics, stopword-only and excluded-word queries, min rank, match count, quoting, privileges), turn attempts (replacement, replay only of spoken turns, aborted attempts never replayed, truthful totals, supersession guard, one active attempt per turn), `create_escalation_with_ticket` (idempotency, no orphan ticket, `P0001 ESCALATION_KEY_CONFLICT`), and privileges (anon can't execute the functions or read any rows) |
 | `race.sh` | Two real concurrent sessions calling the function with the same keys. Session B must block on A's lock, then return A's IDs with `created=false`, leaving exactly one ticket and one escalation |
 
 ## Safety: they can't reach Supabase

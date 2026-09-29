@@ -19,7 +19,7 @@ eq "$(q "select count(*) from customers")" 5 "customers loaded"
 eq "$(q "select count(*) from transactions")" 5 "transactions loaded"
 eq "$(q "select count(*) from payouts")" 3 "payouts loaded"
 eq "$(q "select estimated_arrival is null from transactions where transaction_id='TXN-9003'")" t "empty CSV cell -> NULL"
-eq "$(q "select count(*) filter (where relrowsecurity) || '/' || count(*) from pg_class where relnamespace='public'::regnamespace and relkind='r'")" 11/11 "RLS enabled"
+eq "$(q "select count(*) filter (where relrowsecurity) || '/' || count(*) from pg_class where relnamespace='public'::regnamespace and relkind='r'")" 12/12 "RLS enabled on every table (incl. turn_attempts)"
 eq "$(q "select count(*) from pg_policies where schemaname='public'")" 0 "no RLS policies"
 
 echo "--- constraint rejections"
@@ -95,6 +95,49 @@ eq "$(q "set role anon; select count(*) from customers")" 0 "anon reads 0 custom
 eq "$(q "set role anon; select count(*) from support_tickets")" 0 "anon reads 0 tickets"
 neg "set role anon; insert into conversations(conversation_id,channel) values ('x','voice')" "anon insert blocked by RLS"
 eq "$(q "set role service_role; select count(*) from customers")" 5 "service_role reads 5 customers"
+
+echo "--- turn attempts (migration 003)"
+pg -c "insert into conversations(conversation_id,channel) values ('call-att','voice')"
+BEGIN_SQL() { SR "select action||'|'||coalesce(assistant_response,'')||'|'||array_to_string(replaced_attempt_ids,',') from begin_turn_attempt('call-att','voice',null,0,'$1','$2','$3')"; }
+TURN_JSON() { echo "jsonb_build_object('transcript_hash','$1','user_transcript','$2','assistant_response',$3,'answer_type','$4','confidence_note','ok','cost_usd_estimate',$5,'input_tokens',100,'output_tokens',10)"; }
+FINISH() { SR "select finish_turn_attempt('$1','$2','r', jsonb_build_object('cost_usd_estimate',$3,'input_tokens',100,'output_tokens',10), $4)"; }
+eq "$(BEGIN_SQL ATT-A hA 'What fees does.')" "run||" "speculative attempt A starts (run)"
+eq "$(q "select status from turn_attempts where attempt_id='ATT-A'")" active "A is active"
+neg "set role service_role; insert into turn_attempts(attempt_id,conversation_id,turn_index,transcript_hash) values ('ATT-X','call-att',0,'hX')" "second active attempt for the same turn (one-active index)"
+eq "$(BEGIN_SQL ATT-B hB 'What fees does RelayPay charge?')" "run||ATT-A" "fuller transcript B replaces A"
+eq "$(q "select status||'|'||replaced_by from turn_attempts where attempt_id='ATT-A'")" "replaced|ATT-B" "A recorded as replaced by B"
+eq "$(FINISH ATT-A completed 0.001 "$(TURN_JSON hA 'What fees does.' "'stale answer'" answer 0.001)")" replaced "late finish of replaced A keeps 'replaced'"
+eq "$(q "select count(*) from conversation_turns where conversation_id='call-att'")" 0 "replaced A wrote no turn row"
+eq "$(FINISH ATT-B completed 0.002 "$(TURN_JSON hB 'What fees does RelayPay charge?' "'Fees vary.'" answer 0.002)")" completed "B completes"
+eq "$(q "select attempt_id||'|'||assistant_response from conversation_turns where conversation_id='call-att' and turn_index=0")" "ATT-B|Fees vary." "B's answer stored as the turn"
+eq "$(q "select total_cost_usd from conversations where conversation_id='call-att'")" "0.003000" "totals = turn B (0.002) + replaced A (0.001)"
+eq "$(BEGIN_SQL ATT-C hB 'What fees does RelayPay charge?')" "replay|Fees vary.|" "identical retry of B replays B's stored answer"
+eq "$(q "select count(*) from turn_attempts where attempt_id='ATT-C'")" 0 "replay creates no attempt"
+# A turn attempt that disconnects before speaking: aborted, no turn row; the identical request runs fresh.
+pg -c "insert into conversations(conversation_id,channel) values ('call-att2','voice')"
+B2() { SR "select action from begin_turn_attempt('call-att2','voice',null,0,'$1','hZ','hi')"; }
+eq "$(B2 ATT-D)" run "attempt D starts"
+eq "$(FINISH ATT-D aborted 0.0005 null)" aborted "D aborted (client disconnected before speech)"
+eq "$(B2 ATT-E)" run "identical request after an aborted attempt runs fresh (never replays nothing)"
+eq "$(q "select total_cost_usd from conversations where conversation_id='call-att2'")" "0.000500" "aborted attempt's cost counted in totals"
+# A completed turn answered again (different transcript) -> previous attempt becomes replaced; no double count.
+eq "$(FINISH ATT-E completed 0.002 "$(TURN_JSON hZ 'hi' "'Hello.'" clarify 0.002)")" completed "E completes"
+eq "$(SR "select action from begin_turn_attempt('call-att2','voice',null,0,'ATT-F','hZ2','hi there')")" run "different transcript for an answered turn runs a new attempt"
+eq "$(FINISH ATT-F completed 0.003 "$(TURN_JSON hZ2 'hi there' "'Hello there.'" clarify 0.003)")" completed "F completes"
+eq "$(q "select attempt_id from conversation_turns where conversation_id='call-att2' and turn_index=0")|$(q "select status from turn_attempts where attempt_id='ATT-E'")" "ATT-F|replaced" "turn row now F's; E counted as replaced"
+eq "$(q "select total_cost_usd from conversations where conversation_id='call-att2'")" "0.005500" "totals = F 0.003 + E 0.002 + D 0.0005, no double count"
+# Supersession guard
+eq "$(q "set role service_role; select attempt_is_active('ATT-B')||'|'||attempt_is_active('ATT-A')||'|'||attempt_is_active('nope')")" "false|false|false" "attempt_is_active: completed/replaced/unknown are not active"
+eq "$(q "set role service_role; select attempt_is_active('ATT-F')")" f "attempt_is_active: F completed -> not active"
+SR "select action from begin_turn_attempt('call-att2','voice',null,1,'ATT-G','hG','next')" >/dev/null
+eq "$(q "set role service_role; select attempt_is_active('ATT-G')")" t "attempt_is_active: G active"
+if SR "select require_active_attempt('ATT-G')" >/dev/null 2>&1; then ok "require_active_attempt passes for an active attempt"; else bad "require_active_attempt rejected an active attempt"; fi
+E=$(pg -v VERBOSITY=verbose -At -c "set role service_role; select require_active_attempt('ATT-A')" 2>&1 >/dev/null | head -1)
+case "$E" in *"P0001: ATTEMPT_NOT_ACTIVE:"*) ok "require_active_attempt raises P0001 ATTEMPT_NOT_ACTIVE for a replaced attempt";; *) bad "require_active_attempt: $E";; esac
+eq "$(q "select relrowsecurity from pg_class where relname='turn_attempts'")" t "RLS enabled on turn_attempts"
+for fn in "begin_turn_attempt(text,text,text,integer,text,text,text)" "finish_turn_attempt(text,text,text,jsonb,jsonb)" "attempt_is_active(text)" "require_active_attempt(text)" "recompute_conversation_totals(text)"; do
+  eq "$(q "select has_function_privilege('anon','$fn','execute')")|$(q "select has_function_privilege('service_role','$fn','execute')")" "f|t" "only service_role executes ${fn%%(*}"
+done
 
 echo "--- failures: $FAILS"
 exit $FAILS

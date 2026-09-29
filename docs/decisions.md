@@ -326,6 +326,43 @@ Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5
 - Max tokens is 250, which our backend ignores; reply length is bounded by the prompt ("1 to 3 short spoken sentences").
 - No Vapi tools and no Vapi knowledge base (D8).
 
+### D28. Vapi sends speculative requests: turns are keyed on the transcript, and every attempt is recorded (migration 003)
+
+**Evidence from live call `01a0eece-4b0b-7aaf-ba5b-f7affa9d639a` (2026-09-29).** Both caller turns spoke our fallback line, about 1.5–2s after the caller stopped speaking.
+
+- **Turn 0:**
+  - The first request carried a *partial* transcript ("We've come down the shuttle to."). Vapi closed the connection at 3107ms, before we spoke.
+  - Two more requests for the same turn followed, at +3.9s and +4.3s. They joined the in-flight attempt, whose outcome was "nothing spoken", and so spoke the fallback.
+- **Turn 1:**
+  - The first request carried "What fees does." and was closed at 1568ms.
+  - The next request found the stored turn row (`assistant_response` NULL) and replayed the fallback.
+- **Request shape:**
+  - `metadata.numModelRequestInTurn` exists, and the `x-stainless-*` headers show Vapi calls us through the OpenAI SDK, which also retries.
+  - `call.id` is at `body.call.id`. Vapi also sends the full `call` and `assistant` objects plus `metadata`.
+- **No Supabase or agent failure:** the call's log has zero Supabase fetch failures.
+
+**Cause.** Vapi starts model requests on partial transcripts and cancels them when the caller keeps talking. Our idempotency key `(call.id, turn_index)` treated the fuller replacement request as a retry of the cancelled one, and reused its empty outcome.
+
+**Decision:**
+
+- **Key:** turns are keyed on `(call.id, turn_index, hash of the latest caller message)`.
+  - **Same transcript** is a genuine retry: join the in-flight attempt, or replay the stored turn **only if it spoke something**.
+  - **Different transcript** is a replacement: the in-flight attempt is aborted and marked `replaced`, a fresh attempt runs, and the old outcome is never reused.
+- **Attempts:** every request that runs the agent is a row in `turn_attempts`, with status `active | completed | replaced | aborted | failed` and its own cost, tokens and latency.
+  - The turn row is written only by a `completed` attempt, meaning one that spoke. If a later attempt with a different transcript completes, its answer becomes the turn, and the earlier attempt becomes `replaced`.
+  - `retrieval_logs` and `tool_calls` carry `attempt_id`.
+- **Totals:** `SUM(conversation_turns) + SUM(turn_attempts WHERE status <> 'completed')`. The replaced and aborted spend is counted, and nothing is counted twice.
+- **Supersession guard (write tools):**
+  - The MCP server receives `ATTEMPT_ID` at spawn, like `CONVERSATION_ID`.
+  - Before any write tool performs its write, the shared write path checks in the database that its attempt is still `active`. If not, the tool returns `denied` and writes nothing.
+  - Write RPCs must also call `require_active_attempt()` inside their own transaction. Its `FOR SHARE` lock means a replacement can't interleave with the write.
+  - **Why:** Vapi fires speculative requests on partial transcripts, and abort isn't immediate (below). Without the guard, a replaced attempt could still create a wrong ticket or escalation from a half-heard sentence.
+- **Abort is not immediate.**
+  - On turn 0 the SDK's result arrived 4.8s after our abort (model cost $0.000967). The SDK's `signal` aborts the CLI only after stdin EOF plus about a 2s grace period (documented on `spawnClaudeCodeProcess`).
+  - So the backend now spawns the CLI itself and, on abort, **terminates the whole process tree**, including the MCP server.
+- **Considered and deferred: SSE keep-alive comments before the first sentence.** The evidence points to Vapi cancelling because the transcript changed, not because our connection was silent. Revisit if a cancellation occurs while the transcript is unchanged, which the extended debug log (role sequence, `numModelRequestInTurn`, transcript hash) will reveal.
+- **Local network note:** the phone-hotspot resolver (`172.20.10.1`) intermittently returns SERVFAIL for the Supabase project hostname (`EAI_AGAIN`), while Cloudflare DNS-over-HTTPS resolves it. This explains the earlier intermittent "fetch failed" errors. The mitigation is one retry on pre-connect errors (fix 6), and deploying removes the cause.
+
 ### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
 
 - **Observed in Task 4 step 1 (D18):** the MCP server failed to start because of the inherited API key, and the agent lost its only approved tool. It still answered, fabricating "RelayPay charges a 2% fee on international payments", which is plausible and wrong.
