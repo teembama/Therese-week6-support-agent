@@ -15,7 +15,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { createServiceClient } from "@relaypay/shared";
+import { createServiceClient, newAttemptId, transcriptHash } from "@relaypay/shared";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SERVER = resolve(REPO, "mcp-server", "dist", "main.js");
@@ -30,12 +30,14 @@ async function main(): Promise<number> {
   process.loadEnvFile(resolve(REPO, ".env"));
   const db = createServiceClient();
   const conversationId = `test-mcp-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  const attemptId = newAttemptId();
   const serverEnv = {
     ...getDefaultEnvironment(),
     SUPABASE_URL: requireEnv("SUPABASE_URL"),
     SUPABASE_SERVICE_ROLE_KEY: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
     CONVERSATION_ID: conversationId,
     TURN_INDEX: "0",
+    ATTEMPT_ID: attemptId,
   };
   let failures = 0;
   const check = (ok: boolean, label: string) => {
@@ -50,11 +52,18 @@ async function main(): Promise<number> {
   console.log(`stderr: ${refused.stderr.trim()}`);
   check(refused.status !== 0 && refused.stderr.includes("CONVERSATION_ID is not set"), "server refuses to start without CONVERSATION_ID");
 
-  const { error: convError } = await db
-    .from("conversations")
-    .insert({ conversation_id: conversationId, channel: "test", caller: "scripts/test-mcp.ts" });
-  if (convError) throw new Error(`could not create test conversation: ${convError.message}`);
-  console.log(`\ntest conversation: ${conversationId} (channel=test)`);
+  console.log("\n== 1b. start with ATTEMPT_ID missing");
+  const { ATTEMPT_ID: _noAttempt, ...envNoAttempt } = serverEnv;
+  const refusedAttempt = spawnSync(process.execPath, [SERVER], { env: envNoAttempt, input: "", encoding: "utf8", timeout: 15_000 });
+  check(refusedAttempt.status !== 0 && refusedAttempt.stderr.includes("ATTEMPT_ID is not set"), "server refuses to start without ATTEMPT_ID");
+
+  // Register the attempt the MCP server acts for (migration 003); this also creates the conversation.
+  const { error: beginError } = await db.rpc("begin_turn_attempt", {
+    p_conversation_id: conversationId, p_channel: "test", p_caller: "scripts/test-mcp.ts", p_turn_index: 0,
+    p_attempt_id: attemptId, p_transcript_hash: transcriptHash("mcp test"), p_user_transcript: "mcp test",
+  });
+  if (beginError) throw new Error(`could not register test attempt: ${beginError.message}`);
+  console.log(`\ntest conversation: ${conversationId} (channel=test), attempt ${attemptId}`);
 
   const client = new Client({ name: "relaypay-test-mcp", version: "0.1.0" });
   const transport = new StdioClientTransport({ command: process.execPath, args: [SERVER], env: serverEnv, stderr: "pipe" });
@@ -118,12 +127,13 @@ async function main(): Promise<number> {
   console.log(`\n== tool_calls for ${conversationId}`);
   const { data: calls, error: callsError } = await db
     .from("tool_calls")
-    .select("id, conversation_id, turn_index, tool_name, status, input_summary, result_summary, error_message, duration_ms")
+    .select("id, conversation_id, turn_index, attempt_id, tool_name, status, input_summary, result_summary, error_message, duration_ms")
     .eq("conversation_id", conversationId)
     .order("id");
   if (callsError) throw new Error(callsError.message);
   console.table(calls);
   check(calls?.length === 3, "3 tool_calls rows (fees, empty, injected)");
+  check((calls ?? []).every((c) => c.attempt_id === attemptId), "tool_calls rows carry the spawning attempt_id");
   check((calls ?? []).map((c) => c.status).join(",") === "success,invalid_input,success", "statuses: success, invalid_input, success");
 
   console.log(`\n== retrieval_logs for ${conversationId}`);
@@ -142,6 +152,7 @@ async function main(): Promise<number> {
     .eq("conversation_id", "attacker-chosen-id");
   check(leaked === 0, "nothing logged under the model-supplied conversation_id");
 
+  await db.rpc("finish_turn_attempt", { p_attempt_id: attemptId, p_status: "failed", p_status_reason: "mcp test harness (no agent)", p_metrics: {}, p_turn: null });
   await db.from("conversations").update({ ended_at: new Date().toISOString(), final_status: "completed", summary: "MCP server test run" }).eq("conversation_id", conversationId);
   console.log(`\n${failures === 0 ? "TEST-MCP OK" : `TEST-MCP FAILED (${failures})`}`);
   return failures === 0 ? 0 : 1;

@@ -11,6 +11,8 @@ export type ToolCallStatus = "success" | "not_found" | "invalid_input" | "denied
 export interface LogContext {
   conversationId: string;
   turnIndex: number;
+  /** The turn attempt (migration 003, D28); set by the backend, never by the model. */
+  attemptId?: string | undefined;
 }
 
 const SECRET_KEY_NAME = /(api[_-]?key|secret|token|password|authorization|service[_-]?role)/i;
@@ -96,6 +98,7 @@ export function logToolCall(db: Db, ctx: LogContext, log: ToolCallLog): Promise<
   return insertLogRow(db, "tool_calls", {
     conversation_id: ctx.conversationId,
     turn_index: ctx.turnIndex,
+    ...(ctx.attemptId ? { attempt_id: ctx.attemptId } : {}),
     tool_name: log.toolName,
     purpose: log.purpose,
     input_summary: summarize(log.input),
@@ -118,6 +121,7 @@ export function logRetrieval(db: Db, ctx: LogContext, log: RetrievalLog): Promis
   return insertLogRow(db, "retrieval_logs", {
     conversation_id: ctx.conversationId,
     turn_index: ctx.turnIndex,
+    ...(ctx.attemptId ? { attempt_id: ctx.attemptId } : {}),
     query: summarize(log.query),
     chunk_ids: log.chunkIds,
     source_titles: log.sourceTitles,

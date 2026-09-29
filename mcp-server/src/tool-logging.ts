@@ -3,7 +3,7 @@
 // structured `error` result. A failed log write never changes the tool's result (the
 // failure goes to stderr from the shared logger).
 
-import { logToolCall, summarize, type Db, type LogContext, type ToolCallStatus } from "@relaypay/shared";
+import { AttemptNotActiveError, logToolCall, summarize, type Db, type LogContext, type ToolCallStatus } from "@relaypay/shared";
 
 export interface ToolDeps {
   db: Db;
@@ -67,4 +67,34 @@ export function withToolLogging(toolName: string, purpose: string, handler: Tool
     });
     return toToolResult(outcome);
   };
+}
+
+/**
+ * The shared write path (D28, D29). Every tool that writes (tickets, escalations, and any later
+ * write tool) MUST be wrapped with this instead of withToolLogging, and MUST perform its write
+ * with guardedRpc(db, fn, params, ctx.attemptId), which calls a Postgres function that checks
+ * require_active_attempt(p_attempt_id) and writes in ONE transaction.
+ * There is deliberately NO pre-check here: a separate "is it active?" call followed by the
+ * write would leave a window in which the attempt is replaced. When the database refuses
+ * (P0001 ATTEMPT_NOT_ACTIVE -> AttemptNotActiveError), the tool result is status 'denied' and
+ * nothing was written.
+ * Why: Vapi fires speculative requests on partial transcripts and abort is not immediate, so a
+ * replaced attempt could otherwise still create a ticket or escalation from a half-heard turn.
+ */
+export function withWriteToolLogging(toolName: string, purpose: string, handler: ToolHandler): LoggedTool {
+  return withToolLogging(toolName, purpose, async (args, deps) => {
+    try {
+      return await handler(args, deps);
+    } catch (err) {
+      if (err instanceof AttemptNotActiveError) {
+        return {
+          status: "denied",
+          result: { error: { code: "attempt_not_active", message: "This request was superseded by a newer one. Nothing was written. Do not retry." } },
+          resultSummary: `denied: attempt ${deps.ctx.attemptId ?? "(none)"} is not active`,
+          errorMessage: err.message,
+        };
+      }
+      throw err; // withToolLogging turns it into a structured 'error' result
+    }
+  });
 }
