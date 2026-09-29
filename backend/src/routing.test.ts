@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { shapeOf } from "./debug-shape.js";
+import { debugDetails, shapeOf } from "./debug-shape.js";
 import { matchRoute, redactPath, sha256 } from "./routing.js";
 
 const SECRET = "a".repeat(20) + "b".repeat(20) + "0123456789abcdef";
@@ -44,5 +44,21 @@ describe("shapeOf (debug, structure only)", () => {
     const shape = shapeOf({ call: { id: "abc" }, messages: [{ role: "user", content: "my account number is 42" }], stream: true });
     assert.deepEqual(shape, { call: { id: "string" }, messages: { "array(1)": { role: "string", content: "string" } }, stream: "boolean" });
     assert.ok(!JSON.stringify(shape).includes("account number"));
+  });
+});
+
+describe("debugDetails (debug, no content)", () => {
+  it("reports roles, the model-request counter, SDK retry headers and a hash, never the text", () => {
+    const d = debugDetails(
+      { messages: [{ role: "system", content: "prompt" }, { role: "user", content: "What fees does RelayPay charge?" }], metadata: { numModelRequestInTurn: 2 } },
+      { "x-stainless-retry-count": "1", "x-stainless-timeout": "20", authorization: "Bearer secret-value" },
+    );
+    assert.deepEqual(d.role_sequence, ["system", "user"]);
+    assert.equal(d.num_model_request_in_turn, 2);
+    assert.equal(d.x_stainless_retry_count, "1");
+    assert.equal(d.x_stainless_timeout, "20");
+    assert.match(String(d.last_user_message_hash), /^[0-9a-f]{10}$/);
+    const json = JSON.stringify(d);
+    assert.ok(!json.includes("RelayPay") && !json.includes("secret-value") && !json.includes("prompt"));
   });
 });
