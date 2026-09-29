@@ -62,3 +62,22 @@ describe("individual checks", () => {
     assert.deepEqual(checkGrounding("RelayPay does not guarantee dispute outcomes.", ["RelayPay does not guarantee dispute outcomes or resolution timelines."]), []);
   });
 });
+
+describe("false positives from the first grounding-eval run (fixed)", () => {
+  const GUARANTEE_CHUNK = "No. Payment timelines depend on external banking systems and regulatory checks.";
+  it("a negated intensifier ('can't guarantee') is not strengthening", () => {
+    const answer = "No, RelayPay can't guarantee payment timelines because they depend on external banking systems and regulatory checks.";
+    assert.deepEqual(checkGrounding(answer, ["Can RelayPay Guarantee Payment Timelines?\n" + GUARANTEE_CHUNK]), []);
+    assert.deepEqual(checkGrounding(answer, [GUARANTEE_CHUNK]), []);
+  });
+  it("an unnegated intensifier is still flagged", () => {
+    assert.deepEqual(terms(checkGrounding("RelayPay will always deliver within 2 to 5 business days.", [TIMING_CHUNK]), "strengthening_word"), ["always"]);
+  });
+  it("'your account' echoing the caller's 'my account' is not invented", () => {
+    const flags = checkGrounding("I'm sorry to hear your account is restricted.", ["RelayPay may apply temporary restrictions to accounts."], "My account was restricted and nobody is helping me.");
+    assert.deepEqual(terms(flags, "invented_attribution"), []);
+  });
+  it("'your banking partners' is still invented when the caller never mentioned theirs", () => {
+    assert.deepEqual(terms(checkGrounding("It depends on your banking partners.", [TIMING_CHUNK], "How long do payouts to Kenya take?"), "invented_attribution"), ["your banking partners"]);
+  });
+});

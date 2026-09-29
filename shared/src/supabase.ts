@@ -39,9 +39,11 @@ interface FetchCause {
 /**
  * Network failures that happen BEFORE a request reaches Supabase (DNS, refused or timed-out
  * connect), so retrying cannot duplicate a write. Observed live: EAI_AGAIN from a phone
- * hotspot resolver that intermittently SERVFAILs Supabase project hostnames (D28).
+ * hotspot resolver that intermittently SERVFAILs Supabase project hostnames (D28), and ENOTFOUND
+ * from the same resolver during the grounding eval (an attempt was left active when its
+ * finish_turn_attempt call failed without a retry).
  */
-const PRE_CONNECT_CODES = new Set(["EAI_AGAIN", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT", "ETIMEDOUT"]);
+const PRE_CONNECT_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT", "ETIMEDOUT"]);
 
 /** Only retry if the failed attempt was quick, so the retry stays inside a turn's time budget. */
 const RETRY_IF_FAILED_WITHIN_MS = 2_000;

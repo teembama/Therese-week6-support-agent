@@ -9,7 +9,10 @@
 //                         answer makes a claim about it)
 //   invented_attribution  "your <thing>" when the cited chunks attribute nothing to the reader
 // A sentence that explicitly declines to confirm something ("I can't confirm ... for Kenya") is
-// not a claim, so specifics inside it are not flagged.
+// not a claim, so specifics inside it are not flagged. A NEGATED intensifier ("can't guarantee")
+// weakens rather than strengthens, and "your X" repeating the caller's own "my X" is not an
+// invented attribution (both were false positives in the first grounding-eval run). Chunk
+// headings count as evidence (callers pass "heading\ncontent").
 
 export type GroundingFlagKind = "strengthening_word" | "dropped_hedge" | "unsupported_specific" | "invented_attribution";
 
@@ -51,6 +54,12 @@ function sentencesOf(text: string): string[] {
 
 const has = (haystack: string, term: string) => new RegExp(`(^|[^a-z0-9])${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`).test(haystack);
 
+/** True if the intensifier is negated just before it ("can't guarantee", "does not always"). */
+function negated(sentence: string, word: string): boolean {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b(not|no|never|can'?t|cannot|won'?t|don'?t|doesn'?t|isn'?t|aren'?t|unable to)(\\s+\\w+){0,2}\\s+${escaped}\\b`).test(sentence);
+}
+
 function numbersIn(text: string): string[] {
   return [...text.matchAll(/\d+(?:[.,]\d+)?%?/g)].map((m) => m[0]);
 }
@@ -68,7 +77,7 @@ export function checkGrounding(answer: string, citedChunks: string[], callerText
     const s = normalise(raw);
     const disclaimer = DISCLAIMER.test(s);
 
-    for (const w of STRENGTHENING) if (has(s, w) && !has(source, w)) add("strengthening_word", w, raw);
+    for (const w of STRENGTHENING) if (has(s, w) && !has(source, w) && !negated(s, w)) add("strengthening_word", w, raw);
 
     if (!disclaimer) {
       for (const n of numbersIn(s)) if (!has(source, n)) add("unsupported_specific", n, raw);
@@ -77,8 +86,11 @@ export function checkGrounding(answer: string, citedChunks: string[], callerText
       }
     }
 
-    const attribution = /\byour\s+(?:own\s+|specific\s+|particular\s+)?[a-z]+(?:\s+[a-z]+)?/.exec(s);
-    if (attribution && !has(source, "your") && !disclaimer) add("invented_attribution", attribution[0], raw);
+    for (const m of s.matchAll(/\byour\s+(?:own\s+|specific\s+|particular\s+)?([a-z]+)(?:\s+[a-z]+)?/g)) {
+      const noun = m[1]!;
+      const echoed = has(caller, `my ${noun}`) || has(caller, `our ${noun}`);
+      if (!has(source, "your") && !disclaimer && !echoed) add("invented_attribution", m[0], raw);
+    }
 
     // Dropped hedge: the same numbers as a hedged chunk sentence, but no hedge in the answer.
     const nums = numbersIn(s);
