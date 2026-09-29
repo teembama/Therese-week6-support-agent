@@ -124,7 +124,7 @@ function main(): void {
   }
   const secretDigest = sha256(secret);
   const db = createServiceClient();
-  const port = Number(process.env["PORT"] ?? 8787);
+  const port = Number(process.env["PORT"] || 8787);
 
   const server = createServer((req, res) => {
     const tReceivedMs = performance.now();

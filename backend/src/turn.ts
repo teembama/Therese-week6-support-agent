@@ -39,7 +39,7 @@ import { styleViolations } from "./style.js";
 const ATTACH_MCP = AGENT_MCP_TOOLS.length > 0 || process.env["RELAYPAY_ATTACH_MCP"] === "1";
 
 const MCP_ENTRY =
-  process.env["RELAYPAY_MCP_ENTRY"] ??
+  process.env["RELAYPAY_MCP_ENTRY"] ||
   resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "mcp-server", "dist", "main.js");
 
 export interface TurnInput {

@@ -37,7 +37,7 @@ async function main(): Promise<void> {
       settingSources: [],
       strictMcpConfig: true,
       persistSession: false,
-      maxTurns: Number(process.env["HANDSHAKE_MAX_TURNS"] ?? 2),
+      maxTurns: Number(process.env["HANDSHAKE_MAX_TURNS"] || 2),
       includePartialMessages: true,
       env: cliEnv(),
       stderr: (d) => cliStderr.push(d),
