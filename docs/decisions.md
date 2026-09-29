@@ -257,6 +257,29 @@ Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5
 - **Bug fixed along the way:** before, the upsert and turn check ran *before* the turn's timers started. A Supabase stall of 5–12s therefore meant 12s of silence despite the 8s rule. Now the first-token timeout covers all DB work.
 - **Measured (10 fees runs):** p50 `ms_first_token` fell from 5792 to **2453ms**. p95 is 8001ms, caused by one 10.4s Supabase stall that correctly hit the 8s fallback.
 
+### D23. Streaming gate: sentences are released once a valid header is parsed (latency lever 4)
+
+**Verified event sequence** (`backend/src/dev/trace-events.ts`):
+
+- **(a) The header can be validated before any output.**
+  - It arrives in the first few text deltas. In the trace it was complete at 2748ms, while the message ended at 2997ms.
+  - The gate holds everything until `]]` and checks `type` and `kb` against the **in-memory** retrieved set. Only then does it release text.
+- **(b) `tool_use` can follow text in the same message**, but only when the agent has a tool.
+  - Trace case B showed a text block, then a `tool_use` block (index 1), in one message.
+  - With the current config the agent has no tools (D20), so this cannot happen in production today.
+- **(c) Events arrive strictly in order.** All text deltas and the text block's stop come before `content_block_start(tool_use)`. The backend stops output from that message at that event; text already sent can't be retracted.
+- **(d) The header is never sent.** It is parsed out of the buffer, and only the text after it is streamed.
+
+**Rules as implemented** (`StreamingGate`, with fixtures in `gate.test.ts`):
+
+- No customer-facing text before a valid header at the very start of the message, complete within 200 chars.
+- Text in a message without a valid header is never spoken. If that message ends the turn, the turn is blocked and the caller hears the safe decline line.
+- Output is released as whole sentences, stripped of markdown. Stripping works correctly across delta boundaries.
+- If a `tool_use` starts after a sentence was already spoken, further output from that message stops. The turn records a `gate_violation`, in `confidence_note` and as a log event, with exactly what had been sent.
+- A headerless pre-tool message ("thinking aloud") is discarded silently.
+
+**Measured:** the first sentence is spoken 0.2–0.5s (median ~0.33s) before the model finishes the reply.
+
 ### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
 
 - **Observed in Task 4 step 1 (D18):** the MCP server failed to start because of the inherited API key, and the agent lost its only approved tool. It still answered, fabricating "RelayPay charges a 2% fee on international payments", which is plausible and wrong.

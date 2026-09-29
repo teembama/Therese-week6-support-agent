@@ -27,7 +27,7 @@ import {
   SAFE_DECLINE_LINE,
   TURN_HARD_CAP_MS,
 } from "./config.js";
-import { evaluateReply, SegmentTracker, sentences } from "./gate.js";
+import { sentences, StreamingGate } from "./gate.js";
 import { findTurn, insertTurn, recomputeConversationTotals, upsertConversation, type AnswerType } from "./persistence.js";
 import { buildTurnPrompt, SYSTEM_PROMPT, type HistoryEntry } from "./prompt.js";
 import { buildRetrievalQuery } from "./retrieval-query.js";
@@ -122,27 +122,44 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     const elapsed = () => Math.round(performance.now() - input.tReceivedMs);
     const marks: Record<string, number> = {};
     const mark = (name: string) => void (marks[name] ??= elapsed());
-    let released: TurnResult | null = null;
+    let finished: TurnResult | null = null;
     let msFirstToken: number | null = null;
     let msTotal: number | null = null;
     let kbChunkIds: string[] = [];
     let begun = false;
+    const spokenParts: string[] = [];
 
-    const release = (spoken: string | null, answerType: AnswerType, note?: string, source: TurnResult["source"] = "agent") => {
-      if (released) return;
-      if (note) notes.push(note);
-      released = { spoken, answerType, source };
-      if (!begun) {
-        begun = true;
-        sink.begin(source);
-      }
-      if (spoken !== null) {
+    const begin = (source: TurnResult["source"]) => {
+      if (begun) return;
+      begun = true;
+      sink.begin(source);
+    };
+    /** Streams one gated sentence to the caller now. */
+    const speak = (sentence: string, source: TurnResult["source"] = "agent") => {
+      if (finished) return;
+      begin(source);
+      if (spokenParts.length === 0) {
         msFirstToken = elapsed();
-        for (const s of sentences(spoken)) sink.speak(s);
+        clearTimeout(firstTokenTimer);
       }
+      spokenParts.push(sentence);
+      sink.speak(sentence);
+    };
+    /** Ends the spoken stream and fixes the turn outcome. */
+    const finish = (answerType: AnswerType, note?: string, source: TurnResult["source"] = "agent") => {
+      if (finished) return;
+      if (note) notes.push(note);
+      begin(source);
       sink.end();
       msTotal = elapsed();
-      resolveDecided(released);
+      finished = { spoken: spokenParts.length ? spokenParts.join(" ") : null, answerType, source };
+      resolveDecided(finished);
+    };
+    /** Speaks a fixed line (fallback, safe decline, replay) and finishes. */
+    const release = (text: string | null, answerType: AnswerType, note?: string, source: TurnResult["source"] = "agent") => {
+      if (finished) return;
+      if (text !== null) for (const s of sentences(text)) speak(s, source);
+      finish(answerType, note, source);
     };
     const stop = (reason: string) => {
       if (abort.signal.aborted) return;
@@ -150,19 +167,20 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       abort.abort(new Error(reason));
     };
 
-    const firstTokenTimer = setTimeout(() => {
-      if (released) return;
+    const firstTokenTimer: NodeJS.Timeout = setTimeout(() => {
+      if (finished || spokenParts.length) return;
       release(FALLBACK_LINE, "error", `timeout: no speakable reply within ${FIRST_TOKEN_TIMEOUT_MS}ms`);
       stop("first-token timeout");
     }, Math.max(0, FIRST_TOKEN_TIMEOUT_MS - elapsed()));
     const hardCapTimer = setTimeout(() => {
       stop(`hard cap ${TURN_HARD_CAP_MS}ms`);
-      release(FALLBACK_LINE, "error");
+      if (spokenParts.length) finish("error", "hard cap reached mid-reply");
+      else release(FALLBACK_LINE, "error");
     }, Math.max(0, TURN_HARD_CAP_MS - elapsed()));
     sink.onClose(() => {
-      if (released) return;
-      stop("client disconnected before any speech");
-      release(null, "error");
+      if (finished) return;
+      stop(spokenParts.length ? "client disconnected mid-reply" : "client disconnected before any speech");
+      finish("error");
     });
 
     // --- Streaming input: the CLI boots now; the user message is yielded once it is ready.
@@ -179,7 +197,9 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     }
 
     let retrievedIds: ReadonlySet<string> = new Set();
-    const tracker = new SegmentTracker();
+    let gate: StreamingGate | null = null;
+    let stopReason: string | null = null;
+    const discarded: string[] = [];
     const toolStarts = new Map<string, number>();
     let msTools = 0;
     let result: SDKResultMessage | null = null;
@@ -216,37 +236,54 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
           const problem = toolListProblem(m);
           if (problem) {
             notes.push(`tool-list guard: ${problem}`);
-            release(FALLBACK_LINE, "error");
+            if (spokenParts.length) finish("error");
+            else release(FALLBACK_LINE, "error");
             stop("tool-list guard");
             break;
           }
         } else if (m.type === "stream_event" && m.parent_tool_use_id === null) {
           const e = m.event;
+          if (finished) continue;
           if (e.type === "message_start") {
             mark("first_model_message");
-            tracker.start();
+            gate ??= new StreamingGate(retrievedIds); // retrievedIds is set before the prompt is yielded
+            gate.start();
+            stopReason = null;
+          } else if (!gate) {
+            continue;
           } else if (e.type === "content_block_start" && e.content_block.type === "tool_use") {
-            tracker.toolUseStart();
+            const t = gate.toolUse();
+            if (t.violation) {
+              const sent = summarize(t.spokenBeforeToolUse.join(" "), 300);
+              notes.push(`gate_violation: tool_use after speech had started; already sent: ${sent}`);
+              console.log(JSON.stringify({ event: "gate_violation", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, already_sent: sent }));
+            }
           } else if (e.type === "content_block_delta" && e.delta.type === "text_delta") {
             mark("first_text_delta");
-            tracker.textDelta(e.delta.text);
+            for (const sentence of gate.text(e.delta.text)) {
+              mark("first_spoken");
+              speak(sentence);
+            }
           } else if (e.type === "message_delta") {
-            tracker.messageDelta(e.delta.stop_reason);
+            stopReason = e.delta.stop_reason ?? stopReason;
           } else if (e.type === "message_stop") {
-            const segment = tracker.finish();
-            if (segment) mark("final_message_stop");
-            if (segment && !released) {
-              const verdict = evaluateReply(segment.text, retrievedIds);
-              if (verdict.ok) {
-                kbChunkIds = verdict.validKbIds;
-                const style = styleViolations(verdict.spoken);
-                if (style.length) notes.push(`style_violation: ${style.join(",")}`);
-                if (verdict.unknownKbIds.length) notes.push(`cited ids not retrieved: ${verdict.unknownKbIds.join(",")}`);
-                if (segment.stopReason === "max_tokens") notes.push("final reply hit max_tokens");
-                release(verdict.spoken, verdict.type);
-              } else {
-                release(SAFE_DECLINE_LINE, "blocked", `gate blocked: ${verdict.reason}; raw: ${summarize(segment.text, 300)}`);
-              }
+            const outcome = gate.end(stopReason);
+            if (outcome.kind === "discarded") {
+              if (outcome.raw) discarded.push(outcome.raw);
+            } else if (outcome.kind === "final") {
+              mark("final_message_stop");
+              for (const sentence of outcome.speak) speak(sentence);
+              kbChunkIds = outcome.validKbIds;
+              const style = styleViolations(spokenParts.join(" "));
+              if (style.length) notes.push(`style_violation: ${style.join(",")}`);
+              if (outcome.unknownKbIds.length) notes.push(`cited ids not retrieved: ${outcome.unknownKbIds.join(",")}`);
+              if (stopReason === "max_tokens") notes.push("final reply hit max_tokens");
+              finish(outcome.type);
+            } else {
+              mark("final_message_stop");
+              const note = `gate blocked: ${outcome.reason}; raw: ${summarize(outcome.raw, 300)}`;
+              if (spokenParts.length) finish("blocked", note);
+              else release(SAFE_DECLINE_LINE, "blocked", note);
             }
           }
         } else if (m.type === "assistant" && m.parent_tool_use_id === null) {
@@ -299,7 +336,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         providePrompt(null);
         abort.abort(new Error("replay"));
         release(stored.assistant_response ?? FALLBACK_LINE, stored.answer_type, undefined, "replay");
-      } else if (released) {
+      } else if (finished) {
         // Timed out or disconnected during DB work: don't start the model.
         providePrompt(null);
       } else {
@@ -326,16 +363,18 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       return;
     }
 
-    if (!released) {
-      release(FALLBACK_LINE, "error", `no speakable final reply${result ? ` (result ${(result as SDKResultMessage).subtype})` : ""}`);
+    if (!finished) {
+      const why = `no speakable final reply${result ? ` (result ${(result as SDKResultMessage).subtype})` : ""}`;
+      if (spokenParts.length) finish("error", why);
+      else release(FALLBACK_LINE, "error", why);
     }
     const finalResult = result as SDKResultMessage | null;
     if (finalResult && finalResult.subtype !== "success") notes.push(`result subtype ${finalResult.subtype}`);
-    if (tracker.discarded.length) {
-      notes.push(`discarded ${tracker.discarded.length} non-final segment(s): ${summarize(tracker.discarded.join(" | "), 200)}`);
+    if (discarded.length) {
+      notes.push(`discarded ${discarded.length} non-final segment(s): ${summarize(discarded.join(" | "), 200)}`);
     }
 
-    const outcome = released as unknown as TurnResult; // always set by release() above
+    const outcome = finished as unknown as TurnResult; // always set by finish() above
     try {
       const inserted = await insertTurn(db, ctx, {
         userTranscript: input.userText,

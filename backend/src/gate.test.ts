@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { evaluateReply, parseHeader, SegmentTracker, sentences, stripForSpeech } from "./gate.js";
+import { evaluateReply, parseHeader, sentences, StreamingGate, stripForSpeech } from "./gate.js";
 
 const FEES = "frequently-asked-questions--how-does-relaypay-charge-fees";
 const RETRIEVED = new Set([FEES, "product-features-overview--international-payments"]);
@@ -93,33 +93,83 @@ describe("parseHeader / helpers", () => {
   });
 });
 
-describe("SegmentTracker (multi-step turns)", () => {
-  const run = (t: SegmentTracker, text: string, toolUse: boolean, stop: string) => {
-    t.start();
-    t.textDelta(text);
-    if (toolUse) t.toolUseStart();
-    t.messageDelta(stop);
-    return t.finish();
+describe("StreamingGate (lever 4: sentence streaming after a valid header)", () => {
+  // Feeds one message as a list of deltas; returns what would be spoken and the outcome.
+  const feed = (gate: StreamingGate, deltas: string[], opts: { toolUseAfter?: number; stop?: string } = {}) => {
+    gate.start();
+    const spokenLive: string[] = [];
+    let tool: ReturnType<StreamingGate["toolUse"]> | null = null;
+    deltas.forEach((d, i) => {
+      spokenLive.push(...gate.text(d));
+      if (opts.toolUseAfter === i) tool = gate.toolUse();
+    });
+    const outcome = gate.end(opts.stop ?? (opts.toolUseAfter !== undefined ? "tool_use" : "end_turn"));
+    const spokenAtEnd = outcome.kind === "final" ? outcome.speak : [];
+    return { spoken: [...spokenLive, ...spokenAtEnd], spokenLive, outcome, tool: tool as ReturnType<StreamingGate["toolUse"]> | null };
   };
 
-  it("discards pre-tool thinking aloud and speaks only the final segment", () => {
-    const t = new SegmentTracker();
-    assert.equal(run(t, "Let me look that up for you.", true, "tool_use"), null);
-    const final = run(t, `[[type=answer; kb=${FEES}]] Fees vary.`, false, "end_turn");
-    assert.equal(final?.text, `[[type=answer; kb=${FEES}]] Fees vary.`);
-    assert.deepEqual(t.discarded, ["Let me look that up for you."]);
+  it("streams sentences only after the header is complete and valid; the header is never spoken", () => {
+    const g = new StreamingGate(RETRIEVED);
+    g.start();
+    assert.deepEqual(g.text("[[type=answer; kb"), []);
+    assert.deepEqual(g.text(`=${FEES}]]\n\nFees vary by corridor`), []);
+    assert.deepEqual(g.text(" and payment method. RelayPay shows"), ["Fees vary by corridor and payment method."]);
+    assert.deepEqual(g.text(" applicable fees before you confirm."), []);
+    const end = g.end("end_turn");
+    assert.equal(end.kind, "final");
+    if (end.kind === "final") {
+      assert.deepEqual(end.speak, ["RelayPay shows applicable fees before you confirm."]);
+      assert.deepEqual(end.validKbIds, [FEES]);
+    }
   });
 
-  it("discards a segment that has a valid header but also calls a tool", () => {
-    const t = new SegmentTracker();
-    assert.equal(run(t, `[[type=clarify; kb=none]] One moment while I check.`, true, "tool_use"), null);
-    assert.equal(t.discarded.length, 1);
+  it("header then tool_use after a sentence was spoken: output stops, violation reports what was sent", () => {
+    const r = feed(new StreamingGate(RETRIEVED), ["[[type=clarify; kb=none]] One moment. ", "Let me check that for you."], { toolUseAfter: 0 });
+    assert.deepEqual(r.tool, { violation: true, spokenBeforeToolUse: ["One moment."] });
+    assert.deepEqual(r.spoken, ["One moment."]); // nothing after the tool_use start
+    assert.equal(r.outcome.kind, "discarded");
   });
 
-  it("does not release a segment that ended without a terminal stop reason", () => {
-    const t = new SegmentTracker();
-    t.start();
-    t.textDelta("[[type=decline; kb=none]] Sorry.");
-    assert.equal(t.finish(), null);
+  it("header then tool_use before any sentence completed: nothing spoken, no violation", () => {
+    const r = feed(new StreamingGate(RETRIEVED), ["[[type=clarify; kb=none]] One moment while I"], { toolUseAfter: 0 });
+    assert.deepEqual(r.tool, { violation: false, spokenBeforeToolUse: [] });
+    assert.deepEqual(r.spoken, []);
+  });
+
+  it("text before the header is never spoken and blocks the turn", () => {
+    const r = feed(new StreamingGate(RETRIEVED), ["Sure! ", `[[type=answer; kb=${FEES}]] `, "Fees vary. By corridor. "]);
+    assert.deepEqual(r.spoken, []);
+    assert.equal(r.outcome.kind, "blocked");
+  });
+
+  it("headerless thinking aloud before a tool call is discarded silently; the next valid message streams", () => {
+    const g = new StreamingGate(RETRIEVED);
+    const pre = feed(g, ["Let me look that up. ", "Searching now. "], { toolUseAfter: 1 });
+    assert.deepEqual(pre.spoken, []);
+    assert.deepEqual(pre.tool, { violation: false, spokenBeforeToolUse: [] });
+    const fin = feed(g, [`[[type=answer; kb=${FEES}]] Fees vary.`]);
+    assert.deepEqual(fin.spoken, ["Fees vary."]);
+  });
+
+  it("an answer citing a kb id that was not retrieved streams nothing and is blocked", () => {
+    const r = feed(new StreamingGate(RETRIEVED), ["[[type=answer; kb=made-up-chunk]] You pay two percent. ", "Always."]);
+    assert.deepEqual(r.spoken, []);
+    assert.equal(r.outcome.kind, "blocked");
+  });
+
+  it("no header within 200 characters: nothing spoken, blocked", () => {
+    const r = feed(new StreamingGate(RETRIEVED), ["[[type=answer; kb=" + "x".repeat(220), "]] Fees vary."]);
+    assert.deepEqual(r.spoken, []);
+    assert.equal(r.outcome.kind, "blocked");
+  });
+
+  it("strips markdown split across deltas and never speaks it", () => {
+    const r = feed(new StreamingGate(RETRIEVED), [`[[type=answer; kb=${FEES}]] **Fe`, "es** vary by _corridor_. ", "- See the `dashboard`."]);
+    assert.deepEqual(r.spoken, ["Fees vary by corridor.", "See the dashboard."]);
+  });
+
+  it("valid header with an empty body is blocked", () => {
+    const r = feed(new StreamingGate(RETRIEVED), ["[[type=decline; kb=none]]", "  "]);
+    assert.equal(r.outcome.kind, "blocked");
   });
 });
