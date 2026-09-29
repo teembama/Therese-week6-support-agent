@@ -2,10 +2,19 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
-    "outDir": "dist"
+    "outDir": "dist",
+    "composite": true,
+    "declaration": true
   },
   "include": [
     "src",
-    "verify-seed.ts"
+    "verify-seed.ts",
+    "eval-retrieval.ts",
+    "test-mcp.ts"
+  ],
+  "references": [
+    {
+      "path": "../shared"
+    }
   ]
 }

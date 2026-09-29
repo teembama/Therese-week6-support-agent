@@ -4,12 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "seed": "tsx seed.ts"
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "seed": "tsx seed.ts",
+    "load-kb": "tsx load-kb.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.109.0",
-    "csv-parse": "^7.0.3"
+    "csv-parse": "^7.0.3",
+    "@relaypay/shared": "*"
   }
 }

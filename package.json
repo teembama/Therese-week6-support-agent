@@ -6,17 +6,21 @@
     "node": ">=22"
   },
   "workspaces": [
+    "shared",
     "backend",
     "mcp-server",
     "db",
     "scripts"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "db:seed": "npm run seed -w @relaypay/db --",
-    "db:verify": "npm run verify-seed -w @relaypay/scripts --",
-    "db:test": "bash db/tests/schema-suite.sh && bash db/tests/race.sh"
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "db:seed": "tsc -b && npm run seed -w @relaypay/db --",
+    "db:verify": "tsc -b && npm run verify-seed -w @relaypay/scripts --",
+    "db:test": "bash db/tests/schema-suite.sh && bash db/tests/race.sh",
+    "db:load-kb": "tsc -b && npm run load-kb -w @relaypay/db --",
+    "eval:retrieval": "tsc -b && npm run eval-retrieval -w @relaypay/scripts --",
+    "test:mcp": "tsc -b && npm run test-mcp -w @relaypay/scripts --"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",

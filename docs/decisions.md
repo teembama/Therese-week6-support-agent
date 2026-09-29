@@ -100,6 +100,30 @@ Once `001_schema.sql` is applied, all schema changes go in new numbered files (`
   - This machine has three Node installs, so the PATH lookup is ambiguous: nvm 22.23.3, nvm 20.19.0, and a standalone 24.15.0 in `C:\Program Files\nodejs`.
 - The deployment host must also run Node 22.
 
+### D13. The MCP server uses the SDK's low-level `Server`, not `McpServer.registerTool`
+
+- MCP TypeScript SDK v2 (`@modelcontextprotocol/server` 2.2.0) validates `registerTool` input before the handler runs. An invalid call would therefore never reach `withToolLogging`, and no `tool_calls` row would be written.
+- The low-level `Server` sends every `tools/call`, valid or not, through `withToolLogging`. It publishes each tool's JSON Schema generated from its strict Zod schema (`z.toJSONSchema`), so the model still sees the exact constraints.
+- The low-level `Server` turns anything a handler throws into a protocol error. So the wrapper catches everything and returns a structured `error` result instead.
+- Result mapping:
+  - `isError: true` for `invalid_input` and `error`, which the model should treat as a failed call;
+  - `isError: false` for `success`, `not_found` and `denied`, which are deliberate outcomes the model reads and follows.
+- The server also refuses to start if `ANTHROPIC_API_KEY` is present in its environment.
+
+### D14. Shared code lives in the `@relaypay/shared` workspace, built with project references
+
+- `shared/` holds the Supabase client factory (which refuses publishable/anon keys), the retrieval function, the log writers and the redaction.
+- The backend, the MCP server, `db` and `scripts` depend on it. `tsc -b` builds it first; the root `build`/`typecheck` scripts and every `db:*` script run `tsc -b`.
+- `db/seed.ts` and `scripts/verify-seed.ts` predate `shared/` and still build their own client. Moving them onto the shared factory is a pending follow-up and has not been done.
+
+### D15. Retrieval: OR query of informative lexemes, ranked by `ts_rank_cd`
+
+- `search_kb` (migration 002) normalizes the query with the index's `english` config, which drops stopwords and stems words.
+- It removes `KB_EXCLUDED_WORDS`, ORs the remaining lexemes, and ranks with `ts_rank_cd(..., KB_RANK_NORMALIZATION = 32)`. That normalization gives ranks between 0 and 1.
+- It returns at most `KB_MATCH_COUNT = 4` chunks with rank `>= KB_MIN_RANK`. If none qualifies, `insufficient_knowledge = true`.
+- The constants live in `shared/src/config.ts`. Normalization, threshold and exclusions are parameters of `search_kb`, so tuning them needs no new migration.
+- `KB_MIN_RANK` is set from the evaluation in `docs/retrieval-eval.md`.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

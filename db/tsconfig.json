@@ -2,10 +2,18 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
-    "outDir": "dist"
+    "outDir": "dist",
+    "composite": true,
+    "declaration": true
   },
   "include": [
     "src",
-    "seed.ts"
+    "seed.ts",
+    "load-kb.ts"
+  ],
+  "references": [
+    {
+      "path": "../shared"
+    }
   ]
 }

@@ -4,12 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "verify-seed": "tsx verify-seed.ts"
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "verify-seed": "tsx verify-seed.ts",
+    "eval-retrieval": "tsx eval-retrieval.ts",
+    "test-mcp": "tsx test-mcp.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "^2.2.0",
     "@supabase/supabase-js": "^2.109.0",
-    "csv-parse": "^7.0.3"
+    "csv-parse": "^7.0.3",
+    "@relaypay/shared": "*"
   }
 }

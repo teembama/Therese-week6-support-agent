@@ -1,0 +1,70 @@
+// withToolLogging: every tool call, whatever its outcome, is timed and written to tool_calls.
+// Handlers return a ToolOutcome instead of throwing; anything thrown anyway becomes a
+// structured `error` result. A failed log write never changes the tool's result (the
+// failure goes to stderr from the shared logger).
+
+import { logToolCall, summarize, type Db, type LogContext, type ToolCallStatus } from "@relaypay/shared";
+
+export interface ToolDeps {
+  db: Db;
+  /** From the spawn environment, never from tool input (D9). */
+  ctx: LogContext;
+}
+
+export interface ToolOutcome {
+  status: ToolCallStatus;
+  /** Structured result returned to the model. */
+  result: Record<string, unknown>;
+  /** Short log summary; defaults to a redacted summary of `result`. */
+  resultSummary?: string;
+  /** Internal detail for the log only; never sent to the model. */
+  errorMessage?: string;
+}
+
+export interface ToolResult {
+  [key: string]: unknown;
+  content: Array<{ type: "text"; text: string }>;
+  structuredContent: Record<string, unknown>;
+  isError: boolean;
+}
+
+export type ToolHandler = (args: unknown, deps: ToolDeps) => Promise<ToolOutcome>;
+export type LoggedTool = (args: unknown, deps: ToolDeps) => Promise<ToolResult>;
+
+/** Statuses the model should treat as a failed call (it can retry with different input). */
+const ERROR_STATUSES: ReadonlySet<ToolCallStatus> = new Set(["invalid_input", "error"]);
+
+export function toToolResult(outcome: Pick<ToolOutcome, "status" | "result">): ToolResult {
+  const structured = { status: outcome.status, ...outcome.result };
+  return {
+    content: [{ type: "text", text: JSON.stringify(structured) }],
+    structuredContent: structured,
+    isError: ERROR_STATUSES.has(outcome.status),
+  };
+}
+
+export function withToolLogging(toolName: string, purpose: string, handler: ToolHandler): LoggedTool {
+  return async (args, deps) => {
+    const started = performance.now();
+    let outcome: ToolOutcome;
+    try {
+      outcome = await handler(args, deps);
+    } catch (err) {
+      outcome = {
+        status: "error",
+        result: { error: { code: "internal_error", message: "The tool failed unexpectedly. Do not retry; tell the caller you could not complete this step." } },
+        errorMessage: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+      };
+    }
+    await logToolCall(deps.db, deps.ctx, {
+      toolName,
+      purpose,
+      input: args,
+      resultSummary: outcome.resultSummary ?? summarize(outcome.result),
+      status: outcome.status,
+      errorMessage: outcome.errorMessage,
+      durationMs: performance.now() - started,
+    });
+    return toToolResult(outcome);
+  };
+}
