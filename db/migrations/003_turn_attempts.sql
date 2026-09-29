@@ -93,7 +93,11 @@ $$;
 -- begin_turn_attempt: one round trip at the start of every request that may run the agent.
 --   1. upsert the conversation;
 --   2. replay if the stored turn SPOKE something and has the same transcript hash;
---   3. otherwise mark any active attempt for this turn 'replaced' and insert the new one.
+--   3. otherwise mark as 'replaced' (replaced_by = the new attempt) every attempt for this turn
+--      that is still 'active', or that was 'aborted' (client disconnected) with a DIFFERENT
+--      transcript: in Vapi's flow the cancelled speculative request is replaced by the fuller
+--      one. An aborted attempt followed by an IDENTICAL request stays 'aborted'.
+--      Then insert the new attempt.
 -- ---------------------------------------------------------------------------
 create function begin_turn_attempt(
   p_conversation_id text,
@@ -132,12 +136,14 @@ begin
   with r as (
     update turn_attempts a
        set status = 'replaced',
-           status_reason = 'replaced by a newer request for the same turn',
+           status_reason = case when a.status = 'aborted'
+                                then 'aborted by the client, then replaced by a request with a different transcript'
+                                else 'replaced by a newer request for the same turn' end,
            replaced_by = p_attempt_id,
-           ended_at = now()
+           ended_at = coalesce(a.ended_at, now())
      where a.conversation_id = p_conversation_id
        and a.turn_index = p_turn_index
-       and a.status = 'active'
+       and (a.status = 'active' or (a.status = 'aborted' and a.transcript_hash <> p_transcript_hash))
     returning a.attempt_id
   )
   select coalesce(array_agg(r.attempt_id), '{}') into v_replaced from r;

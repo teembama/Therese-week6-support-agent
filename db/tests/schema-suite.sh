@@ -119,6 +119,12 @@ B2() { SR "select action from begin_turn_attempt('call-att2','voice',null,0,'$1'
 eq "$(B2 ATT-D)" run "attempt D starts"
 eq "$(FINISH ATT-D aborted 0.0005 null)" aborted "D aborted (client disconnected before speech)"
 eq "$(B2 ATT-E)" run "identical request after an aborted attempt runs fresh (never replays nothing)"
+eq "$(q "select status from turn_attempts where attempt_id='ATT-D'")" aborted "identical follow-up leaves the aborted attempt 'aborted'"
+pg -c "insert into conversations(conversation_id,channel) values ('call-att3','voice')"
+SR "select action from begin_turn_attempt('call-att3','voice',null,0,'ATT-P','hPart','What fees does.')" >/dev/null
+FINISH ATT-P aborted 0.0004 null >/dev/null
+eq "$(SR "select array_to_string(replaced_attempt_ids,',') from begin_turn_attempt('call-att3','voice',null,0,'ATT-Q','hFull','What fees does RelayPay charge?')")" ATT-P "Vapi flow: aborted partial A, then fuller B -> A marked replaced"
+eq "$(q "select status||'|'||replaced_by from turn_attempts where attempt_id='ATT-P'")" "replaced|ATT-Q" "A: replaced, replaced_by B"
 eq "$(q "select total_cost_usd from conversations where conversation_id='call-att2'")" "0.000500" "aborted attempt's cost counted in totals"
 # A completed turn answered again (different transcript) -> previous attempt becomes replaced; no double count.
 eq "$(FINISH ATT-E completed 0.002 "$(TURN_JSON hZ 'hi' "'Hello.'" clarify 0.002)")" completed "E completes"
