@@ -2,13 +2,14 @@
 // real MCP server, real Supabase). Spawns:
 //   A: normal server              (port 8799)
 //   B: 1.5s first-token timeout   (port 8798)  -> fallback + abort
-//   C: MCP entry that doesn't exist (port 8797) -> tool-list guard
-// Usage: npm run test:endpoint   (after npm run build)
+//   C: MCP server force-attached   (port 8797) -> forbidden search tool -> tool-list guard
+// Usage: npm run test:endpoint [-- --latency-only] [-- --runs N]   (default 10 latency runs)
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { createServiceClient, type Db } from "@relaypay/shared";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -105,6 +106,8 @@ function percentile(values: number[], p: number): number {
 }
 
 async function main(): Promise<number> {
+  const { values } = parseArgs({ options: { "latency-only": { type: "boolean" }, runs: { type: "string" } } });
+  const latencyRuns = Number(values.runs ?? 10);
   process.loadEnvFile(resolve(REPO, ".env"));
   // Per-run secret for the spawned test servers (they inherit it; loadEnvFile does not
   // override variables that are already set). The real VAPI_LLM_SECRET is never needed here.
@@ -113,6 +116,7 @@ async function main(): Promise<number> {
   const A = await startServer(8799);
   const servers = [A];
   try {
+   if (!values["latency-only"]) {
     console.log("== HTTP surface");
     check((await post(A.port, body(`test-ep-${RUN}-noauth`, ["hi"]), { auth: null })).status === 401, "no Authorization header -> 401");
     check((await post(A.port, body(`test-ep-${RUN}-badauth`, ["hi"]), { auth: "Bearer wrong-secret" })).status === 401, "wrong secret -> 401");
@@ -142,6 +146,10 @@ async function main(): Promise<number> {
     const t2Row = await turnRow(db, feesId, 1);
     console.log(`spoken: ${JSON.stringify(t2.text)}  answer_type=${t2Row?.["answer_type"]}`);
     check(t2Row !== null, "second user message stored as turn_index 1");
+    const { data: t2Logs } = await db.from("retrieval_logs").select("query").eq("conversation_id", feesId).eq("turn_index", 1);
+    const t2Query = String((t2Logs?.[0] as { query?: string } | undefined)?.query ?? "");
+    console.log("turn 1 retrieval query: " + JSON.stringify(t2Query));
+    check(t2Query.startsWith("What fees does RelayPay charge") && t2Query.endsWith("And how long do payouts to Kenya take?"), "follow-up (<5 meaningful words): retrieval searched previous + latest, and logged that query");
 
     console.log("\n== Crypto (known limitation D17)");
     const cryptoId = `test-ep-${RUN}-crypto`;
@@ -197,14 +205,14 @@ async function main(): Promise<number> {
     check(to.text === "Sorry, I'm having trouble checking that right now. Could you try again in a moment?", "timeout: fallback line spoken");
     check(toRow?.["answer_type"] === "error" && String(toRow?.["confidence_note"]).includes("aborted: first-token timeout"), "timeout: answer_type error, agent aborted and logged");
 
-    console.log("\n== Tool-list guard (server C, MCP entry missing)");
-    const C = await startServer(8797, { RELAYPAY_MCP_ENTRY: resolve(REPO, "mcp-server", "dist", "does-not-exist.js") });
+    console.log("\n== Tool-list guard (server C, MCP server force-attached -> search_knowledge_base visible)");
+    const C = await startServer(8797, { RELAYPAY_ATTACH_MCP: "1" });
     servers.push(C);
     const gId = `test-ep-${RUN}-guard`;
     const g = await post(C.port, body(gId, ["What fees does RelayPay charge?"]));
     const gRow = await turnRow(db, gId);
     console.log(`spoken: ${JSON.stringify(g.text)} | note=${JSON.stringify(gRow?.["confidence_note"])}`);
-    check(gRow?.["answer_type"] === "error" && String(gRow?.["confidence_note"]).includes("tool-list guard"), "guard: turn failed with answer_type error and logged");
+    check(gRow?.["answer_type"] === "error" && String(gRow?.["confidence_note"]).includes("forbidden tool(s) present: mcp__relaypay__search_knowledge_base"), "guard: search_knowledge_base present -> turn failed (error) and logged");
 
     console.log("\n== Conversation totals recomputed from turns");
     const { data: conv } = await db.from("conversations").select("total_cost_usd, total_input_tokens, total_output_tokens, channel").eq("conversation_id", feesId).single();
@@ -212,12 +220,13 @@ async function main(): Promise<number> {
     const sumCost = (turns ?? []).reduce((t, r) => t + Number((r as { cost_usd_estimate: number | null }).cost_usd_estimate ?? 0), 0);
     console.log(`conversation: ${JSON.stringify(conv)} | sum of turns cost=${sumCost.toFixed(6)}`);
     check(Math.abs(Number(conv?.["total_cost_usd"]) - sumCost) < 1e-6 && conv?.["channel"] === "test", "totals equal SUM over turns; channel=test for test- ids");
+   }
 
-    console.log("\n== Latency: 5 runs of the fees question");
+    console.log(`\n== Latency: ${latencyRuns} runs of the fees question`);
     const firsts: number[] = [];
     const totals: number[] = [];
     const rows: Record<string, unknown>[] = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < latencyRuns; i++) {
       const id = `test-ep-${RUN}-latency-${i}`;
       await post(A.port, body(id, ["What fees does RelayPay charge for international payments?"]));
       const row = await turnRow(db, id);
@@ -233,7 +242,7 @@ async function main(): Promise<number> {
     const markRows = A.logs
       .filter((l) => l.includes('"event":"turn"') && l.includes(`test-ep-${RUN}-latency-`))
       .map((l) => JSON.parse(l) as { conversation_id: string; marks: Record<string, number> })
-      .map((e) => ({ run: e.conversation_id.slice(-1), ...e.marks }));
+      .map((e) => ({ run: e.conversation_id.split("-").pop(), ...e.marks }));
     console.table(markRows);
   } finally {
     for (const s of servers) s.proc.kill();

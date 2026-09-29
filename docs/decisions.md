@@ -226,6 +226,35 @@ Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5
   - Conversation totals are recomputed from all turns after each turn.
 - **Open item:** `VAPI_LLM_SECRET` is empty in `.env`. The endpoint tests use a random per-run secret. A real value must be set in `.env` and in Vapi's Custom LLM credential before connecting Vapi.
 
+### D20. Retrieval moved from model discretion to a guaranteed pre-turn step (latency lever 1)
+
+- **Before:** the model decided whether to call `search_knowledge_base`. It re-searched in 6 of 10 fees runs even though the pre-turn chunks already answered the question, which added about 2.3s and 75% more cost on those turns (`docs/latency.md`).
+- **Now:**
+  - The agent's MCP allowlist (`AGENT_MCP_TOOLS`) is empty, and `search_knowledge_base` is in `FORBIDDEN_AGENT_TOOLS`. The tool-list guard fails the turn if it is ever present; this is tested by force-attaching the MCP server.
+  - While the allowlist is empty, the MCP server isn't attached to the agent at all, which also removes MCP start from every turn. The server keeps the tool for Inspector and manual testing.
+  - Retrieval is backend-owned and runs before every turn. It is still logged to `retrieval_logs`.
+  - The gate's retrieved set is the in-memory pre-turn result. The gate's database round trip is gone.
+- **Follow-ups:** a latest caller message with fewer than 5 meaningful words is searched together with the previous caller message. The query actually used is what `retrieval_logs.query` records.
+- **Measured (Task 4 lever-1 run, marks from the server turn log):**
+  - `query()` → `init` fell from about 2.36s to about 0.54s.
+  - `query()` → release fell from 4.28s (6s with a tool call) to a median of 2.95s.
+  - Pre-agent database work (0.6–3.5s, outliers 11–14s) is now the largest and most variable phase.
+- **For Task 5:** new side-effect tools must go on the agent allowlist while `search_knowledge_base` stays excluded. Options: filter the tools on the server via env, or use the SDK's `disallowedTools`. The guard keeps asserting that search is absent.
+
+### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
+
+- **Observed in Task 4 step 1 (D18):** the MCP server failed to start because of the inherited API key, and the agent lost its only approved tool. It still answered, fabricating "RelayPay charges a 2% fee on international payments", which is plausible and wrong.
+- **What prevents it now:**
+  - The tool-list guard checks `init.tools` and the MCP status on every query. A mismatch fails the turn with `answer_type = error` and the fallback line.
+  - The grounding gate blocks any `type=answer` that doesn't cite a chunk retrieved for the turn.
+  - So a dependency failure becomes an explicit, logged failed turn instead of a confident fabricated answer.
+
+### D22. `maxTurns` is not an idempotency mechanism
+
+- Tools execute **before** the `maxTurns` check: with `maxTurns: 1`, a tool call still ran, then the query ended with `error_max_turns` (D18).
+- A side-effect tool can therefore run even when the turn ends before the agent can confirm the action to the caller. It can also run again on a retried turn.
+- Every side-effect tool must protect itself: idempotency keys, unique constraints and state guards. Examples: `create_escalation_with_ticket` takes idempotency keys, and `support_tickets.idempotency_key` is UNIQUE.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

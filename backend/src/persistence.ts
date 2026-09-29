@@ -33,17 +33,6 @@ export async function findTurn(db: Db, ctx: LogContext): Promise<StoredTurn | nu
   return (data as StoredTurn | null) ?? null;
 }
 
-/** Union of chunk_ids from every retrieval_logs row of this turn (pre-turn + tool searches). */
-export async function retrievedIdsForTurn(db: Db, ctx: LogContext): Promise<Set<string>> {
-  const { data, error } = await db
-    .from("retrieval_logs")
-    .select("chunk_ids")
-    .eq("conversation_id", ctx.conversationId)
-    .eq("turn_index", ctx.turnIndex);
-  if (error) throw new Error(`retrieval_logs lookup failed (${error.code}): ${error.message}`);
-  return new Set((data ?? []).flatMap((r) => (r as { chunk_ids: string[] }).chunk_ids));
-}
-
 export interface TurnRecord {
   userTranscript: string;
   assistantResponse: string | null;

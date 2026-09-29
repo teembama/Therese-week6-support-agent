@@ -8,8 +8,30 @@ export const AGENT_MAX_TURNS = 4;
 /** Agent SDK maxBudgetUsd per caller turn. A typical turn is ~$0.005; this is ~10x headroom. */
 export const AGENT_MAX_BUDGET_USD = 0.05;
 
-/** The only tools the agent may have. init.tools must equal this list exactly (Task 4 step 4). */
-export const ALLOWED_TOOLS: readonly string[] = ["mcp__relaypay__search_knowledge_base"];
+/**
+ * MCP tools the AGENT may use. init.tools must equal this list exactly (tool-list guard).
+ * search_knowledge_base is deliberately NOT here: retrieval is a guaranteed pre-turn step
+ * owned by the backend (D20). The MCP server keeps the tool for Inspector/manual testing.
+ * While this list is empty the MCP server is not attached to the agent at all.
+ */
+export const AGENT_MCP_TOOLS: readonly string[] = [];
+
+/** Tools that must never appear in the agent's tool list; the guard fails the turn if they do. */
+export const FORBIDDEN_AGENT_TOOLS: readonly string[] = ["mcp__relaypay__search_knowledge_base"];
+
+/**
+ * A latest caller message with fewer meaningful (non-stopword) words than this is treated as
+ * a follow-up: retrieval searches the previous caller message plus the latest one.
+ */
+export const FOLLOW_UP_MIN_MEANINGFUL_WORDS = 5;
+
+/**
+ * Observability only, never blocks: implementation terms that should not reach the caller.
+ * "document" is deliberately absent (verification documents are legitimate in this domain).
+ */
+export const STYLE_VIOLATION_TERMS: readonly string[] = [
+  "knowledge base", "chunk", "retrieval", "retrieved", "context window", "system prompt",
+];
 
 // Timeouts can be shortened by env for tests (scripts/test-endpoint.ts) only; they cannot
 // widen the tool allowlist or disable the gate.

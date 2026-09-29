@@ -10,9 +10,10 @@ import { cliEnv, mcpEnv } from "./child-env.js";
 import {
   AGENT_MAX_BUDGET_USD,
   AGENT_MAX_TURNS,
+  AGENT_MCP_TOOLS,
   AGENT_MODEL,
-  ALLOWED_TOOLS,
   FALLBACK_LINE,
+  FORBIDDEN_AGENT_TOOLS,
   FIRST_TOKEN_TIMEOUT_MS,
   SAFE_DECLINE_LINE,
   TURN_HARD_CAP_MS,
@@ -21,10 +22,15 @@ import { evaluateReply, SegmentTracker, sentences } from "./gate.js";
 import {
   insertTurn,
   recomputeConversationTotals,
-  retrievedIdsForTurn,
   type AnswerType,
 } from "./persistence.js";
 import { buildTurnPrompt, SYSTEM_PROMPT, type HistoryEntry } from "./prompt.js";
+import { buildRetrievalQuery } from "./retrieval-query.js";
+import { styleViolations } from "./style.js";
+
+// Test knob: attach the MCP server even though the agent allowlist is empty, so the endpoint
+// tests can prove the guard fails the turn when a forbidden tool shows up.
+const ATTACH_MCP = AGENT_MCP_TOOLS.length > 0 || process.env["RELAYPAY_ATTACH_MCP"] === "1";
 
 const MCP_ENTRY =
   process.env["RELAYPAY_MCP_ENTRY"] ??
@@ -61,12 +67,16 @@ export interface TurnHandle {
   done: Promise<void>;
 }
 
-function toolListProblem(m: Extract<SDKMessage, { type: "system"; subtype: "init" }>): string | null {
-  const got = [...m.tools].sort();
-  const want = [...ALLOWED_TOOLS].sort();
+export function toolListProblem(init: { tools: string[]; mcp_servers: Array<{ name: string; status: string }> }): string | null {
+  const forbidden = init.tools.filter((t) => FORBIDDEN_AGENT_TOOLS.includes(t));
+  if (forbidden.length) return `forbidden tool(s) present: ${forbidden.join(",")}`;
+  const got = [...init.tools].sort();
+  const want = [...AGENT_MCP_TOOLS].sort();
   if (JSON.stringify(got) !== JSON.stringify(want)) return `tools ${JSON.stringify(got)} != allowlist ${JSON.stringify(want)}`;
-  const server = m.mcp_servers.find((s) => s.name === "relaypay");
-  if (server?.status !== "connected") return `relaypay MCP server status ${server?.status ?? "missing"}`;
+  if (AGENT_MCP_TOOLS.length > 0) {
+    const server = init.mcp_servers.find((s) => s.name === "relaypay");
+    if (server?.status !== "connected") return `relaypay MCP server status ${server?.status ?? "missing"}`;
+  }
   return null;
 }
 
@@ -147,11 +157,15 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
 
     try {
       const t = performance.now();
-      const retrieval = await retrieveKnowledge(input.db, input.ctx, input.userText.slice(0, 1000));
+      const rq = buildRetrievalQuery(input.history, input.userText);
+      if (rq.combinedWithPrevious) notes.push("follow-up: retrieval searched previous + latest caller message");
+      const retrieval = await retrieveKnowledge(input.db, input.ctx, rq.query.slice(0, 1000));
+      // The gate's retrieved set is this in-memory pre-turn result (the agent has no search tool).
+      const retrievedIds: ReadonlySet<string> = new Set(retrieval.chunks.map((c) => c.chunk_id));
       msRetrieval = Math.round(performance.now() - t);
       mark("retrieval_done");
       if (retrieval.insufficient_knowledge) notes.push("pre-turn retrieval: insufficient_knowledge");
-      if (!retrieval.logged) notes.push("pre-turn retrieval_logs write FAILED (gate cannot see those chunks)");
+      if (!retrieval.logged) notes.push("pre-turn retrieval_logs write FAILED (see stderr)");
       if (abort.signal.aborted) throw new Error("aborted before agent start");
 
       mark("query_start");
@@ -161,7 +175,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
           model: AGENT_MODEL,
           systemPrompt: SYSTEM_PROMPT,
           tools: [],
-          allowedTools: [...ALLOWED_TOOLS],
+          allowedTools: [...AGENT_MCP_TOOLS],
           permissionMode: "dontAsk",
           settingSources: [],
           strictMcpConfig: true,
@@ -173,15 +187,17 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
           abortController: abort,
           env: cliEnv(),
           stderr: () => {},
-          mcpServers: {
-            relaypay: {
-              type: "stdio",
-              command: process.execPath,
-              args: [MCP_ENTRY],
-              env: mcpEnv(input.ctx),
-              alwaysLoad: true,
-            },
-          },
+          mcpServers: ATTACH_MCP
+            ? {
+                relaypay: {
+                  type: "stdio",
+                  command: process.execPath,
+                  args: [MCP_ENTRY],
+                  env: mcpEnv(input.ctx),
+                  alwaysLoad: true,
+                },
+              }
+            : {},
         },
       });
 
@@ -211,10 +227,11 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
             const segment = tracker.finish();
             if (segment) mark("final_message_stop");
             if (segment && !released) {
-              const retrieved = await retrievedIdsForTurn(input.db, input.ctx);
-              const verdict = evaluateReply(segment.text, retrieved);
+              const verdict = evaluateReply(segment.text, retrievedIds);
               if (verdict.ok) {
                 kbChunkIds = verdict.validKbIds;
+                const style = styleViolations(verdict.spoken);
+                if (style.length) notes.push(`style_violation: ${style.join(",")}`);
                 if (verdict.unknownKbIds.length) notes.push(`cited ids not retrieved: ${verdict.unknownKbIds.join(",")}`);
                 if (segment.stopReason === "max_tokens") notes.push("final reply hit max_tokens");
                 release(verdict.spoken, verdict.type);
