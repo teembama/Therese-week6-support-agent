@@ -433,6 +433,14 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - **Evidence rule:** for every claim judged "supported", the judge must quote the supporting span. Code then checks that the quote appears **verbatim** (after whitespace normalisation) in a cited chunk. An unverifiable quote counts as **unsupported**, regardless of the judge's verdict.
   - Results go to the `evaluations` table.
 
+### D33. Deployment region: Fly.io `fra`, next to Supabase `eu-central-1` (Batch 2D)
+
+- The Supabase project's region is **eu-central-1** (Frankfurt), per the user on 2026-09-29.
+- The backend will be deployed to **Fly.io region `fra`** in Batch 2D, to test D24's hypothesis that most of the latency tail and the Supabase stalls come from running on a laptop far from the database.
+- Laptop evidence for that hypothesis, from live call `01a0ef57-1c4e-7440-889d-332b7ea6d2dd`:
+  - one turn's database phase took **42.6s**;
+  - Supabase connect timeouts (`UND_ERR_CONNECT_TIMEOUT`, 10s per attempt) were seen from this network in the same hour.
+
 ### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
 
 - **Observed in Task 4 step 1 (D18):** the MCP server failed to start because of the inherited API key, and the agent lost its only approved tool. It still answered, fabricating "RelayPay charges a 2% fee on international payments", which is plausible and wrong.
