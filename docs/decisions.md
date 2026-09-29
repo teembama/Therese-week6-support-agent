@@ -187,6 +187,45 @@ Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5
 
   - The CLI's own `duration_ms` was 4513, so about 1.5s of each turn is CLI + MCP startup before the model is called.
 
+### D19. `/chat/completions` endpoint and grounding gate (Task 4 steps 2–5)
+
+- **HTTP:**
+  - Only `POST /chat/completions` exists; anything else returns 404, logged with method and path only.
+  - Auth is `Authorization: Bearer <VAPI_LLM_SECRET>`, compared in constant time over SHA-256 digests. The header is never logged.
+  - A missing `call.id` returns 400. `turn_index` is the number of user messages minus 1.
+  - Conversations are upserted with channel `test` for `test-` IDs and `voice` otherwise.
+- **Idempotency:**
+  - The in-flight slot is claimed **synchronously** after parsing, before any `await`, so concurrent duplicates can't both start a run.
+  - A request for a turn already in flight joins it and streams the same text.
+  - The slot is released as soon as the turn row is written; after that, requests replay the stored `assistant_response`.
+  - **Single-instance limitation:** the in-flight map is per process. On multiple instances, simultaneous duplicates could each run the agent; the unique `(conversation_id, turn_index)` constraint keeps the first row, and the other run's row insert is skipped and logged.
+  - Replaying a turn that was aborted before any speech (`assistant_response` NULL) speaks the fallback line.
+- **Prompt:**
+  - Caller history and the current message are XML-escaped. The current message sits in `<caller_message untrusted="true">`.
+  - Chunks are passed as `<chunk id="...">`, and Vapi's system message is dropped.
+  - The prompt never starts with `/`, so caller speech can't trigger a CLI slash command.
+- **Gate:**
+  - The reply must *start* with `[[type=answer|clarify|decline; kb=<ids|none>]]`, complete within 200 characters.
+  - `type=answer` needs at least one cited ID in the turn's retrieved set, read from `retrieval_logs`. Unknown extra IDs are noted.
+  - A failing reply speaks the safe decline line and is recorded as `answer_type = blocked` with the reason and the raw reply.
+- **Multi-step turns:**
+  - Each assistant API message is a segment. It can be spoken only after it **ends** with a terminal stop reason and contains **no** `tool_use` block.
+  - Any segment with a tool call is thinking aloud and is discarded, even if it has a header. It is noted in `confidence_note`.
+  - **Cost:** nothing streams while the final reply is being generated; it is released whole, split into sentences, at its `message_stop` (about 0.9s for a 2–3 sentence reply).
+- **Agent:** `thinking: { type: "disabled" }` for voice latency (reversible), `maxTurns: 4`, `maxBudgetUsd: 0.05`.
+- **Timeouts and cancellation:**
+  - 8s without speech: the fallback line, `answer_type = error`, and the query is aborted.
+  - 20s hard cap: the query is aborted.
+  - Client disconnect before speech: the query is aborted and logged as `aborted: client disconnected`.
+  - The tool-list guard compares `init.tools` and the MCP status against the allowlist on every query.
+  - Test knobs, for tests only: `RELAYPAY_FIRST_TOKEN_TIMEOUT_MS`, `RELAYPAY_TURN_HARD_CAP_MS`, `RELAYPAY_MCP_ENTRY`. None of them can widen the allowlist or bypass the gate.
+- **Persistence:**
+  - Tokens are summed from `modelUsage`, which includes the auxiliary call (D18). Cost is `total_cost_usd` (estimate).
+  - `ms_first_token` is receipt → first spoken text. `ms_total` is receipt → end of the SSE stream.
+  - `ms_tools` is the sum of tool_use → tool_result intervals.
+  - Conversation totals are recomputed from all turns after each turn.
+- **Open item:** `VAPI_LLM_SECRET` is empty in `.env`. The endpoint tests use a random per-run secret. A real value must be set in `.env` and in Vapi's Custom LLM credential before connecting Vapi.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
