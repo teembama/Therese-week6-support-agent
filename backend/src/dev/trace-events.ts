@@ -10,7 +10,6 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createServiceClient, rankKnowledge } from "@relaypay/shared";
 import { cliEnv, mcpEnv } from "../child-env.js";
 import { AGENT_MODEL } from "../config.js";
-import { upsertConversation } from "../persistence.js";
 import { buildTurnPrompt, SYSTEM_PROMPT } from "../prompt.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -68,7 +67,7 @@ async function main(): Promise<void> {
   process.loadEnvFile(resolve(REPO, ".env"));
   const db = createServiceClient();
   const conversationId = `test-trace-events-${Date.now()}`;
-  await upsertConversation(db, conversationId, "test", "trace-events");
+  await db.from("conversations").upsert({ conversation_id: conversationId, channel: "test", caller: "trace-events" }, { onConflict: "conversation_id", ignoreDuplicates: true });
 
   const q = "What fees does RelayPay charge for international payments?";
   const chunks = await rankKnowledge(db, q);

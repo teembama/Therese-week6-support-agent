@@ -5,12 +5,14 @@
 //   2. query() starts immediately in streaming-input mode, so the Claude Code CLI boots while
 //      the backend does its independent DB work IN PARALLEL: conversation upsert, existing-turn
 //      check, and pre-turn retrieval (ranking only).
-//   3. Existing turn row -> the input stream is closed without a message, the query is
-//      aborted, and the stored response is replayed. No agent run, no new rows.
+//   3. begin_turn_attempt (migration 003, D28) decides: a stored turn that SPOKE something with
+//      the same transcript hash is replayed (input closed without a message, CLI tree killed,
+//      no attempt row); otherwise this request becomes an ATTEMPT, replacing any active one.
 //   4. Otherwise the retrieval_logs row is written, and the user message (prompt with chunks) is
 //      yielded to the waiting CLI. The gate checks the reply against the in-memory retrieved set.
 // Plus: hard cap, client-disconnect abort, tool-list guard, persistence + recomputed totals.
 
+import type { ChildProcess } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -28,7 +30,8 @@ import {
   TURN_HARD_CAP_MS,
 } from "./config.js";
 import { sentences, StreamingGate } from "./gate.js";
-import { findTurn, insertTurn, recomputeConversationTotals, upsertConversation, type AnswerType } from "./persistence.js";
+import { beginTurnAttempt, finishTurnAttempt, type AnswerType, type AttemptFinalStatus } from "./persistence.js";
+import { isAlive, killTree, spawnCli } from "./process-tree.js";
 import { buildTurnPrompt, SYSTEM_PROMPT, type HistoryEntry } from "./prompt.js";
 import { buildRetrievalQuery } from "./retrieval-query.js";
 import type { TurnSource } from "./sse.js";
@@ -52,6 +55,13 @@ export interface TurnInput {
   /** performance.now() when the request arrived. */
   tReceivedMs: number;
   tReceivedIso: string;
+  /** Hash of the latest caller message (the third part of the turn key, D28). */
+  transcriptHash: string;
+  /**
+   * Settles when the attempt this one replaces has registered (or given up registering) in the
+   * database, so this attempt's begin_turn_attempt always runs after it and marks it replaced.
+   */
+  afterPrevious?: Promise<void>;
 }
 
 export interface TurnSink {
@@ -76,6 +86,11 @@ export interface TurnHandle {
   persisted: Promise<void>;
   /** Resolves after the turn row and conversation totals are persisted. */
   done: Promise<void>;
+  /** Settles once begin_turn_attempt has returned (or failed) for this request. */
+  begun: Promise<void>;
+  /** A newer request with a different transcript arrived: abort this attempt now (D28). */
+  replace(): void;
+  attemptId: string | undefined;
 }
 
 export function toolListProblem(init: { tools: string[]; mcp_servers: Array<{ name: string; status: string }> }): string | null {
@@ -114,6 +129,10 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
   const decided = new Promise<TurnResult>((r) => (resolveDecided = r));
   let resolvePersisted!: () => void;
   const persisted = new Promise<void>((r) => (resolvePersisted = r));
+  let resolveBegun!: () => void;
+  const begun = new Promise<void>((r) => (resolveBegun = r));
+  let replaceHook: () => void = () => {};
+  let replacedEarly = false;
 
   const done = (async () => {
     const { db, ctx } = input;
@@ -126,12 +145,16 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     let msFirstToken: number | null = null;
     let msTotal: number | null = null;
     let kbChunkIds: string[] = [];
-    let begun = false;
+    let sinkBegun = false;
     const spokenParts: string[] = [];
+    let replaced = false;
+    let clientGone = false;
+    let cliChild: ChildProcess | null = null;
+    let killedPids: number[] = [];
 
     const begin = (source: TurnResult["source"]) => {
-      if (begun) return;
-      begun = true;
+      if (sinkBegun) return;
+      sinkBegun = true;
       sink.begin(source);
     };
     /** Streams one gated sentence to the caller now. */
@@ -161,11 +184,25 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       if (text !== null) for (const s of sentences(text)) speak(s, source);
       finish(answerType, note, source);
     };
-    const stop = (reason: string) => {
-      if (abort.signal.aborted) return;
-      notes.push(`aborted: ${reason}`);
-      abort.abort(new Error(reason));
+    const killCliTree = async () => {
+      const pid = cliChild?.pid;
+      if (!pid || cliChild?.exitCode !== null) return;
+      killedPids = await killTree(pid);
+      console.log(JSON.stringify({ event: "process_tree_killed", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: ctx.attemptId, root_pid: pid, killed_pids: killedPids, root_alive_after: isAlive(pid) }));
     };
+    const stop = (reason: string, quiet = false) => {
+      if (abort.signal.aborted) return;
+      if (!quiet) notes.push(`aborted: ${reason}`);
+      abort.abort(new Error(reason));
+      void killCliTree();
+    };
+    replaceHook = () => {
+      if (replaced) return;
+      replaced = true;
+      stop("replaced by a newer request with a different transcript");
+      finish("error");
+    };
+    if (replacedEarly) replaceHook();
 
     const firstTokenTimer: NodeJS.Timeout = setTimeout(() => {
       if (finished || spokenParts.length) return;
@@ -179,6 +216,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     }, Math.max(0, TURN_HARD_CAP_MS - elapsed()));
     sink.onClose(() => {
       if (finished) return;
+      clientGone = true;
       stop(spokenParts.length ? "client disconnected mid-reply" : "client disconnected before any speech");
       finish("error");
     });
@@ -223,6 +261,12 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         abortController: abort,
         env: cliEnv(),
         stderr: () => {},
+        spawnClaudeCodeProcess: (o) =>
+          spawnCli(o, (child) => {
+            cliChild = child;
+            mark("cli_spawned");
+            if (abort.signal.aborted) void killCliTree();
+          }),
         mcpServers: ATTACH_MCP
           ? { relaypay: { type: "stdio", command: process.execPath, args: [MCP_ENTRY], env: mcpEnv(ctx), alwaysLoad: true } }
           : {},
@@ -314,15 +358,28 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     // --- Independent DB work, in parallel, while the CLI boots.
     let msRetrieval: number | null = null;
     let replayed = false;
+    let registered = false;
     let retrievalLogged: Promise<boolean> = Promise.resolve(true);
     try {
       const rq = buildRetrievalQuery(input.history, input.userText);
       if (rq.combinedWithPrevious) notes.push("follow-up: retrieval searched previous + latest caller message");
       mark("db_start");
       const tRank = performance.now();
-      const [, stored, chunks] = await Promise.all([
-        upsertConversation(db, ctx.conversationId, input.channel, input.caller),
-        findTurn(db, ctx),
+      const beginPromise = (async () => {
+        // Never register before the attempt this one replaces (see TurnInput.afterPrevious).
+        if (input.afterPrevious) await Promise.race([input.afterPrevious, new Promise((r) => setTimeout(r, 3_000))]);
+        return beginTurnAttempt(db, {
+          conversationId: ctx.conversationId,
+          channel: input.channel,
+          caller: input.caller,
+          turnIndex: ctx.turnIndex,
+          attemptId: ctx.attemptId!,
+          transcriptHash: input.transcriptHash,
+          userTranscript: input.userText,
+        });
+      })().finally(() => resolveBegun());
+      const [started, chunks] = await Promise.all([
+        beginPromise,
         rankKnowledge(db, rq.query.slice(0, 1000)).then((c: KbChunk[]) => {
           msRetrieval = Math.round(performance.now() - tRank);
           return c;
@@ -330,16 +387,20 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       ]);
       mark("db_done");
 
-      if (stored) {
-        // Idempotent replay: nothing is sent to the model; the waiting CLI is shut down.
+      if (started.action === "replay") {
+        // Genuine retry of a turn that spoke: replay it. Nothing is sent to the model and the
+        // waiting CLI tree is killed; no attempt row is created.
         replayed = true;
         providePrompt(null);
-        abort.abort(new Error("replay"));
-        release(stored.assistant_response ?? FALLBACK_LINE, stored.answer_type, undefined, "replay");
+        stop("replay", true);
+        release(started.assistantResponse, started.answerType, undefined, "replay");
       } else if (finished) {
-        // Timed out or disconnected during DB work: don't start the model.
+        registered = true;
+        // Timed out, disconnected or replaced during DB work: don't start the model.
         providePrompt(null);
       } else {
+        registered = true;
+        if (started.replacedAttemptIds.length) notes.push(`replaced attempt(s): ${started.replacedAttemptIds.join(",")}`);
         retrievedIds = new Set(chunks.map((c) => c.chunk_id));
         if (chunks.length === 0) notes.push("pre-turn retrieval: insufficient_knowledge");
         retrievalLogged = logRetrievalResult(db, ctx, rq.query.slice(0, 1000), chunks);
@@ -351,6 +412,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       notes.push(`turn error: ${summarize(err instanceof Error ? err.message : String(err), 300)}`);
       providePrompt(null);
       stop("turn error");
+      resolveBegun();
     } finally {
       clearTimeout(firstTokenTimer);
       clearTimeout(hardCapTimer);
@@ -375,40 +437,86 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     }
 
     const outcome = finished as unknown as TurnResult; // always set by finish() above
-    try {
-      const inserted = await insertTurn(db, ctx, {
-        userTranscript: input.userText,
-        assistantResponse: outcome.spoken,
-        answerType: outcome.answerType,
-        confidenceNote: summarize(notes.join("; ") || "ok", 1000),
-        kbChunkIds,
-        tReceived: input.tReceivedIso,
-        msRetrieval,
-        msFirstToken,
-        msTools: finalResult || msTools ? Math.round(msTools) : null,
-        msTotal,
-        model: AGENT_MODEL,
-        ...usageFrom(finalResult),
-      });
-      resolvePersisted();
-      if (!inserted) console.error(`[relaypay] turn ${ctx.conversationId}#${ctx.turnIndex} already persisted by another run`);
-      await recomputeConversationTotals(db, ctx.conversationId);
-    } catch (err) {
-      resolvePersisted();
-      console.error(`[relaypay] persistence failed for ${ctx.conversationId}#${ctx.turnIndex}: ${summarize(err instanceof Error ? err.message : String(err))}`);
+    // Attempt status: completed = something was spoken to the caller; otherwise why not.
+    const status: AttemptFinalStatus = replaced || clientGone ? "aborted" : outcome.spoken !== null ? "completed" : "failed";
+    const statusReason = replaced
+      ? "replaced by a newer request with a different transcript"
+      : clientGone && outcome.spoken === null
+        ? "client disconnected before any speech"
+        : clientGone
+          ? "client disconnected mid-reply"
+          : outcome.spoken !== null
+            ? outcome.answerType
+            : "nothing spoken";
+    const usage = usageFrom(finalResult);
+    const metrics = {
+      ms_retrieval: msRetrieval,
+      ms_first_token: msFirstToken,
+      ms_total: msTotal,
+      model: AGENT_MODEL,
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      cache_read_tokens: usage.cacheReadTokens,
+      cache_creation_tokens: usage.cacheCreationTokens,
+      cost_usd_estimate: usage.costUsdEstimate,
+      sdk_duration_ms: usage.sdkDurationMs,
+      sdk_num_turns: usage.sdkNumTurns,
+    };
+    let finalStatus: string | null = null;
+    if (registered) {
+      try {
+        finalStatus = await finishTurnAttempt(
+          db,
+          ctx.attemptId!,
+          status,
+          statusReason,
+          metrics,
+          status === "completed" && outcome.spoken !== null
+            ? {
+                ...metrics,
+                transcript_hash: input.transcriptHash,
+                user_transcript: input.userText,
+                assistant_response: outcome.spoken,
+                answer_type: outcome.answerType,
+                confidence_note: summarize(notes.join("; ") || "ok", 1000),
+                kb_chunk_ids: kbChunkIds,
+                t_received: input.tReceivedIso,
+                ms_tools: finalResult || msTools ? Math.round(msTools) : null,
+              }
+            : null,
+        );
+      } catch (err) {
+        console.error(`[relaypay] persistence failed for ${ctx.conversationId}#${ctx.turnIndex} (${ctx.attemptId}): ${summarize(err instanceof Error ? err.message : String(err))}`);
+      }
+    } else {
+      console.error(`[relaypay] attempt ${ctx.attemptId} for ${ctx.conversationId}#${ctx.turnIndex} was never registered; nothing persisted (${summarize(notes.join("; "), 300)})`);
     }
+    resolvePersisted();
     console.log(JSON.stringify({
       event: "turn",
       conversation_id: ctx.conversationId,
       turn_index: ctx.turnIndex,
+      attempt_id: ctx.attemptId,
+      attempt_status: finalStatus,
       answer_type: outcome.answerType,
       ms_first_token: msFirstToken,
       ms_total: msTotal,
       cost_usd_estimate: finalResult?.total_cost_usd ?? null,
       aborted: abort.signal.aborted,
+      killed_pids: killedPids,
       marks: { ...marks, released: msFirstToken },
     }));
   })();
 
-  return { decided, persisted, done };
+  return {
+    decided,
+    persisted,
+    done,
+    begun,
+    replace: () => {
+      replacedEarly = true;
+      replaceHook();
+    },
+    attemptId: input.ctx.attemptId,
+  };
 }

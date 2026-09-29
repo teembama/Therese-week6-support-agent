@@ -2,23 +2,27 @@
 // Vapi's base URL is https://<host>/v/<token>; Vapi appends /chat/completions. A wrong or
 // missing token is a 404 like any unknown path, and logged paths are always redacted.
 //
-// Idempotency per (conversation_id, turn_index):
-// - a persisted turn row is replayed as the stream without running the agent again;
-// - a turn already in flight IN THIS PROCESS is awaited and its spoken text streamed (one run).
-// Single-instance limitation: the in-flight map is per process. Two instances receiving the
-// same retry at the same moment would both run the agent; the unique (conversation_id,
-// turn_index) constraint then keeps only the first row (docs/decisions.md D19).
+// Idempotency per (conversation_id, turn_index, transcript hash) (D28). Vapi sends several
+// model requests per caller turn, speculative ones on partial transcripts among them:
+// - same transcript, attempt in flight IN THIS PROCESS -> join it (genuine retry, one run);
+// - same transcript, stored turn that SPOKE -> replayed by begin_turn_attempt (turn.ts);
+// - same transcript, but the earlier attempt ended with nothing spoken -> run fresh; never
+//   replay or join "nothing";
+// - different transcript -> the in-flight attempt is replaced (aborted, CLI tree killed,
+//   recorded as 'replaced') and a fresh attempt runs.
+// Single-instance limitation: the in-flight map is per process; across instances the database
+// still records attempts and replacements, but identical concurrent retries could both run.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createServiceClient, type Db, type LogContext } from "@relaypay/shared";
+import { createServiceClient, newAttemptId, transcriptHash, type Db, type LogContext } from "@relaypay/shared";
 import { FALLBACK_LINE, MAX_BODY_BYTES } from "./config.js";
 import { debugDetails, shapeOf } from "./debug-shape.js";
 import { sentences } from "./gate.js";
 import { SseStream } from "./sse.js";
-import { runTurn, type TurnResult } from "./turn.js";
+import { runTurn, type TurnHandle, type TurnResult } from "./turn.js";
 import { matchRoute, MIN_TOKEN_LENGTH, redactPath, sha256 } from "./routing.js";
 import { parseVapiBody } from "./vapi.js";
 
@@ -47,7 +51,21 @@ async function readBody(req: IncomingMessage): Promise<string | null> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-const inflight = new Map<string, Promise<TurnResult>>();
+interface InflightEntry {
+  hash: string;
+  handle: TurnHandle;
+  /** Set once the attempt's spoken outcome is decided. */
+  outcome: TurnResult | null;
+}
+
+const inflight = new Map<string, InflightEntry>();
+
+/** An entry a genuine retry may join: same transcript, and not already ended silently. */
+function joinable(entry: InflightEntry | undefined, hash: string): boolean {
+  return Boolean(entry && entry.hash === hash && !(entry.outcome && entry.outcome.spoken === null));
+}
+
+const settle = <T>(p: Promise<T>, capMs: number) => Promise.race([p.then(() => undefined, () => undefined), new Promise<void>((r) => setTimeout(r, capMs))]);
 
 async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tReceivedMs: number, loggedPath: string): Promise<void> {
   const tReceivedIso = new Date().toISOString();
@@ -65,22 +83,45 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
   const parsed = parseVapiBody(json);
   if (!parsed.ok) return sendJson(res, 400, { error: parsed.error });
   const turn = parsed.turn;
-  const ctx: LogContext = { conversationId: turn.callId, turnIndex: turn.turnIndex };
-  const key = `${ctx.conversationId}#${ctx.turnIndex}`;
-
-  // Join a run already in flight in this process. Checked and claimed below with no `await`
-  // in between, so two concurrent duplicates can never both start an agent run.
-  const running = inflight.get(key);
-  if (running) {
-    const sse = new SseStream(res, turn.model, "inflight");
-    const outcome = await running;
-    log({ event: "turn_inflight_joined", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, answer_type: outcome.answerType });
-    for (const s of sentences(outcome.spoken ?? FALLBACK_LINE)) sse.content(s);
-    return sse.finish();
-  }
-  // The turn itself decides replay vs agent run (after its parallel DB work), so the SSE
-  // stream is opened lazily once the source is known.
+  const key = `${turn.callId}#${turn.turnIndex}`;
+  const hash = transcriptHash(turn.userText);
   let sse: SseStream | null = null;
+  let afterPrevious: Promise<void> | undefined;
+
+  // Genuine retry of an attempt in flight in this process: join it. Everything up to the
+  // inflight.set() below is synchronous, so two concurrent duplicates can never both run.
+  const existing = inflight.get(key);
+  if (existing && joinable(existing, hash)) {
+    sse = new SseStream(res, turn.model, "inflight");
+    const outcome = await existing.handle.decided;
+    if (outcome.spoken !== null) {
+      log({ event: "turn_inflight_joined", conversation_id: turn.callId, turn_index: turn.turnIndex, answer_type: outcome.answerType });
+      for (const sentence of sentences(outcome.spoken)) sse.content(sentence);
+      return sse.finish();
+    }
+    // The joined attempt ended with nothing spoken (e.g. its client disconnected): run fresh on
+    // this request's already-open stream, after that attempt's record is written.
+    log({ event: "turn_inflight_join_ended_silently", conversation_id: turn.callId, turn_index: turn.turnIndex });
+    afterPrevious = settle(existing.handle.persisted, 3_000);
+    const newer = inflight.get(key);
+    if (newer && newer !== existing && joinable(newer, hash)) {
+      const o = await newer.handle.decided;
+      for (const sentence of sentences(o.spoken ?? FALLBACK_LINE)) sse.content(sentence);
+      return sse.finish();
+    }
+  } else if (existing && existing.hash !== hash) {
+    // A different (usually fuller) transcript for the same turn: replace the in-flight attempt.
+    existing.handle.replace();
+    afterPrevious = settle(existing.handle.begun, 3_000);
+    log({ event: "turn_attempt_replaced_in_flight", conversation_id: turn.callId, turn_index: turn.turnIndex, replaced_attempt_id: existing.handle.attemptId });
+  } else if (existing) {
+    // Same transcript, but the earlier attempt already ended with nothing spoken: run fresh.
+    afterPrevious = settle(existing.handle.persisted, 3_000);
+  }
+
+  const ctx: LogContext = { conversationId: turn.callId, turnIndex: turn.turnIndex, attemptId: newAttemptId() };
+  const openSse = sse as SseStream | null;
+  let turnSse: SseStream | null = openSse;
   const handle = runTurn(
     {
       db,
@@ -91,21 +132,29 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
       history: turn.history,
       tReceivedMs,
       tReceivedIso,
+      transcriptHash: hash,
+      ...(afterPrevious ? { afterPrevious } : {}),
     },
     {
-      begin: (source) => (sse = new SseStream(res, turn.model, source)),
-      speak: (text) => sse?.content(text),
-      end: () => sse?.finish(),
+      // Reuse a stream already opened by a join that fell through.
+      begin: (source) => (turnSse ??= new SseStream(res, turn.model, source)),
+      speak: (text) => turnSse?.content(text),
+      end: () => turnSse?.finish(),
       onClose: (listener) => res.on("close", () => {
-        if (!sse || !sse.isEnded || !res.writableFinished) listener();
+        if (!turnSse || !turnSse.isEnded || !res.writableFinished) listener();
       }),
     },
   );
-  inflight.set(key, handle.decided);
-  // Keep the entry until the turn row exists, so a retry that arrives before then joins this
-  // run; once the row exists, retries replay it from the database.
-  void handle.persisted.then(() => inflight.delete(key));
-  await handle.done.finally(() => inflight.delete(key));
+  const entry: InflightEntry = { hash, handle, outcome: null };
+  inflight.set(key, entry);
+  void handle.decided.then((o) => (entry.outcome = o));
+  const release = () => {
+    if (inflight.get(key) === entry) inflight.delete(key);
+  };
+  // Keep the entry until the turn is persisted, so a retry that arrives before then joins this
+  // run; once the row exists, retries are replayed from the database.
+  void handle.persisted.then(release);
+  await handle.done.finally(release);
 }
 
 function main(): void {

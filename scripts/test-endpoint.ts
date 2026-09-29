@@ -86,6 +86,27 @@ async function turnRow(db: Db, conversationId: string, turnIndex = 0, waitMs = 1
   return null;
 }
 
+/** turn_attempts rows for a conversation, oldest first; waits until at least `min` exist and none is active. */
+async function attemptsFor(db: Db, conversationId: string, min: number, waitMs = 15_000): Promise<Record<string, unknown>[]> {
+  let rows: Record<string, unknown>[] = [];
+  for (let waited = 0; waited <= waitMs; waited += 250) {
+    const { data } = await db.from("turn_attempts").select("*").eq("conversation_id", conversationId).order("started_at");
+    rows = (data ?? []) as Record<string, unknown>[];
+    if (rows.length >= min && rows.every((r) => r["status"] !== "active")) return rows;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return rows;
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 async function turnRowCount(db: Db, conversationId: string): Promise<number> {
   const { count } = await db.from("conversation_turns").select("*", { count: "exact", head: true }).eq("conversation_id", conversationId);
   return count ?? 0;
@@ -210,9 +231,60 @@ async function main(): Promise<number> {
     console.log("\n== Client disconnect aborts the agent");
     const dcId = `test-ep-${RUN}-disconnect`;
     await post(A.port, body(dcId, ["What should I do if my account is restricted?"]), { abortAfterMs: 800 });
-    const dcRow = await turnRow(db, dcId);
-    console.log(`row: answer_type=${dcRow?.["answer_type"]} response=${JSON.stringify(dcRow?.["assistant_response"])} note=${JSON.stringify(dcRow?.["confidence_note"])} cost=${dcRow?.["cost_usd_estimate"]}`);
-    check(dcRow?.["answer_type"] === "error" && String(dcRow?.["confidence_note"]).includes("aborted: client disconnected"), "disconnect before speech: turn aborted and logged");
+    const dcAttempts = await attemptsFor(db, dcId, 1);
+    console.log(`attempts: ${JSON.stringify(dcAttempts.map((a) => ({ status: a["status"], reason: a["status_reason"], cost: a["cost_usd_estimate"] })))}`);
+    check(dcAttempts.length === 1 && dcAttempts[0]!["status"] === "aborted" && dcAttempts[0]!["status_reason"] === "client disconnected before any speech", "disconnect before speech: attempt recorded as aborted");
+    check((await turnRowCount(db, dcId)) === 0, "disconnect before speech: no turn row (nothing to replay)");
+
+    // ---- Vapi's real behaviour (live call 01a0eece…, D28) ----
+    console.log("\n== Speculative sequence: partial A disconnects, fuller B answers");
+    const specId = `test-ep-${RUN}-speculative`;
+    const partial = await post(A.port, body(specId, ["What fees does"]), { abortAfterMs: 900 });
+    const full = await post(A.port, body(specId, ["What fees does RelayPay charge for international payments?"]));
+    const specRow = await turnRow(db, specId);
+    const specAttempts = await attemptsFor(db, specId, 2);
+    console.log(`A: status ${partial.status} (client aborted) | B: source=${full.source} spoken=${JSON.stringify(full.text.slice(0, 120))}`);
+    console.log(`attempts: ${JSON.stringify(specAttempts.map((a) => ({ id: a["attempt_id"], status: a["status"], replaced_by: a["replaced_by"], transcript: a["user_transcript"] })))}`);
+    const attA = specAttempts.find((a) => a["user_transcript"] === "What fees does");
+    const attB = specAttempts.find((a) => a["user_transcript"] !== "What fees does");
+    check(full.source === "agent" && full.text.length > 0 && !full.text.startsWith("Sorry, I'm having trouble"), "B gets a real answer (not the fallback)");
+    check(attA?.["status"] === "replaced" && attA?.["replaced_by"] === attB?.["attempt_id"], "A recorded as replaced by B");
+    check(specRow?.["attempt_id"] === attB?.["attempt_id"] && specRow?.["assistant_response"] === full.text, "B's answer is stored as the turn");
+
+    console.log("\n== Identical retry of B");
+    const runsBefore = await agentRuns(A, specId);
+    const retryB = await post(A.port, body(specId, ["What fees does RelayPay charge for international payments?"]));
+    console.log(`retry: source=${retryB.source}`);
+    check(retryB.source === "replay" && retryB.text === full.text, "identical retry replays B's stored answer");
+    check((await attemptsFor(db, specId, 2)).length === 2 && (await agentRuns(A, specId)) === runsBefore, "no new attempt and no new agent run");
+
+    console.log("\n== Disconnect before speaking, then the identical request");
+    const againId = `test-ep-${RUN}-again`;
+    await post(A.port, body(againId, ["How long do local payouts take?"]), { abortAfterMs: 900 });
+    const again = await post(A.port, body(againId, ["How long do local payouts take?"]));
+    const againAttempts = await attemptsFor(db, againId, 2);
+    console.log(`second: source=${again.source} spoken=${JSON.stringify(again.text.slice(0, 100))} | attempts: ${JSON.stringify(againAttempts.map((a) => a["status"]))}`);
+    check(again.source === "agent" && again.text.length > 0 && !again.text.startsWith("Sorry, I'm having trouble"), "identical request runs fresh and answers (never replays 'nothing')");
+    check(againAttempts.map((a) => a["status"]).join(",") === "aborted,completed", "attempts: first aborted, second completed");
+
+    console.log("\n== Replacement while the first attempt is still in flight");
+    const liveId = `test-ep-${RUN}-inflight-replace`;
+    const first = post(A.port, body(liveId, ["Why is my"]));
+    await new Promise((r) => setTimeout(r, 600));
+    const second = await post(A.port, body(liveId, ["Why is my payment delayed?"]));
+    const firstReply = await first;
+    const liveAttempts = await attemptsFor(db, liveId, 2);
+    console.log(`first: spoken=${JSON.stringify(firstReply.text)} | second: source=${second.source} spoken=${JSON.stringify(second.text.slice(0, 100))}`);
+    console.log(`attempts: ${JSON.stringify(liveAttempts.map((a) => ({ status: a["status"], reason: a["status_reason"] })))}`);
+    check(firstReply.text === "" && second.text.length > 0 && !second.text.startsWith("Sorry, I'm having trouble"), "replaced attempt speaks nothing; the new one answers");
+    check(liveAttempts.map((a) => a["status"]).join(",") === "replaced,completed", "attempts: first replaced, second completed");
+
+    console.log("\n== Aborted attempts leave no process behind");
+    const killLines = A.logs.filter((l) => l.includes('"event":"process_tree_killed"')).map((l) => JSON.parse(l) as { killed_pids: number[]; root_pid: number });
+    await new Promise((r) => setTimeout(r, 1_500));
+    const survivors = killLines.flatMap((k) => [k.root_pid, ...k.killed_pids]).filter(isPidAlive);
+    console.log(`process_tree_killed events: ${killLines.length}; pids: ${JSON.stringify(killLines.map((k) => k.killed_pids))}; still alive: ${JSON.stringify(survivors)}`);
+    check(killLines.length >= 3 && survivors.length === 0, "every aborted attempt's CLI process tree is gone");
 
     console.log("\n== First-token timeout (server B, timeout 1500ms)");
     const B = await startServer(8798, { RELAYPAY_FIRST_TOKEN_TIMEOUT_MS: "1500" });
@@ -232,6 +304,12 @@ async function main(): Promise<number> {
     const gRow = await turnRow(db, gId);
     console.log(`spoken: ${JSON.stringify(g.text)} | note=${JSON.stringify(gRow?.["confidence_note"])}`);
     check(gRow?.["answer_type"] === "error" && String(gRow?.["confidence_note"]).includes("forbidden tool(s) present: mcp__relaypay__search_knowledge_base"), "guard: search_knowledge_base present -> turn failed (error) and logged");
+    // The guard abort must kill the CLI AND the MCP server it spawned.
+    await new Promise((r) => setTimeout(r, 1_500));
+    const gKill = C.logs.filter((l) => l.includes('"event":"process_tree_killed"')).map((l) => JSON.parse(l) as { killed_pids: number[]; root_pid: number });
+    const gPids = gKill.flatMap((k) => k.killed_pids);
+    console.log(`guard abort killed pids: ${JSON.stringify(gPids)}; still alive: ${JSON.stringify(gPids.filter(isPidAlive))}`);
+    check(gPids.length >= 2 && gPids.filter(isPidAlive).length === 0, "guard abort: CLI and MCP server process tree terminated, nothing left running");
 
     console.log("\n== Conversation totals recomputed from turns");
     const { data: conv } = await db.from("conversations").select("total_cost_usd, total_input_tokens, total_output_tokens, channel").eq("conversation_id", feesId).single();

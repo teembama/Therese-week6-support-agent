@@ -13,7 +13,6 @@ import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createServiceClient, logRetrieval, rankKnowledge, type Db, type LogContext } from "@relaypay/shared";
 import { cliEnv } from "../child-env.js";
 import { AGENT_MODEL } from "../config.js";
-import { findTurn, upsertConversation } from "../persistence.js";
 import { buildTurnPrompt, SYSTEM_PROMPT } from "../prompt.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -21,8 +20,9 @@ const QUESTION = "What fees does RelayPay charge for international payments?";
 
 async function dbWork(db: Db, ctx: LogContext, parallel: boolean, mark: (n: string) => void) {
   mark("work_start");
-  const upsert = () => upsertConversation(db, ctx.conversationId, "test", "trace");
-  const check = () => findTurn(db, ctx);
+  // Same shape of DB work as the server's pre-turn phase (dev trace only).
+  const upsert = () => db.from("conversations").upsert({ conversation_id: ctx.conversationId, channel: "test", caller: "trace" }, { onConflict: "conversation_id", ignoreDuplicates: true });
+  const check = () => db.from("conversation_turns").select("turn_index").eq("conversation_id", ctx.conversationId).eq("turn_index", ctx.turnIndex).maybeSingle();
   const rank = () => rankKnowledge(db, QUESTION);
   let chunks;
   if (parallel) {
@@ -32,7 +32,7 @@ async function dbWork(db: Db, ctx: LogContext, parallel: boolean, mark: (n: stri
     await check();
     chunks = await rank();
   }
-  await logRetrieval(db, ctx, { query: QUESTION, chunkIds: chunks.map((c) => c.chunk_id), sourceTitles: [], sourceSummary: "trace", insufficientKnowledge: chunks.length === 0 });
+  await logRetrieval(db, ctx, { query: QUESTION, chunkIds: chunks.map((c: { chunk_id: string }) => c.chunk_id), sourceTitles: [], sourceSummary: "trace", insufficientKnowledge: chunks.length === 0 });
   mark("work_done");
   return chunks;
 }
