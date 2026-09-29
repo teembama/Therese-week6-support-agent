@@ -109,12 +109,16 @@ Once `001_schema.sql` is applied, all schema changes go in new numbered files (`
   - `isError: true` for `invalid_input` and `error`, which the model should treat as a failed call;
   - `isError: false` for `success`, `not_found` and `denied`, which are deliberate outcomes the model reads and follows.
 - The server also refuses to start if `ANTHROPIC_API_KEY` is present in its environment.
+- **Planned fallback, decided but not built.** If Task 4 shows the Agent SDK/CLI passes its full environment to MCP servers, the protection stays and changes to scrub-on-start:
+  - The server deletes `ANTHROPIC_API_KEY` from `process.env` before any other module can read it, and logs a warning to stderr without the value.
+  - ESM static imports are hoisted and run before a module's first line. So this needs a tiny separate entry file that does the `delete` and only then dynamically imports the server (`await import("./index.js")`).
+- **Protocol compatibility check.** The first check in Task 4 is a bare Agent SDK → MCP handshake that must list `search_knowledge_base`. SDK v2 implements the 2026-07-28 spec. If the Agent SDK can't connect, the fallback is to pin the stable v1 `@modelcontextprotocol/sdk`.
 
 ### D14. Shared code lives in the `@relaypay/shared` workspace, built with project references
 
 - `shared/` holds the Supabase client factory (which refuses publishable/anon keys), the retrieval function, the log writers and the redaction.
 - The backend, the MCP server, `db` and `scripts` depend on it. `tsc -b` builds it first; the root `build`/`typecheck` scripts and every `db:*` script run `tsc -b`.
-- `db/seed.ts` and `scripts/verify-seed.ts` predate `shared/` and still build their own client. Moving them onto the shared factory is a pending follow-up and has not been done.
+- **Known, accepted duplication.** `db/seed.ts` and `scripts/verify-seed.ts` predate `shared/` and build their own Supabase client and CSV parsing. They are one-off tooling, not runtime code, so this is left as is by decision. Runtime code (backend, MCP server) must use `@relaypay/shared`.
 
 ### D15. Retrieval: OR query of informative lexemes, ranked by `ts_rank_cd`
 
@@ -128,6 +132,8 @@ Once `001_schema.sql` is applied, all schema changes go in new numbered files (`
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
   - User-verified after applying: RLS is true on all 11 tables. `create_escalation_with_ticket` EXECUTE is held only by `postgres` and `service_role`.
+- 002 applied to Supabase from commit b4646bf (b4646bf28eedbdd90e3b19df072e49eba36906fd) on 2026-09-29.
+  - User-verified after applying: `search_kb` EXECUTE is held only by `postgres` and `service_role`.
 
 ## Task 1 findings, classified
 
