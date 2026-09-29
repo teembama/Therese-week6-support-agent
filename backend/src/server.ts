@@ -1,4 +1,6 @@
-// HTTP server: the single route POST /chat/completions (Vapi Custom LLM, D4).
+// HTTP server: the single route POST /v/:token/chat/completions (Vapi Custom LLM, D4, D26).
+// Vapi's base URL is https://<host>/v/<token>; Vapi appends /chat/completions. A wrong or
+// missing token is a 404 like any unknown path, and logged paths are always redacted.
 //
 // Idempotency per (conversation_id, turn_index):
 // - a persisted turn row is replayed as the stream without running the agent again;
@@ -7,16 +9,17 @@
 // same retry at the same moment would both run the agent; the unique (conversation_id,
 // turn_index) constraint then keeps only the first row (docs/decisions.md D19).
 
-import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServiceClient, type Db, type LogContext } from "@relaypay/shared";
 import { FALLBACK_LINE, MAX_BODY_BYTES } from "./config.js";
+import { shapeOf } from "./debug-shape.js";
 import { sentences } from "./gate.js";
 import { SseStream } from "./sse.js";
 import { runTurn, type TurnResult } from "./turn.js";
+import { matchRoute, MIN_TOKEN_LENGTH, redactPath, sha256 } from "./routing.js";
 import { parseVapiBody } from "./vapi.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -25,16 +28,8 @@ function log(event: Record<string, unknown>): void {
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...event }));
 }
 
-function sha256(value: string): Buffer {
-  return createHash("sha256").update(value, "utf8").digest();
-}
-
-/** Constant-time check of "Authorization: Bearer <secret>". Never logs the header. */
-function authorized(header: string | undefined, secretDigest: Buffer): boolean {
-  const presented = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-  // Hashing first gives equal-length buffers, so timingSafeEqual never throws on length.
-  return timingSafeEqual(sha256(presented), secretDigest) && presented.length > 0;
-}
+// TEMPORARY (live Vapi test): log request structure only (see debug-shape.ts).
+const DEBUG_REQUEST_SHAPE = process.env["RELAYPAY_DEBUG_REQUEST_SHAPE"] === "1";
 
 function sendJson(res: ServerResponse, status: number, body: Record<string, unknown>): void {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -54,7 +49,7 @@ async function readBody(req: IncomingMessage): Promise<string | null> {
 
 const inflight = new Map<string, Promise<TurnResult>>();
 
-async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tReceivedMs: number): Promise<void> {
+async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tReceivedMs: number, loggedPath: string): Promise<void> {
   const tReceivedIso = new Date().toISOString();
   const raw = await readBody(req);
   if (raw === null) return sendJson(res, 413, { error: "request body too large" });
@@ -63,6 +58,9 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
     json = JSON.parse(raw);
   } catch {
     return sendJson(res, 400, { error: "invalid JSON" });
+  }
+  if (DEBUG_REQUEST_SHAPE) {
+    log({ event: "debug_request_shape", method: req.method, path: loggedPath, token_ok: true, header_names: Object.keys(req.headers).sort(), body_shape: shapeOf(json) });
   }
   const parsed = parseVapiBody(json);
   if (!parsed.ok) return sendJson(res, 400, { error: parsed.error });
@@ -119,22 +117,35 @@ function main(): void {
       process.exit(1);
     }
   }
-  const secretDigest = sha256(process.env["VAPI_LLM_SECRET"]!);
+  const secret = process.env["VAPI_LLM_SECRET"]!;
+  if (secret.length < MIN_TOKEN_LENGTH || !/^[A-Za-z0-9._~-]+$/.test(secret)) {
+    console.error(`[relaypay] refusing to start: VAPI_LLM_SECRET must be at least ${MIN_TOKEN_LENGTH} URL-safe characters ([A-Za-z0-9._~-])`);
+    process.exit(1);
+  }
+  const secretDigest = sha256(secret);
   const db = createServiceClient();
   const port = Number(process.env["PORT"] ?? 8787);
 
   const server = createServer((req, res) => {
     const tReceivedMs = performance.now();
-    const path = new URL(req.url ?? "/", "http://localhost").pathname;
-    if (req.method !== "POST" || path !== "/chat/completions") {
-      log({ event: "not_found", method: req.method, path });
+    let pathname = "/";
+    try {
+      pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    } catch {
+      /* malformed request target: treat as unknown path */
+    }
+    const loggedPath = redactPath(pathname, secret);
+    const route = matchRoute(req.method, pathname, secretDigest);
+    if (route.kind === "not_found") {
+      // Same 404 for unknown paths and for a wrong/missing token; the path is redacted.
+      log({ event: "not_found", method: req.method, path: loggedPath });
+      if (DEBUG_REQUEST_SHAPE && route.tokenChecked) {
+        log({ event: "debug_request_shape", method: req.method, path: loggedPath, token_ok: false, header_names: Object.keys(req.headers).sort() });
+      }
+      req.resume();
       return sendJson(res, 404, { error: "not found" });
     }
-    if (!authorized(req.headers.authorization, secretDigest)) {
-      log({ event: "unauthorized", path });
-      return sendJson(res, 401, { error: "unauthorized" });
-    }
-    handleChat(req, res, db, tReceivedMs).catch((err: unknown) => {
+    handleChat(req, res, db, tReceivedMs, loggedPath).catch((err: unknown) => {
       log({ event: "request_error", message: err instanceof Error ? err.message : String(err) });
       if (!res.headersSent) sendJson(res, 500, { error: "internal error" });
       else if (!res.writableEnded) res.end();

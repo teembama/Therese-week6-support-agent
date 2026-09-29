@@ -1,4 +1,4 @@
-// End-to-end tests of POST /chat/completions against local backend servers (real Agent SDK,
+// End-to-end tests of POST /v/:token/chat/completions against local backend servers (real Agent SDK,
 // real MCP server, real Supabase). Spawns:
 //   A: normal server              (port 8799)
 //   B: 1.5s first-token timeout   (port 8798)  -> fallback + abort
@@ -38,15 +38,16 @@ async function startServer(port: number, extraEnv: Record<string, string> = {}):
 
 interface Reply { status: number; source: string | null; text: string; events: unknown[]; raw: string; ms: number }
 
-async function post(port: number, body: unknown, opts: { auth?: string | null; path?: string; method?: string; abortAfterMs?: number } = {}): Promise<Reply> {
+/** The valid chat path for the per-run test secret (D26: the token travels in the path). */
+const chatPath = () => `/v/${process.env["VAPI_LLM_SECRET"]}/chat/completions`;
+
+async function post(port: number, body: unknown, opts: { path?: string; method?: string; abortAfterMs?: number } = {}): Promise<Reply> {
   const t0 = performance.now();
   const controller = new AbortController();
   if (opts.abortAfterMs) setTimeout(() => controller.abort(), opts.abortAfterMs);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const auth = opts.auth === undefined ? `Bearer ${process.env["VAPI_LLM_SECRET"]}` : opts.auth;
-  if (auth) headers["Authorization"] = auth;
   try {
-    const res = await fetch(`http://localhost:${port}${opts.path ?? "/chat/completions"}`, {
+    const res = await fetch(`http://localhost:${port}${opts.path ?? chatPath()}`, {
       method: opts.method ?? "POST",
       headers,
       signal: controller.signal,
@@ -124,20 +125,25 @@ async function main(): Promise<number> {
   process.loadEnvFile(resolve(REPO, ".env"));
   // Per-run secret for the spawned test servers (they inherit it; loadEnvFile does not
   // override variables that are already set). The real VAPI_LLM_SECRET is never needed here.
-  process.env["VAPI_LLM_SECRET"] = `test-${randomBytes(24).toString("hex")}`;
+  process.env["VAPI_LLM_SECRET"] = `test-${randomBytes(24).toString("hex")}`; // 53 URL-safe chars
   const db = createServiceClient();
   const A = await startServer(8799);
   const servers = [A];
   try {
    if (!values["latency-only"]) {
     console.log("== HTTP surface");
-    check((await post(A.port, body(`test-ep-${RUN}-noauth`, ["hi"]), { auth: null })).status === 401, "no Authorization header -> 401");
-    check((await post(A.port, body(`test-ep-${RUN}-badauth`, ["hi"]), { auth: "Bearer wrong-secret" })).status === 401, "wrong secret -> 401");
-    check((await post(A.port, {}, { path: "/v1/chat/completions" })).status === 404, "wrong path -> 404");
-    check((await post(A.port, {}, { method: "GET" })).status === 404, "GET -> 404");
-    check((await post(A.port, { messages: [{ role: "user", content: "hi" }] })).status === 400, "missing call.id -> 400");
-    check(A.logs.some((l) => l.includes('"event":"not_found"') && l.includes('"path":"/v1/chat/completions"')), "404 logged with method and path");
-    check(!A.logs.some((l) => l.includes(process.env["VAPI_LLM_SECRET"]!) || l.includes("wrong-secret")), "no secret or Authorization value in server logs");
+    const secret = process.env["VAPI_LLM_SECRET"]!;
+    const wrongToken = `wrong-${randomBytes(20).toString("hex")}`;
+    const hiBody = body(`test-ep-${RUN}-surface`, ["hi"]);
+    check((await post(A.port, hiBody, { path: `/v/${wrongToken}/chat/completions` })).status === 404, "wrong token -> 404 (not 401)");
+    check((await post(A.port, hiBody, { path: "/v//chat/completions" })).status === 404, "empty token -> 404");
+    check((await post(A.port, hiBody, { path: "/chat/completions" })).status === 404, "no token (old unprefixed route) -> 404");
+    check((await post(A.port, hiBody, { path: `/v/${secret}/chat/completions/chat/completions` })).status === 404, "valid token, doubled suffix -> 404");
+    check((await post(A.port, {}, { path: "/v1/chat/completions" })).status === 404, "other path -> 404");
+    check((await post(A.port, {}, { method: "GET" })).status === 404, "GET on the valid path -> 404");
+    check((await post(A.port, { messages: [{ role: "user", content: "hi" }] })).status === 400, "valid token, missing call.id -> 400");
+    check(A.logs.some((l) => l.includes('"event":"not_found"') && l.includes('"path":"/v/[redacted]/chat/completions"')), "wrong-token 404 logged with the redacted path");
+    check(A.logs.some((l) => l.includes('"event":"not_found"') && l.includes('"path":"/v1/chat/completions"')), "unknown-path 404 logged with method and path");
 
     console.log("\n== Fees question");
     const feesId = `test-ep-${RUN}-fees`;
@@ -233,6 +239,17 @@ async function main(): Promise<number> {
     const sumCost = (turns ?? []).reduce((t, r) => t + Number((r as { cost_usd_estimate: number | null }).cost_usd_estimate ?? 0), 0);
     console.log(`conversation: ${JSON.stringify(conv)} | sum of turns cost=${sumCost.toFixed(6)}`);
     check(Math.abs(Number(conv?.["total_cost_usd"]) - sumCost) < 1e-6 && conv?.["channel"] === "test", "totals equal SUM over turns; channel=test for test- ids");
+
+    console.log("\n== Debug request-shape log (server E, RELAYPAY_DEBUG_REQUEST_SHAPE=1)");
+    const E = await startServer(8795, { RELAYPAY_DEBUG_REQUEST_SHAPE: "1" });
+    servers.push(E);
+    const marker = "UNIQUE-CONTENT-MARKER-7f3a";
+    await post(E.port, body(`test-ep-${RUN}-debug`, [`What fees does RelayPay charge? ${marker}`]));
+    await post(E.port, hiBody, { path: `/v/${wrongToken}/chat/completions` });
+    const debugLines = E.logs.filter((l) => l.includes('"event":"debug_request_shape"'));
+    for (const l of debugLines) console.log(`  ${l.slice(0, 400)}`);
+    check(debugLines.some((l) => l.includes('"token_ok":true') && l.includes('"body_shape"')) && debugLines.some((l) => l.includes('"token_ok":false')), "debug log: structure for token ok and token failed");
+    check(!debugLines.some((l) => l.includes(marker) || l.includes(secret) || l.includes(wrongToken)), "debug log: no message content, no token");
    }
 
     const variants: Array<{ name: string; server: Server }> = [{ name: "default", server: A }];
@@ -261,6 +278,16 @@ async function main(): Promise<number> {
         .filter((l) => l.includes('"event":"turn"') && l.includes(`test-ep-${RUN}-latency-${v.name}-`))
         .map((l) => JSON.parse(l) as { conversation_id: string; marks: Record<string, number> })
         .map((e) => ({ run: e.conversation_id.split("-").pop(), ...e.marks })));
+    }
+    console.log("\n== Token never logged (every server, every stdout/stderr line)");
+    const allLines = servers.flatMap((s) => s.logs);
+    const leaks = allLines.filter((l) => l.includes(process.env["VAPI_LLM_SECRET"]!) || /\/v\/wrong-[0-9a-f]{40}/.test(l));
+    console.log(`scanned ${allLines.length} log lines; lines containing a token: ${leaks.length}`);
+    check(leaks.length === 0, "no log line contains the real or the wrong token");
+    const serverErrors = allLines.filter((l) => /\[relaypay\]|"event":"request_error"/.test(l));
+    if (serverErrors.length) {
+      console.log(`\nserver-side error lines (${serverErrors.length}):`);
+      for (const l of serverErrors) console.log(`  ${l.slice(0, 300)}`);
     }
   } finally {
     for (const s of servers) s.proc.kill();

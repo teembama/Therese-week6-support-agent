@@ -300,6 +300,32 @@ Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5
 - **Result:** it is adopted permanently in `cliEnv()`. The full endpoint suite passes with it: all checks, and 10 fees runs at p50 2171 / p95 7160ms with 0 errors.
 - **Not adopted:** `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, the documented switch for telemetry, auto-update, error reporting and feature-flag fetching, is a separate decision. It wasn't asked for, and it disables feature-flag-dependent features.
 
+### D26. Endpoint auth: secret token in the path (replaces the Bearer check from D7/D19)
+
+- **Why:** in our shared Vapi account, the Custom LLM credential is **org-wide** (one unnamed slot), and the dashboard offers **no custom headers** for the assistant. Neither an `Authorization: Bearer` value nor a custom header could be scoped to this assistant.
+- **Design:**
+  - The only route is `POST /v/:token/chat/completions`. The Vapi base URL is `https://<host>/v/<token>`, and Vapi appends `/chat/completions`.
+  - `:token` is URL-decoded and compared against `VAPI_LLM_SECRET` in constant time (SHA-256 digests, then `timingSafeEqual`).
+  - A wrong, empty or missing token returns **404, not 401**, identical to any unknown path, so the route's existence isn't confirmed. Other methods and suffixes also return 404.
+  - The server refuses to start unless `VAPI_LLM_SECRET` is at least 32 URL-safe characters (`[A-Za-z0-9._~-]`).
+  - The Bearer check is removed.
+- **Never logged:**
+  - Every logged path goes through `redactPath()`. The segment after `/v/` becomes `[redacted]`, and any literal or percent-encoded occurrence of the secret anywhere in the path is replaced.
+  - This covers 404 logging for unknown paths.
+  - The endpoint suite scans every line of every test server's output for both the real and a wrong token, and requires zero.
+- **Trade-off:** secrets in URLs are more likely to reach logs (proxy/CDN access logs, tunnel logs, error trackers, browser history) than header secrets.
+  - **Mitigations:** redaction in our logs; the token is never written to files; a 404 for any wrong token.
+  - **Residual risk:** infrastructure we don't control, such as Vapi's own logs or a tunnel or host access log, may record the full URL.
+- **Rotation:** the token is rotated after the demo, by generating a new `VAPI_LLM_SECRET` and updating the Vapi base URL.
+
+### D27. Vapi assistant settings (confirmed by the user in the dashboard, 2026-09-29)
+
+- **Metadata Send Mode: Variable**, so `call.id` should be in the request body. The live-test debug log verifies the body's structure.
+- **Custom LLM URL is labelled "base URL"**, so Vapi appends `/chat/completions` (consistent with D4 and D26).
+- Request timeout is 20s, which matches our 20s hard cap (D19).
+- Max tokens is 250, which our backend ignores; reply length is bounded by the prompt ("1 to 3 short spoken sentences").
+- No Vapi tools and no Vapi knowledge base (D8).
+
 ### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
 
 - **Observed in Task 4 step 1 (D18):** the MCP server failed to start because of the inherited API key, and the agent lost its only approved tool. It still answered, fabricating "RelayPay charges a 2% fee on international payments", which is plausible and wrong.
