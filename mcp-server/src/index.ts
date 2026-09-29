@@ -74,7 +74,8 @@ function main(): void {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   console.error(
-    `[relaypay-mcp] serving ${TOOLS.length} tool(s) on stdio for conversation ${env.context.conversationId}, turn ${env.context.turnIndex}`,
+    `[relaypay-mcp] serving ${TOOLS.length} tool(s) on stdio for conversation ${env.context.conversationId}, ` +
+      `turn ${env.context.turnIndex}; ANTHROPIC_API_KEY in env: ${"ANTHROPIC_API_KEY" in process.env}`,
   );
 }
 

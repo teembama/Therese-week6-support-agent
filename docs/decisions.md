@@ -151,6 +151,42 @@ Once `001_schema.sql` is applied, all schema changes go in new numbered files (`
 - **Decision:** leave it to the agent. X1 gets support-contact chunks with `insufficient_knowledge = false`. None of them answers the question, so the agent must decline (`type = decline`). There is no retuning; excluding "support" would break "How do I contact support".
 - **Fix, with more time:** when a synonym fires, run a supplementary `search_kb` on the synonym alone ("cryptocurrency" matches only the right chunk, at #1). Merge its top results into the main result set before the floor and match-count cut.
 
+### D18. Agent SDK → MCP handshake findings (Task 4 step 1, 2026-09-29)
+
+Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5`, MCP server `@modelcontextprotocol/server` 2.2.0. Script: `backend/src/dev/handshake.ts`.
+
+- **The CLI merges its whole environment into every MCP server it spawns.**
+  - This includes `ANTHROPIC_API_KEY`, `CLAUDE_CODE_MESSAGING_TOKEN` and `CLAUDE_CODE_SESSION_ID`. The server's own `env` entries are added on top.
+  - Our refusal fired, the server exited 1, `init` reported `relaypay: failed` with 0 tools, and the model **made up an answer** ("a 2% fee").
+  - The planned fallback (D13) is now in place. `mcp-server/src/main.ts` is the spawn entry: it has no static imports, deletes the key, warns on stderr, then dynamically imports the server.
+  - Verified inside the server process: the key is present on spawn and `ANTHROPIC_API_KEY in env: false` after the scrub.
+  - `index.ts` still refuses if the key is somehow present, as defence in depth.
+- **Protocol:** the CLI's MCP client sends `protocolVersion: "2025-11-25"`, and the v2 server negotiates it. The v1 fallback isn't needed.
+- **Tool list:** with `tools: []`, `strictMcpConfig: true`, `settingSources: []` and `alwaysLoad: true`, `init.tools` is exactly `["mcp__relaypay__search_knowledge_base"]`.
+  - `init` still lists bundled skills, agents and slash commands as metadata. Built-in tools are off, so the Skill and Task tools don't exist and none of these can be invoked.
+  - `alwaysLoad` blocks startup until the server connects (up to 5s) and stops tool-search deferral.
+- **`persistSession: false`:** no transcripts are written to `~/.claude/projects`. This matches D3 (stateless) and keeps caller speech off disk.
+- **`maxTurns` behaviour:**
+  - The limit is checked **after** tools run. With `maxTurns: 1`, the tool call still executed.
+  - The result was `subtype: "error_max_turns"`, `is_error: true`, `num_turns: 2`, `stop_reason: "tool_use"`, with `errors: ["Reached maximum number of turns (1)"]`.
+  - **The iterator then throws** after yielding the result. Callers must catch it.
+  - Consequence for later tools: a side-effect tool can run even when the turn ends before the agent can confirm it to the caller.
+- **Cost:** `total_cost_usd` for the fees query was $0.0053 (estimate). `modelUsage` has two entries every time:
+  - the main `claude-haiku-4-5` loop;
+  - an auxiliary `claude-haiku-4-5-20251001` call of about 918 input and 15 output tokens, ≈ $0.001, present even when no tool is used.
+  - `usage` covers only the main loop, so persistence should take tokens from `modelUsage`.
+- **Timings, warm, from the `query()` call:**
+
+  | Event | ms |
+  | --- | --- |
+  | `init` | 1595 (2770 on the very first run) |
+  | First `tool_use` | 2882 |
+  | Tool result | 4054 (MCP tool itself: 644) |
+  | First text | 5695 |
+  | Result | 6057 |
+
+  - The CLI's own `duration_ms` was 4513, so about 1.5s of each turn is CLI + MCP startup before the model is called.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

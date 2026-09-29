@@ -18,7 +18,7 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import { createServiceClient } from "@relaypay/shared";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const SERVER = resolve(REPO, "mcp-server", "dist", "index.js");
+const SERVER = resolve(REPO, "mcp-server", "dist", "main.js");
 
 function requireEnv(name: string): string {
   const value = process.env[name];
