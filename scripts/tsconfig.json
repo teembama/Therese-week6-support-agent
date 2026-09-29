@@ -10,7 +10,8 @@
     "src",
     "verify-seed.ts",
     "eval-retrieval.ts",
-    "test-mcp.ts"
+    "test-mcp.ts",
+    "test-endpoint.ts"
   ],
   "references": [
     {

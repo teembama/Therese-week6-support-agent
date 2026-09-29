@@ -8,7 +8,8 @@
     "typecheck": "tsc -b",
     "verify-seed": "tsx verify-seed.ts",
     "eval-retrieval": "tsx eval-retrieval.ts",
-    "test-mcp": "tsx test-mcp.ts"
+    "test-mcp": "tsx test-mcp.ts",
+    "test-endpoint": "tsx test-endpoint.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.2.0",

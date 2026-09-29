@@ -22,6 +22,7 @@ async function main(): Promise<void> {
 
   const cliStderr: string[] = [];
   const t0 = performance.now();
+  console.log(`query() called at ${new Date().toISOString()}`);
   const ms = () => Math.round(performance.now() - t0);
   const marks: Record<string, number> = {};
 

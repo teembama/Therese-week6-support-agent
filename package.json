@@ -20,7 +20,9 @@
     "db:test": "bash db/tests/schema-suite.sh && bash db/tests/race.sh",
     "db:load-kb": "tsc -b && npm run load-kb -w @relaypay/db --",
     "eval:retrieval": "tsc -b && npm run eval-retrieval -w @relaypay/scripts --",
-    "test:mcp": "tsc -b && npm run test-mcp -w @relaypay/scripts --"
+    "test:mcp": "tsc -b && npm run test-mcp -w @relaypay/scripts --",
+    "test:endpoint": "tsc -b && npm run test-endpoint -w @relaypay/scripts --",
+    "test:gate": "tsc -b && npm run test:gate -w @relaypay/backend"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
