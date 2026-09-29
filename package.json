@@ -14,8 +14,8 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "db:seed": "npm run seed -w @relaypay/db",
-    "db:verify": "npm run verify-seed -w @relaypay/scripts",
+    "db:seed": "npm run seed -w @relaypay/db --",
+    "db:verify": "npm run verify-seed -w @relaypay/scripts --",
     "db:test": "bash db/tests/schema-suite.sh && bash db/tests/race.sh"
   },
   "devDependencies": {
