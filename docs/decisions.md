@@ -124,9 +124,23 @@ Once `001_schema.sql` is applied, all schema changes go in new numbered files (`
 
 - `search_kb` (migration 002) normalizes the query with the index's `english` config, which drops stopwords and stems words.
 - It removes `KB_EXCLUDED_WORDS`, ORs the remaining lexemes, and ranks with `ts_rank_cd(..., KB_RANK_NORMALIZATION = 32)`. That normalization gives ranks between 0 and 1.
-- It returns at most `KB_MATCH_COUNT = 4` chunks with rank `>= KB_MIN_RANK`. If none qualifies, `insufficient_knowledge = true`.
+- It returns at most `KB_MATCH_COUNT` chunks with rank `>= KB_MIN_RANK`. If none qualifies, `insufficient_knowledge = true`.
 - The constants live in `shared/src/config.ts`. Normalization, threshold and exclusions are parameters of `search_kb`, so tuning them needs no new migration.
-- `KB_MIN_RANK` is set from the evaluation in `docs/retrieval-eval.md`.
+- **Tuned 2026-09-29, evidence in `docs/retrieval-eval.md`:**
+  - normalization changed from 32 to **34** (2|32);
+  - `KB_MATCH_COUNT` changed from 4 to **6**;
+  - `KB_MIN_RANK` = **0.05**.
+- `KB_QUERY_SYNONYMS` is applied in app code before `search_kb`, with no migration and no prefix matching.
+  - It appends a synonym when a key appears as a whole word.
+  - Each entry must name the failing eval case that justified it. Speculative entries are not allowed.
+  - Current entry: `crypto → cryptocurrency`, justified by case X1.
+
+### D16. Retrieval optimises for recall; the agent and the grounding gate handle precision
+
+- **The rank threshold is a noise floor only, not a detector for unsupported questions.** The evaluation showed no rank gap between correct chunks and chunks that merely share a word ("support").
+- `insufficient_knowledge` means exactly one thing: zero chunks above the floor.
+- Deciding that retrieved chunks don't actually answer the question is the agent's job. The agent then answers with `type = decline`.
+- **Known limit:** the grounding gate verifies that an answer cites retrieved chunks, not that those chunks are relevant to the question. The Task 6 evals check relevance.
 
 ## Migration log
 

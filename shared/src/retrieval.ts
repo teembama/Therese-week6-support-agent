@@ -8,6 +8,7 @@ import {
   KB_EXCLUDED_WORDS,
   KB_MATCH_COUNT,
   KB_MIN_RANK,
+  KB_QUERY_SYNONYMS,
   KB_RANK_NORMALIZATION,
 } from "./config.js";
 import { logRetrieval, type LogContext } from "./logging.js";
@@ -26,10 +27,18 @@ export interface RankOptions {
   minRank?: number;
 }
 
-/** Ranked chunks for a query, without logging. Throws on database errors. */
+/** Appends KB_QUERY_SYNONYMS values for keys found as whole words in the query. */
+export function expandQuery(query: string): string {
+  const additions = Object.entries(KB_QUERY_SYNONYMS)
+    .filter(([word]) => new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(query))
+    .map(([, synonym]) => synonym);
+  return additions.length ? `${query} ${additions.join(" ")}` : query;
+}
+
+/** Ranked chunks for a query (synonyms applied), without logging. Throws on database errors. */
 export async function rankKnowledge(db: Db, query: string, options: RankOptions = {}): Promise<KbChunk[]> {
   const { data, error } = await db.rpc("search_kb", {
-    p_query: query,
+    p_query: expandQuery(query),
     p_match_count: options.matchCount ?? KB_MATCH_COUNT,
     p_min_rank: options.minRank ?? KB_MIN_RANK,
     p_normalization: KB_RANK_NORMALIZATION,
@@ -53,9 +62,12 @@ export interface RetrievalResult {
 export async function retrieveKnowledge(db: Db, ctx: LogContext, query: string): Promise<RetrievalResult> {
   const chunks = await rankKnowledge(db, query);
   const insufficient = chunks.length === 0;
-  const sourceSummary = insufficient
-    ? `No chunk reached min rank ${KB_MIN_RANK}.`
-    : `${chunks.length} chunk(s): ` + chunks.map((c) => `${c.heading} (${c.rank.toFixed(3)})`).join("; ");
+  const expanded = expandQuery(query);
+  const sourceSummary =
+    (expanded !== query ? `[searched as: ${expanded}] ` : "") +
+    (insufficient
+      ? `No chunk reached min rank ${KB_MIN_RANK}.`
+      : `${chunks.length} chunk(s): ` + chunks.map((c) => `${c.heading} (${c.rank.toFixed(3)})`).join("; "));
   const logged = await logRetrieval(db, ctx, {
     query,
     chunkIds: chunks.map((c) => c.chunk_id),
