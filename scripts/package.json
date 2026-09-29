@@ -9,7 +9,8 @@
     "verify-seed": "tsx verify-seed.ts",
     "eval-retrieval": "tsx eval-retrieval.ts",
     "test-mcp": "tsx test-mcp.ts",
-    "test-endpoint": "tsx test-endpoint.ts"
+    "test-endpoint": "tsx test-endpoint.ts",
+    "eval-grounding": "tsx eval-grounding.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.2.0",

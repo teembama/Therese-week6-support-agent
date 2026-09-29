@@ -11,7 +11,8 @@
     "verify-seed.ts",
     "eval-retrieval.ts",
     "test-mcp.ts",
-    "test-endpoint.ts"
+    "test-endpoint.ts",
+    "eval-grounding.ts"
   ],
   "references": [
     {

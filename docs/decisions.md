@@ -455,6 +455,8 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - User-verified after applying: `search_kb` EXECUTE is held only by `postgres` and `service_role`.
 - 003 applied to Supabase from commit 485387c on 2026-09-29.
   - User-verified after applying: EXECUTE on `begin_turn_attempt`, `finish_turn_attempt`, `attempt_is_active`, `require_active_attempt` and `recompute_conversation_totals` is held only by `postgres` and `service_role`.
+- 004 applied to Supabase from commit 8144fcc on 2026-09-29.
+  - User-verified after applying: `conversation_turns_answer_type_check` lists all 7 values, including `'social'`.
 
 ## Task 1 findings, classified
 
