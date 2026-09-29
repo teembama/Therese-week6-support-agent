@@ -91,6 +91,15 @@ Once `001_schema.sql` is applied, all schema changes go in new numbered files (`
   - The MCP tool treats it as a hard error: it logs a `tool_calls` row with `status = 'error'` and never reports it as a duplicate or success.
   - A genuine duplicate is not an error. It returns the existing IDs with `created = false`.
 
+### D12. One pinned Node 22 runtime everywhere (apply in Tasks 3 and 4)
+
+- The repo requires Node 22: `engines.node` is `>=22`, and `.nvmrc` contains `22`.
+  - Node 20 reached end-of-life in April 2026.
+  - supabase-js 2.109 refuses to start on Node 20 because it lacks native WebSocket support.
+- **The backend spawns the stdio MCP server with `process.execPath`, never `"node"` from PATH.** This keeps the backend and the MCP server on the same Node binary.
+  - This machine has three Node installs, so the PATH lookup is ambiguous: nvm 22.23.3, nvm 20.19.0, and a standalone 24.15.0 in `C:\Program Files\nodejs`.
+- The deployment host must also run Node 22.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
