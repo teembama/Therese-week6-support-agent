@@ -418,6 +418,21 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - **Rule (prompt):** use `social` only when the caller's **whole** message is thanks, a goodbye or a greeting. "Thanks, and what about fees?" is a question.
 - **Storage:** stored as `answer_type = 'social'`, which migration 004 adds to the CHECK constraint. It is only this change; Phase 2 gets its own migration.
 
+### D32. Grounding evaluation: deterministic checks flag, an LLM judge decides (judge built with the Task 6 evals)
+
+- **Deterministic checks (built now):** `shared/src/grounding-check.ts` compares each spoken answer with the chunks it cited, and reports four kinds of flag:
+  - **strengthening words:** "exact", "always", "guaranteed", "up front" and similar;
+  - **dropped hedges:** numbers from a hedged chunk sentence stated without a hedge;
+  - **unsupported specifics:** numbers, percentages or places not in the cited chunks, including places echoed from the caller;
+  - **invented attribution:** "your …" when the chunks attribute nothing to the reader.
+  - They **flag only** and never fail a case on their own.
+  - The regression cases are the Kenya and fees answers from live call `01a0ef14…`, which must be flagged, plus cleaned versions, which must pass.
+- **LLM judge (built Thursday with the Task 6 evals, not now):**
+  - **Model: Sonnet.** It runs offline, so accuracy matters more than speed. It is also a different, stronger model than the Haiku agent, so the agent isn't grading its own output.
+  - **The judge decides pass or fail.** Deterministic flags are passed to it as hints to examine; they don't decide.
+  - **Evidence rule:** for every claim judged "supported", the judge must quote the supporting span. Code then checks that the quote appears **verbatim** (after whitespace normalisation) in a cited chunk. An unverifiable quote counts as **unsupported**, regardless of the judge's verdict.
+  - Results go to the `evaluations` table.
+
 ### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
 
 - **Observed in Task 4 step 1 (D18):** the MCP server failed to start because of the inherited API key, and the agent lost its only approved tool. It still answered, fabricating "RelayPay charges a 2% fee on international payments", which is plausible and wrong.
