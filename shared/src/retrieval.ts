@@ -61,6 +61,12 @@ export interface RetrievalResult {
  */
 export async function retrieveKnowledge(db: Db, ctx: LogContext, query: string): Promise<RetrievalResult> {
   const chunks = await rankKnowledge(db, query);
+  const logged = await logRetrievalResult(db, ctx, query, chunks);
+  return { chunks, insufficient_knowledge: chunks.length === 0, logged };
+}
+
+/** Writes the retrieval_logs row for an already-ranked result. Never throws. */
+export function logRetrievalResult(db: Db, ctx: LogContext, query: string, chunks: KbChunk[]): Promise<boolean> {
   const insufficient = chunks.length === 0;
   const expanded = expandQuery(query);
   const sourceSummary =
@@ -68,12 +74,11 @@ export async function retrieveKnowledge(db: Db, ctx: LogContext, query: string):
     (insufficient
       ? `No chunk reached min rank ${KB_MIN_RANK}.`
       : `${chunks.length} chunk(s): ` + chunks.map((c) => `${c.heading} (${c.rank.toFixed(3)})`).join("; "));
-  const logged = await logRetrieval(db, ctx, {
+  return logRetrieval(db, ctx, {
     query,
     chunkIds: chunks.map((c) => c.chunk_id),
     sourceTitles: chunks.map((c) => `${c.source_title} > ${c.heading}`),
     sourceSummary,
     insufficientKnowledge: insufficient,
   });
-  return { chunks, insufficient_knowledge: insufficient, logged };
 }

@@ -1,11 +1,20 @@
-// One caller turn: pre-turn retrieval -> Agent SDK query -> grounding gate -> spoken stream,
-// with first-token timeout, hard cap, client-disconnect abort, tool-list guard, and
-// persistence of the turn row plus recomputed conversation totals.
+// One caller turn, from request receipt to persisted row.
+//
+// Lifecycle (lever 3, docs/latency.md):
+//   1. Timers start from request receipt, so the first-token timeout also covers DB work.
+//   2. query() starts immediately in streaming-input mode, so the Claude Code CLI boots while
+//      the backend does its independent DB work IN PARALLEL: conversation upsert, existing-turn
+//      check, and pre-turn retrieval (ranking only).
+//   3. Existing turn row -> the input stream is closed without a message, the query is
+//      aborted, and the stored response is replayed. No agent run, no new rows.
+//   4. Otherwise the retrieval_logs row is written, and the user message (prompt with chunks) is
+//      yielded to the waiting CLI. The gate checks the reply against the in-memory retrieved set.
+// Plus: hard cap, client-disconnect abort, tool-list guard, persistence + recomputed totals.
 
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import { retrieveKnowledge, summarize, type Db, type LogContext } from "@relaypay/shared";
+import { query, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { logRetrievalResult, rankKnowledge, summarize, type Db, type KbChunk, type LogContext } from "@relaypay/shared";
 import { cliEnv, mcpEnv } from "./child-env.js";
 import {
   AGENT_MAX_BUDGET_USD,
@@ -13,19 +22,16 @@ import {
   AGENT_MCP_TOOLS,
   AGENT_MODEL,
   FALLBACK_LINE,
-  FORBIDDEN_AGENT_TOOLS,
   FIRST_TOKEN_TIMEOUT_MS,
+  FORBIDDEN_AGENT_TOOLS,
   SAFE_DECLINE_LINE,
   TURN_HARD_CAP_MS,
 } from "./config.js";
 import { evaluateReply, SegmentTracker, sentences } from "./gate.js";
-import {
-  insertTurn,
-  recomputeConversationTotals,
-  type AnswerType,
-} from "./persistence.js";
+import { findTurn, insertTurn, recomputeConversationTotals, upsertConversation, type AnswerType } from "./persistence.js";
 import { buildTurnPrompt, SYSTEM_PROMPT, type HistoryEntry } from "./prompt.js";
 import { buildRetrievalQuery } from "./retrieval-query.js";
+import type { TurnSource } from "./sse.js";
 import { styleViolations } from "./style.js";
 
 // Test knob: attach the MCP server even though the agent allowlist is empty, so the endpoint
@@ -39,6 +45,8 @@ const MCP_ENTRY =
 export interface TurnInput {
   db: Db;
   ctx: LogContext;
+  channel: "voice" | "test";
+  caller: string | null;
   userText: string;
   history: HistoryEntry[];
   /** performance.now() when the request arrived. */
@@ -47,6 +55,8 @@ export interface TurnInput {
 }
 
 export interface TurnSink {
+  /** Called once, before the first write, with where the reply comes from. */
+  begin(source: TurnSource): void;
   speak(text: string): void;
   end(): void;
   onClose(listener: () => void): void;
@@ -56,12 +66,13 @@ export interface TurnResult {
   /** What the caller heard; null if nothing was spoken (client gone). */
   spoken: string | null;
   answerType: AnswerType;
+  source: "agent" | "replay";
 }
 
 export interface TurnHandle {
   /** Resolves as soon as the spoken outcome is decided (used by in-flight duplicates). */
   decided: Promise<TurnResult>;
-  /** Resolves once the turn row is written (or its write failed); from then on, replay. */
+  /** Resolves once the turn row exists (written, replayed, or its write failed). */
   persisted: Promise<void>;
   /** Resolves after the turn row and conversation totals are persisted. */
   done: Promise<void>;
@@ -105,21 +116,26 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
   const persisted = new Promise<void>((r) => (resolvePersisted = r));
 
   const done = (async () => {
+    const { db, ctx } = input;
     const notes: string[] = [];
     const abort = new AbortController();
     const elapsed = () => Math.round(performance.now() - input.tReceivedMs);
-    // Latency breakdown (ms from request receipt), logged with the turn event.
     const marks: Record<string, number> = {};
     const mark = (name: string) => void (marks[name] ??= elapsed());
     let released: TurnResult | null = null;
     let msFirstToken: number | null = null;
     let msTotal: number | null = null;
     let kbChunkIds: string[] = [];
+    let begun = false;
 
-    const release = (spoken: string | null, answerType: AnswerType, note?: string) => {
+    const release = (spoken: string | null, answerType: AnswerType, note?: string, source: TurnResult["source"] = "agent") => {
       if (released) return;
       if (note) notes.push(note);
-      released = { spoken, answerType };
+      released = { spoken, answerType, source };
+      if (!begun) {
+        begun = true;
+        sink.begin(source);
+      }
       if (spoken !== null) {
         msFirstToken = elapsed();
         for (const s of sentences(spoken)) sink.speak(s);
@@ -149,58 +165,51 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       release(null, "error");
     });
 
+    // --- Streaming input: the CLI boots now; the user message is yielded once it is ready.
+    let providePrompt!: (prompt: string | null) => void;
+    const promptReady = new Promise<string | null>((r) => (providePrompt = r));
+    let closeInput!: () => void;
+    const inputClosed = new Promise<void>((r) => (closeInput = r));
+    async function* userMessages(): AsyncGenerator<SDKUserMessage> {
+      const prompt = await promptReady;
+      if (prompt === null) return; // replay or already failed: never send anything
+      mark("message_yielded");
+      yield { type: "user", message: { role: "user", content: prompt }, parent_tool_use_id: null };
+      await inputClosed; // keep stdin open until the result, then let the CLI exit
+    }
+
+    let retrievedIds: ReadonlySet<string> = new Set();
     const tracker = new SegmentTracker();
     const toolStarts = new Map<string, number>();
-    let msRetrieval: number | null = null;
     let msTools = 0;
     let result: SDKResultMessage | null = null;
 
-    try {
-      const t = performance.now();
-      const rq = buildRetrievalQuery(input.history, input.userText);
-      if (rq.combinedWithPrevious) notes.push("follow-up: retrieval searched previous + latest caller message");
-      const retrieval = await retrieveKnowledge(input.db, input.ctx, rq.query.slice(0, 1000));
-      // The gate's retrieved set is this in-memory pre-turn result (the agent has no search tool).
-      const retrievedIds: ReadonlySet<string> = new Set(retrieval.chunks.map((c) => c.chunk_id));
-      msRetrieval = Math.round(performance.now() - t);
-      mark("retrieval_done");
-      if (retrieval.insufficient_knowledge) notes.push("pre-turn retrieval: insufficient_knowledge");
-      if (!retrieval.logged) notes.push("pre-turn retrieval_logs write FAILED (see stderr)");
-      if (abort.signal.aborted) throw new Error("aborted before agent start");
+    mark("query_start");
+    const q = query({
+      prompt: userMessages(),
+      options: {
+        model: AGENT_MODEL,
+        systemPrompt: SYSTEM_PROMPT,
+        tools: [],
+        allowedTools: [...AGENT_MCP_TOOLS],
+        permissionMode: "dontAsk",
+        settingSources: [],
+        strictMcpConfig: true,
+        persistSession: false,
+        maxTurns: AGENT_MAX_TURNS,
+        maxBudgetUsd: AGENT_MAX_BUDGET_USD,
+        thinking: { type: "disabled" },
+        includePartialMessages: true,
+        abortController: abort,
+        env: cliEnv(),
+        stderr: () => {},
+        mcpServers: ATTACH_MCP
+          ? { relaypay: { type: "stdio", command: process.execPath, args: [MCP_ENTRY], env: mcpEnv(ctx), alwaysLoad: true } }
+          : {},
+      },
+    });
 
-      mark("query_start");
-      const q = query({
-        prompt: buildTurnPrompt(input.history, input.userText, retrieval.chunks),
-        options: {
-          model: AGENT_MODEL,
-          systemPrompt: SYSTEM_PROMPT,
-          tools: [],
-          allowedTools: [...AGENT_MCP_TOOLS],
-          permissionMode: "dontAsk",
-          settingSources: [],
-          strictMcpConfig: true,
-          persistSession: false,
-          maxTurns: AGENT_MAX_TURNS,
-          maxBudgetUsd: AGENT_MAX_BUDGET_USD,
-          thinking: { type: "disabled" },
-          includePartialMessages: true,
-          abortController: abort,
-          env: cliEnv(),
-          stderr: () => {},
-          mcpServers: ATTACH_MCP
-            ? {
-                relaypay: {
-                  type: "stdio",
-                  command: process.execPath,
-                  args: [MCP_ENTRY],
-                  env: mcpEnv(input.ctx),
-                  alwaysLoad: true,
-                },
-              }
-            : {},
-        },
-      });
-
+    const consume = (async () => {
       for await (const m of q) {
         if (m.type === "system" && m.subtype === "init") {
           mark("init");
@@ -216,14 +225,14 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
           if (e.type === "message_start") {
             mark("first_model_message");
             tracker.start();
-          }
-          else if (e.type === "content_block_start" && e.content_block.type === "tool_use") tracker.toolUseStart();
-          else if (e.type === "content_block_delta" && e.delta.type === "text_delta") {
+          } else if (e.type === "content_block_start" && e.content_block.type === "tool_use") {
+            tracker.toolUseStart();
+          } else if (e.type === "content_block_delta" && e.delta.type === "text_delta") {
             mark("first_text_delta");
             tracker.textDelta(e.delta.text);
-          }
-          else if (e.type === "message_delta") tracker.messageDelta(e.delta.stop_reason);
-          else if (e.type === "message_stop") {
+          } else if (e.type === "message_delta") {
+            tracker.messageDelta(e.delta.stop_reason);
+          } else if (e.type === "message_stop") {
             const segment = tracker.finish();
             if (segment) mark("final_message_stop");
             if (segment && !released) {
@@ -255,27 +264,80 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         } else if (m.type === "result") {
           mark("result");
           result = m;
+          closeInput();
         }
       }
+    })()
+      .catch((err: unknown) => {
+        // The SDK iterator throws after an error result (e.g. error_max_turns) and on abort.
+        if (!abort.signal.aborted) notes.push(`agent error: ${summarize(err instanceof Error ? err.message : String(err), 300)}`);
+      })
+      .finally(() => closeInput());
+
+    // --- Independent DB work, in parallel, while the CLI boots.
+    let msRetrieval: number | null = null;
+    let replayed = false;
+    let retrievalLogged: Promise<boolean> = Promise.resolve(true);
+    try {
+      const rq = buildRetrievalQuery(input.history, input.userText);
+      if (rq.combinedWithPrevious) notes.push("follow-up: retrieval searched previous + latest caller message");
+      mark("db_start");
+      const tRank = performance.now();
+      const [, stored, chunks] = await Promise.all([
+        upsertConversation(db, ctx.conversationId, input.channel, input.caller),
+        findTurn(db, ctx),
+        rankKnowledge(db, rq.query.slice(0, 1000)).then((c: KbChunk[]) => {
+          msRetrieval = Math.round(performance.now() - tRank);
+          return c;
+        }),
+      ]);
+      mark("db_done");
+
+      if (stored) {
+        // Idempotent replay: nothing is sent to the model; the waiting CLI is shut down.
+        replayed = true;
+        providePrompt(null);
+        abort.abort(new Error("replay"));
+        release(stored.assistant_response ?? FALLBACK_LINE, stored.answer_type, undefined, "replay");
+      } else if (released) {
+        // Timed out or disconnected during DB work: don't start the model.
+        providePrompt(null);
+      } else {
+        retrievedIds = new Set(chunks.map((c) => c.chunk_id));
+        if (chunks.length === 0) notes.push("pre-turn retrieval: insufficient_knowledge");
+        retrievalLogged = logRetrievalResult(db, ctx, rq.query.slice(0, 1000), chunks);
+        providePrompt(buildTurnPrompt(input.history, input.userText, chunks));
+      }
+      await consume;
+      if (!(await retrievalLogged)) notes.push("pre-turn retrieval_logs write FAILED (see stderr)");
     } catch (err) {
-      // The SDK iterator throws after an error result (e.g. error_max_turns) and on abort.
-      if (!abort.signal.aborted) notes.push(`agent error: ${summarize(err instanceof Error ? err.message : String(err), 300)}`);
+      notes.push(`turn error: ${summarize(err instanceof Error ? err.message : String(err), 300)}`);
+      providePrompt(null);
+      stop("turn error");
     } finally {
       clearTimeout(firstTokenTimer);
       clearTimeout(hardCapTimer);
+      closeInput();
+    }
+
+    if (replayed) {
+      resolvePersisted();
+      console.log(JSON.stringify({ event: "turn_replayed", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, marks }));
+      return;
     }
 
     if (!released) {
-      release(FALLBACK_LINE, "error", `no speakable final reply${result ? ` (result ${result.subtype})` : ""}`);
+      release(FALLBACK_LINE, "error", `no speakable final reply${result ? ` (result ${(result as SDKResultMessage).subtype})` : ""}`);
     }
-    if (result && result.subtype !== "success") notes.push(`result subtype ${result.subtype}`);
+    const finalResult = result as SDKResultMessage | null;
+    if (finalResult && finalResult.subtype !== "success") notes.push(`result subtype ${finalResult.subtype}`);
     if (tracker.discarded.length) {
       notes.push(`discarded ${tracker.discarded.length} non-final segment(s): ${summarize(tracker.discarded.join(" | "), 200)}`);
     }
 
-    const outcome = released as unknown as TurnResult; // set by release() above
+    const outcome = released as unknown as TurnResult; // always set by release() above
     try {
-      const inserted = await insertTurn(input.db, input.ctx, {
+      const inserted = await insertTurn(db, ctx, {
         userTranscript: input.userText,
         assistantResponse: outcome.spoken,
         answerType: outcome.answerType,
@@ -284,26 +346,26 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         tReceived: input.tReceivedIso,
         msRetrieval,
         msFirstToken,
-        msTools: result || msTools ? Math.round(msTools) : null,
+        msTools: finalResult || msTools ? Math.round(msTools) : null,
         msTotal,
         model: AGENT_MODEL,
-        ...usageFrom(result),
+        ...usageFrom(finalResult),
       });
       resolvePersisted();
-      if (!inserted) console.error(`[relaypay] turn ${input.ctx.conversationId}#${input.ctx.turnIndex} already persisted by another run`);
-      await recomputeConversationTotals(input.db, input.ctx.conversationId);
+      if (!inserted) console.error(`[relaypay] turn ${ctx.conversationId}#${ctx.turnIndex} already persisted by another run`);
+      await recomputeConversationTotals(db, ctx.conversationId);
     } catch (err) {
       resolvePersisted();
-      console.error(`[relaypay] persistence failed for ${input.ctx.conversationId}#${input.ctx.turnIndex}: ${summarize(err instanceof Error ? err.message : String(err))}`);
+      console.error(`[relaypay] persistence failed for ${ctx.conversationId}#${ctx.turnIndex}: ${summarize(err instanceof Error ? err.message : String(err))}`);
     }
     console.log(JSON.stringify({
       event: "turn",
-      conversation_id: input.ctx.conversationId,
-      turn_index: input.ctx.turnIndex,
+      conversation_id: ctx.conversationId,
+      turn_index: ctx.turnIndex,
       answer_type: outcome.answerType,
       ms_first_token: msFirstToken,
       ms_total: msTotal,
-      cost_usd_estimate: result?.total_cost_usd ?? null,
+      cost_usd_estimate: finalResult?.total_cost_usd ?? null,
       aborted: abort.signal.aborted,
       marks: { ...marks, released: msFirstToken },
     }));

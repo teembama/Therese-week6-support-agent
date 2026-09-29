@@ -241,6 +241,22 @@ Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5
   - Pre-agent database work (0.6–3.5s, outliers 11–14s) is now the largest and most variable phase.
 - **For Task 5:** new side-effect tools must go on the agent allowlist while `search_knowledge_base` stays excluded. Options: filter the tools on the server via env, or use the SDK's `disallowedTools`. The guard keeps asserting that search is absent.
 
+### D20b. Overlap CLI startup with the turn's DB work (latency lever 3)
+
+- **Evidence first** (`backend/src/dev/trace-streaming.ts`, warm runs, ms from request):
+  - In streaming-input mode the CLI is spawned at about 1ms and writes its first output at about 490ms, **before** the user message is yielded (620–850ms) and while the DB work runs.
+  - `init` is only emitted after the message arrives. But yield → first model event is 1.1–1.2s, against 1.8–1.9s from `query()` to first model event in sequential mode, so about 0.7s of startup is hidden.
+  - An event-loop heartbeat showed stalls of 20ms at most, so `query()` doesn't block the loop.
+  - There is no MCP startup to overlap: the MCP server is no longer attached (D20).
+- **Lifecycle:**
+  1. Timers start at request receipt.
+  2. `query()` starts immediately with an async-generator prompt.
+  3. Conversation upsert, existing-turn check and pre-turn ranking run in parallel.
+  4. For an existing turn row, the generator ends without yielding, the query is aborted, and the stored reply is replayed.
+  5. Otherwise the `retrieval_logs` write runs concurrently, and the prompt is yielded.
+- **Bug fixed along the way:** before, the upsert and turn check ran *before* the turn's timers started. A Supabase stall of 5–12s therefore meant 12s of silence despite the 8s rule. Now the first-token timeout covers all DB work.
+- **Measured (10 fees runs):** p50 `ms_first_token` fell from 5792 to **2453ms**. p95 is 8001ms, caused by one 10.4s Supabase stall that correctly hit the 8s fallback.
+
 ### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
 
 - **Observed in Task 4 step 1 (D18):** the MCP server failed to start because of the inherited API key, and the agent lost its only approved tool. It still answered, fabricating "RelayPay charges a 2% fee on international payments", which is plausible and wrong.

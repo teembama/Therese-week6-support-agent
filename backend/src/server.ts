@@ -15,8 +15,7 @@ import { fileURLToPath } from "node:url";
 import { createServiceClient, type Db, type LogContext } from "@relaypay/shared";
 import { FALLBACK_LINE, MAX_BODY_BYTES } from "./config.js";
 import { sentences } from "./gate.js";
-import { findTurn, upsertConversation } from "./persistence.js";
-import { SseStream, type TurnSource } from "./sse.js";
+import { SseStream } from "./sse.js";
 import { runTurn, type TurnResult } from "./turn.js";
 import { parseVapiBody } from "./vapi.js";
 
@@ -53,12 +52,6 @@ async function readBody(req: IncomingMessage): Promise<string | null> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function streamText(res: ServerResponse, model: string, source: TurnSource, text: string): void {
-  const sse = new SseStream(res, model, source);
-  for (const s of sentences(text)) sse.content(s);
-  sse.finish();
-}
-
 const inflight = new Map<string, Promise<TurnResult>>();
 
 async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tReceivedMs: number): Promise<void> {
@@ -87,41 +80,32 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
     for (const s of sentences(outcome.spoken ?? FALLBACK_LINE)) sse.content(s);
     return sse.finish();
   }
-  let settle!: (r: TurnResult) => void;
-  let fail!: (e: unknown) => void;
-  const claim = new Promise<TurnResult>((ok, bad) => ((settle = ok), (fail = bad)));
-  claim.catch(() => {}); // joiners handle rejection themselves
-  inflight.set(key, claim);
-
-  try {
-    await upsertConversation(db, ctx.conversationId, ctx.conversationId.startsWith("test-") ? "test" : "voice", turn.caller);
-    const stored = await findTurn(db, ctx);
-    if (stored) {
-      settle({ spoken: stored.assistant_response, answerType: stored.answer_type });
-      inflight.delete(key);
-      log({ event: "turn_replayed", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, answer_type: stored.answer_type });
-      return streamText(res, turn.model, "replay", stored.assistant_response ?? FALLBACK_LINE);
-    }
-  } catch (err) {
-    fail(err);
-    inflight.delete(key);
-    throw err;
-  }
-
-  const sse = new SseStream(res, turn.model, "agent");
+  // The turn itself decides replay vs agent run (after its parallel DB work), so the SSE
+  // stream is opened lazily once the source is known.
+  let sse: SseStream | null = null;
   const handle = runTurn(
-    { db, ctx, userText: turn.userText, history: turn.history, tReceivedMs, tReceivedIso },
     {
-      speak: (text) => sse.content(text),
-      end: () => sse.finish(),
+      db,
+      ctx,
+      channel: ctx.conversationId.startsWith("test-") ? "test" : "voice",
+      caller: turn.caller,
+      userText: turn.userText,
+      history: turn.history,
+      tReceivedMs,
+      tReceivedIso,
+    },
+    {
+      begin: (source) => (sse = new SseStream(res, turn.model, source)),
+      speak: (text) => sse?.content(text),
+      end: () => sse?.finish(),
       onClose: (listener) => res.on("close", () => {
-        if (!sse.isEnded || !res.writableFinished) listener();
+        if (!sse || !sse.isEnded || !res.writableFinished) listener();
       }),
     },
   );
-  handle.decided.then(settle, fail);
-  // Keep the entry until the turn row is written, so a retry that arrives before then joins
-  // this run; once the row exists, retries replay it from the database.
+  inflight.set(key, handle.decided);
+  // Keep the entry until the turn row exists, so a retry that arrives before then joins this
+  // run; once the row exists, retries replay it from the database.
   void handle.persisted.then(() => inflight.delete(key));
   await handle.done.finally(() => inflight.delete(key));
 }
