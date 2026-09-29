@@ -354,14 +354,35 @@ Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5
 - **Totals:** `SUM(conversation_turns) + SUM(turn_attempts WHERE status <> 'completed')`. The replaced and aborted spend is counted, and nothing is counted twice.
 - **Supersession guard (write tools):**
   - The MCP server receives `ATTEMPT_ID` at spawn, like `CONVERSATION_ID`.
-  - Before any write tool performs its write, the shared write path checks in the database that its attempt is still `active`. If not, the tool returns `denied` and writes nothing.
-  - Write RPCs must also call `require_active_attempt()` inside their own transaction. Its `FOR SHARE` lock means a replacement can't interleave with the write.
+  - Every write tool's write runs in a Postgres function that calls `require_active_attempt()` and then writes, in **one** transaction (D29). If the attempt is no longer `active`, the tool returns `denied` and writes nothing.
+  - An earlier draft checked first and wrote in a separate call. It was replaced because it left a race window.
   - **Why:** Vapi fires speculative requests on partial transcripts, and abort isn't immediate (below). Without the guard, a replaced attempt could still create a wrong ticket or escalation from a half-heard sentence.
 - **Abort is not immediate.**
   - On turn 0 the SDK's result arrived 4.8s after our abort (model cost $0.000967). The SDK's `signal` aborts the CLI only after stdin EOF plus about a 2s grace period (documented on `spawnClaudeCodeProcess`).
   - So the backend now spawns the CLI itself and, on abort, **terminates the whole process tree**, including the MCP server.
 - **Considered and deferred: SSE keep-alive comments before the first sentence.** The evidence points to Vapi cancelling because the transcript changed, not because our connection was silent. Revisit if a cancellation occurs while the transcript is unchanged, which the extended debug log (role sequence, `numModelRequestInTurn`, transcript hash) will reveal.
 - **Local network note:** the phone-hotspot resolver (`172.20.10.1`) intermittently returns SERVFAIL for the Supabase project hostname (`EAI_AGAIN`), while Cloudflare DNS-over-HTTPS resolves it. This explains the earlier intermittent "fetch failed" errors. The mitigation is one retry on pre-connect errors (fix 6), and deploying removes the cause.
+
+### D29. The supersession check and the write happen in ONE database transaction (firm rule for Phase 2)
+
+- **Rule:** a separate "is the attempt active?" call followed by a separate write leaves a race window, because the attempt can be replaced between the two.
+  - So every **guarded write** goes through a Postgres function that first calls `require_active_attempt(p_attempt_id)`, which takes `FOR SHARE` on the attempt row, and then performs the write in the same transaction.
+  - A concurrent replacement (`begin_turn_attempt`'s `UPDATE … SET status = 'replaced'`) waits for that lock, so the write and the replacement are strictly ordered.
+- **In code:**
+  - Write tools use `withWriteToolLogging`, which does **no** pre-check. It passes `ctx.attemptId` to the tool.
+  - The tool calls its write RPC through `guardedRpc(db, fn, params, attemptId)`, which adds `p_attempt_id`.
+  - `P0001 ATTEMPT_NOT_ACTIVE: …` from the database becomes tool status `denied`, and nothing is written.
+  - The TypeScript `attemptIsActive()` pre-check was removed, so check-then-write can't be reintroduced. The SQL `attempt_is_active()` stays for diagnostics only; it is never a guard.
+- **Phase 2:**
+  - A new migration adds a `create_escalation_with_ticket` that takes `p_attempt_id` and calls `require_active_attempt` first.
+  - The **old signature is dropped**, or at least `EXECUTE` is revoked from `service_role`, so it can't be used to bypass the guard.
+  - Every other write tool (tickets and later ones) follows the same pattern.
+- **Not guarded:** log writes to `tool_calls` and `retrieval_logs`. They record what happened, including denied calls.
+- **Single-instance assumption, confirmed in code (`server.ts`):**
+  - Two **identical** requests arriving at the same moment are joined in-process **before** `begin_turn_attempt` is called.
+  - After parsing, the in-flight check and `inflight.set()` run synchronously, with no `await`. The second request finds the first's entry with the same hash and joins it, so only one attempt is ever registered.
+  - Without this, `begin_turn_attempt` step 3 would mark the first request's active attempt `replaced` even though its transcript is identical.
+  - **This holds only while one backend instance serves a call.** Across instances, identical concurrent retries could each register an attempt, the later replacing the earlier. Vapi calls must be routed to a single instance, or the in-flight map moved to shared state, before scaling out.
 
 ### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
 
@@ -383,6 +404,8 @@ Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5
   - User-verified after applying: RLS is true on all 11 tables. `create_escalation_with_ticket` EXECUTE is held only by `postgres` and `service_role`.
 - 002 applied to Supabase from commit b4646bf (b4646bf28eedbdd90e3b19df072e49eba36906fd) on 2026-09-29.
   - User-verified after applying: `search_kb` EXECUTE is held only by `postgres` and `service_role`.
+- 003 applied to Supabase from commit 485387c on 2026-09-29.
+  - User-verified after applying: EXECUTE on `begin_turn_attempt`, `finish_turn_attempt`, `attempt_is_active`, `require_active_attempt` and `recompute_conversation_totals` is held only by `postgres` and `service_role`.
 
 ## Task 1 findings, classified
 
