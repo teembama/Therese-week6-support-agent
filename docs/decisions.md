@@ -70,6 +70,27 @@ Startup check: read the tool list the SDK reports (the `system/init` message). I
 - The backend never streams `tool_calls` or `function_call` chunks. Any `payload.tools` field Vapi sends is ignored.
 - `metadataSendMode` stays at its default (`variable`), so `body.call.id` is present. `off` would drop the call ID.
 
+### D9. Logging context comes from the backend, never from the model
+
+- The `conversation_id` and `turn_index` that MCP tools use for logging come from the backend.
+- The backend passes them as environment variables to the stdio MCP server it spawns for each turn.
+- Any `conversation_id` or `turn_index` the model supplies in tool input is ignored.
+
+### D10. Migrations are append-only
+
+Once `001_schema.sql` is applied, all schema changes go in new numbered files (`002_…`, `003_…`). Never edit a migration that has been applied.
+
+### D11. Escalations are created atomically through one database function
+
+- The Supabase JS client can't run multi-statement transactions. So `create_escalation_with_ticket(...)`, a `SECURITY INVOKER` plpgsql function with `search_path = public`, inserts the ticket and the escalation in one transaction.
+- It is idempotent on either idempotency key. It returns `ticket_id`, `escalation_id` and `created`.
+- A failed escalation insert rolls back its ticket, so no orphan ticket is left.
+- `EXECUTE` is revoked from `public`, `anon` and `authenticated`, and granted only to `service_role`. The MCP server calls it via `rpc`.
+- **Key conflict is a hard error.** If the ticket key belongs to a ticket with no escalation, the function raises `P0001` with the message prefix `ESCALATION_KEY_CONFLICT:` and writes nothing.
+  - This case can only come from a bug, so the code is deliberately distinct from `unique_violation`.
+  - The MCP tool treats it as a hard error: it logs a `tool_calls` row with `status = 'error'` and never reports it as a duplicate or success.
+  - A genuine duplicate is not an error. It returns the existing IDs with `created = false`.
+
 ## Task 1 findings, classified
 
 | Class | Finding | Resolution |
