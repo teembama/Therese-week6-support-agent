@@ -384,6 +384,30 @@ Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5
   - Without this, `begin_turn_attempt` step 3 would mark the first request's active attempt `replaced` even though its transcript is identical.
   - **This holds only while one backend instance serves a call.** Across instances, identical concurrent retries could each register an attempt, the later replacing the earlier. Vapi calls must be routed to a single instance, or the in-flight map moved to shared state, before scaling out.
 
+### D30. Observed failure pattern: claims not directly supported by the evidence (same as the Week 5 instructor feedback)
+
+Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers passed the grounding gate: each cited a retrieved chunk. The gate checks citation, not support (D16's known limit). Both nonetheless contained claims the cited chunk doesn't support.
+
+- **Turn 1 (Kenya).** The cited chunk says: "Local payouts typically take 1 to 2 business days. International payouts usually take 2 to 5 business days, depending on destination and banking partners."
+  - *Unsupported specific:* "Kenya would fall within that range". The chunk names no country, and nothing says Kenya is a supported corridor or covered by that range.
+  - *Invented attribution:* "depends on your specific banking partners there". The chunk says RelayPay's "banking partners" in general, not the caller's, and not partners "there".
+  - *Implied certainty:* "the exact time" implies there is a knowable exact time.
+- **Turn 0 (fees).** The cited chunk says: "Fees vary based on transaction type, corridor, and payment method. RelayPay displays applicable fees before a transaction is confirmed."
+  - *Strengthened wording:* "the exact applicable fees" (the chunk says "applicable fees").
+  - *Unsupported inference:* "so you'll know the cost up front". This goes beyond the chunk and conflicts with another KB statement: exchange rates "are not locked until processing".
+- **Pattern:** a general policy was applied to a specific case, and the source wording was strengthened. This is the same failure the Week 5 instructor feedback named: claims not directly supported by evidence.
+- **Proposed** (pending approval):
+  - prompt rules against specifics, attributions and intensifiers absent from the chunk;
+  - a Task 6 eval check with a deterministic lexical pass plus an LLM claim-support judge that must quote a supporting span.
+
+**Also from this call:**
+
+- Turn 2 ("All right. Thank you.") was **blocked by the gate, not declined by the model**. The model wrote `[[type=answer; kb=none]] You're welcome! …`, and `type=answer` requires a cited chunk.
+  - **Proposed:** a `social` reply type in which the model only picks an intent and the backend speaks a fixed line.
+- The extended debug log confirmed:
+  - Vapi's first message is sent as an `assistant` message (roles `[system, assistant, user]`).
+  - `x-stainless-timeout` is 600000 and every request had retry-count 0, while the transcript grew between requests. So the cancellations are speculative-request replacements, not timeouts, which supports D28's keep-alive deferral.
+
 ### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
 
 - **Observed in Task 4 step 1 (D18):** the MCP server failed to start because of the inherited API key, and the agent lost its only approved tool. It still answered, fabricating "RelayPay charges a 2% fee on international payments", which is plausible and wrong.
