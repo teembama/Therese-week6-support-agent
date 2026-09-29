@@ -91,6 +91,11 @@ Once `001_schema.sql` is applied, all schema changes go in new numbered files (`
   - The MCP tool treats it as a hard error: it logs a `tool_calls` row with `status = 'error'` and never reports it as a duplicate or success.
   - A genuine duplicate is not an error. It returns the existing IDs with `created = false`.
 
+## Migration log
+
+- 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
+  - User-verified after applying: RLS is true on all 11 tables. `create_escalation_with_ticket` EXECUTE is held only by `postgres` and `service_role`.
+
 ## Task 1 findings, classified
 
 | Class | Finding | Resolution |
