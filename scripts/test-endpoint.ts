@@ -90,8 +90,21 @@ async function turnRowCount(db: Db, conversationId: string): Promise<number> {
   return count ?? 0;
 }
 
-const agentRuns = (s: Server, conversationId: string) =>
+const agentRunCount = (s: Server, conversationId: string) =>
   s.logs.filter((l) => l.includes('"event":"turn"') && l.includes(`"conversation_id":"${conversationId}"`)).length;
+
+/**
+ * Agent runs for a conversation, from the server's `turn` log lines. That line is written
+ * after the turn row and the conversation totals, so wait for at least one before counting,
+ * then settle briefly so a (wrong) second run would also have logged.
+ */
+async function agentRuns(s: Server, conversationId: string): Promise<number> {
+  for (let waited = 0; waited < 10_000 && agentRunCount(s, conversationId) === 0; waited += 100) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  await new Promise((r) => setTimeout(r, 1_000));
+  return agentRunCount(s, conversationId);
+}
 
 function sseWellFormed(r: Reply): boolean {
   const e = r.events;
@@ -172,10 +185,10 @@ async function main(): Promise<number> {
     await turnRow(db, seqId);
     const s2 = await post(A.port, seqBody);
     const seqRow = await turnRow(db, seqId);
-    console.log(`1st source=${s1.source} ${s1.ms}ms | 2nd source=${s2.source} ${s2.ms}ms | agent runs=${agentRuns(A, seqId)} | cost=${seqRow?.["cost_usd_estimate"]}`);
+    console.log(`1st source=${s1.source} ${s1.ms}ms | 2nd source=${s2.source} ${s2.ms}ms | agent runs=${await agentRuns(A, seqId)} | cost=${seqRow?.["cost_usd_estimate"]}`);
     check(s1.source === "agent" && s2.source === "replay", "second request replayed from the stored turn");
     check(s1.text === s2.text && s1.text.length > 0, "replay streams the same text");
-    check((await turnRowCount(db, seqId)) === 1 && agentRuns(A, seqId) === 1, "exactly one turn row and one agent run (one result, one cost)");
+    check((await turnRowCount(db, seqId)) === 1 && (await agentRuns(A, seqId)) === 1, "exactly one turn row and one agent run (one result, one cost)");
 
     console.log("\n== Same request twice, concurrently");
     const conId = `test-ep-${RUN}-concurrent`;
@@ -183,10 +196,10 @@ async function main(): Promise<number> {
     const [c1, c2] = await Promise.all([post(A.port, conBody), post(A.port, conBody)]);
     await turnRow(db, conId);
     await new Promise((r) => setTimeout(r, 500));
-    console.log(`sources: ${c1.source}, ${c2.source} | agent runs=${agentRuns(A, conId)}`);
+    console.log(`sources: ${c1.source}, ${c2.source} | agent runs=${await agentRuns(A, conId)}`);
     check([c1.source, c2.source].sort().join(",") === "agent,inflight", "one request ran the agent, the other joined it in flight");
     check(c1.text === c2.text && c1.text.length > 0, "both streamed the same text");
-    check((await turnRowCount(db, conId)) === 1 && agentRuns(A, conId) === 1, "exactly one turn row and one agent run");
+    check((await turnRowCount(db, conId)) === 1 && (await agentRuns(A, conId)) === 1, "exactly one turn row and one agent run");
 
     console.log("\n== Client disconnect aborts the agent");
     const dcId = `test-ep-${RUN}-disconnect`;
@@ -222,28 +235,33 @@ async function main(): Promise<number> {
     check(Math.abs(Number(conv?.["total_cost_usd"]) - sumCost) < 1e-6 && conv?.["channel"] === "test", "totals equal SUM over turns; channel=test for test- ids");
    }
 
-    console.log(`\n== Latency: ${latencyRuns} runs of the fees question`);
-    const firsts: number[] = [];
-    const totals: number[] = [];
-    const rows: Record<string, unknown>[] = [];
+    const variants: Array<{ name: string; server: Server }> = [{ name: "default", server: A }];
+    console.log(`\n== Latency: ${latencyRuns} runs of the fees question per variant (${variants.map((v) => v.name).join(", ")})`);
+    const results = new Map(variants.map((v) => [v.name, { firsts: [] as number[], totals: [] as number[], rows: [] as Record<string, unknown>[] }]));
     for (let i = 0; i < latencyRuns; i++) {
-      const id = `test-ep-${RUN}-latency-${i}`;
-      await post(A.port, body(id, ["What fees does RelayPay charge for international payments?"]));
-      const row = await turnRow(db, id);
-      if (row) {
-        rows.push(row);
-        firsts.push(Number(row["ms_first_token"]));
-        totals.push(Number(row["ms_total"]));
+      for (const v of variants) {
+        const id = `test-ep-${RUN}-latency-${v.name}-${i}`;
+        await post(v.server.port, body(id, ["What fees does RelayPay charge for international payments?"]));
+        const row = await turnRow(db, id);
+        const r = results.get(v.name)!;
+        if (row) {
+          r.rows.push(row);
+          r.firsts.push(Number(row["ms_first_token"]));
+          r.totals.push(Number(row["ms_total"]));
+        }
       }
     }
-    console.table(rows.map((r) => ({ answer_type: r["answer_type"], ms_retrieval: r["ms_retrieval"], ms_first_token: r["ms_first_token"], ms_total: r["ms_total"], sdk_duration_ms: r["sdk_duration_ms"], ms_tools: r["ms_tools"], sdk_num_turns: r["sdk_num_turns"], cost: r["cost_usd_estimate"] })));
-    console.log(`ms_first_token p50=${percentile(firsts, 50)} p95=${percentile(firsts, 95)} | ms_total p50=${percentile(totals, 50)} p95=${percentile(totals, 95)}`);
-    console.log("\nper-run timing marks (ms from request receipt, from the server's turn log):");
-    const markRows = A.logs
-      .filter((l) => l.includes('"event":"turn"') && l.includes(`test-ep-${RUN}-latency-`))
-      .map((l) => JSON.parse(l) as { conversation_id: string; marks: Record<string, number> })
-      .map((e) => ({ run: e.conversation_id.split("-").pop(), ...e.marks }));
-    console.table(markRows);
+    for (const v of variants) {
+      const r = results.get(v.name)!;
+      console.log(`\n-- variant ${v.name}`);
+      console.table(r.rows.map((x) => ({ answer_type: x["answer_type"], ms_retrieval: x["ms_retrieval"], ms_first_token: x["ms_first_token"], ms_total: x["ms_total"], sdk_duration_ms: x["sdk_duration_ms"], input_tokens: x["input_tokens"], output_tokens: x["output_tokens"], cost: x["cost_usd_estimate"] })));
+      console.log(`[${v.name}] ms_first_token p50=${percentile(r.firsts, 50)} p95=${percentile(r.firsts, 95)} | ms_total p50=${percentile(r.totals, 50)} p95=${percentile(r.totals, 95)} | errors=${r.rows.filter((x) => x["answer_type"] === "error").length}`);
+      console.log(`[${v.name}] per-run timing marks (ms from request receipt, from the server's turn log):`);
+      console.table(v.server.logs
+        .filter((l) => l.includes('"event":"turn"') && l.includes(`test-ep-${RUN}-latency-${v.name}-`))
+        .map((l) => JSON.parse(l) as { conversation_id: string; marks: Record<string, number> })
+        .map((e) => ({ run: e.conversation_id.split("-").pop(), ...e.marks })));
+    }
   } finally {
     for (const s of servers) s.proc.kill();
   }

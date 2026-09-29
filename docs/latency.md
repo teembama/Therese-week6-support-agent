@@ -106,3 +106,16 @@ The remaining CLI cost sits inside the 1.3s prompt → first-model-event phase. 
 
 - **The auxiliary model call:** every query includes a ~918-input / 15-output `claude-haiku-4-5-20251001` call (D18). If it runs before the main call, it is on the critical path. This is unverified; a CLI setting that disables non-essential model calls might remove it.
 - **Supabase latency:** the DB phase ranges from 0.16 to 2.1s, with stalls up to 14s. Worth checking whether this is connection reuse or regional distance.
+
+## Helper model call disabled (D25)
+
+A/B test with two local servers taking alternating requests, 10 runs each:
+
+| Variant | p50 `ms_first_token` | p95 | Errors | Cost per turn |
+| --- | --- | --- | --- | --- |
+| Default (session-title call on) | 2855 | 6651 | 0 | $0.0032 |
+| `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` | **1960** | 7352 | 0 | **$0.0016** |
+
+Confirmation run after adopting it (full suite, 10 fees runs): p50 **2171**, p95 7160. `ms_total` p50 2475, p95 7544.
+
+The p95 is still set by one or two network outliers per 10 runs, measured from the laptop in Lagos. The deployment comparison follows.

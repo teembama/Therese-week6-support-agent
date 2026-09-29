@@ -280,6 +280,26 @@ Environment: Agent SDK 0.3.284, Claude Code CLI 2.1.284, model `claude-haiku-4-5
 
 **Measured:** the first sentence is spoken 0.2–0.5s (median ~0.33s) before the model finishes the reply.
 
+### D24. Long-lived session deferred; deploy first, then decide
+
+- **Hypothesis to test:** most of the p95 comes from the measurement environment:
+  - a laptop in Lagos on home internet, far from Supabase's region and the Anthropic API;
+  - fresh TLS connections on every turn, because the CLI (and, with tools, the MCP server) is spawned per turn.
+- **Test:** deploy the backend near the Supabase region and measure the same 10-run fees benchmark server-side, before any redesign.
+- **If a long-lived session is still needed afterwards:** the MCP server's turn context (`conversation_id`, `turn_index`) will come from a **backend-owned database row** that the server reads on each tool call. That keeps stdio and adds no new network surface. It will **not** come from an HTTP MCP server, and never from the model.
+
+### D25. The CLI's background session-title model call is disabled
+
+- **The setting is documented:** `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`. Per https://code.claude.com/docs/en/env-vars, it "also skips the background small/fast-model request that generates a session title".
+  - The costs page (https://code.claude.com/docs/en/costs, "Background token usage") lists the other background calls: `--resume` summarization, `/usage` status checks and prompt suggestions. None of them apply to our headless, non-resumed, one-shot sessions.
+- **Verified:** with the variable set, the auxiliary `claude-haiku-4-5-20251001` entry (918 input, 15 output tokens, $0.000993) disappears from `modelUsage`, and the turn still succeeds.
+- **A/B:** two servers took alternating requests, 10 each.
+  - Default: p50 / p95 `ms_first_token` 2855 / 6651ms, $0.0032 per turn.
+  - Disabled: **1960** / 7352ms, **$0.0016** per turn.
+  - The p95 in both variants is one or two network outliers.
+- **Result:** it is adopted permanently in `cliEnv()`. The full endpoint suite passes with it: all checks, and 10 fees runs at p50 2171 / p95 7160ms with 0 errors.
+- **Not adopted:** `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, the documented switch for telemetry, auto-update, error reporting and feature-flag fetching, is a separate decision. It wasn't asked for, and it disables feature-flag-dependent features.
+
 ### D21. Observed evidence: a dependency failure led to fabrication; the guard and gate make it an explicit failure
 
 - **Observed in Task 4 step 1 (D18):** the MCP server failed to start because of the inherited API key, and the agent lost its only approved tool. It still answered, fabricating "RelayPay charges a 2% fee on international payments", which is plausible and wrong.

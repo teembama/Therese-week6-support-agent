@@ -36,6 +36,10 @@ export function cliEnv(source: NodeJS.ProcessEnv = process.env): Record<string, 
     ...osBasics(source),
     ANTHROPIC_API_KEY: required(source, "ANTHROPIC_API_KEY"),
     CLAUDE_AGENT_SDK_CLIENT_APP: "relaypay-support/0.1.0",
+    // Documented (code.claude.com/docs/en/env-vars) to skip the background small/fast-model
+    // request that generates a session title. A/B-measured: p50 first token 2855 -> 1960ms and
+    // cost per turn halved (docs/latency.md, D25).
+    CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
   };
 }
 
