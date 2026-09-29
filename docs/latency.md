@@ -60,3 +60,49 @@ Typical one-model-call turn (run 0):
 | Run pre-agent DB work in parallel, and start the CLI while retrieval runs (streaming-input prompt) | ~0.5–1.0 s | Moderate change |
 | Stream the final reply once the header is parsed, instead of buffering the whole message | ~0.9 s | Weakens the "no pre-tool text spoken" guarantee (D19) |
 | Gate: use the in-memory retrieved set, with the DB as a check | ~0.25 s | Deviates from "DB is source of truth" |
+
+# Latency levers (Task 4 follow-up, 2026-09-29)
+
+**Target:** backend p50 `ms_first_token` ≤ 2500ms, p95 ≤ 4000ms. Each lever was measured with 10 fees runs via `npm run test:endpoint`.
+
+| State | p50 `ms_first_token` | p95 `ms_first_token` | p50 / p95 `ms_total` | Notes |
+| --- | --- | --- | --- | --- |
+| Before (model-discretion search, MCP attached, buffered gate) | 6315 / 8003 (two runs) | 6951 / 8012 | same | 3 of 5 runs hit the 8s fallback |
+| Lever 1: backend-owned retrieval, no agent tools, no MCP | 5792 | 12033 | same | 2 fallbacks from Supabase stalls of 11–14s, which were outside the timers then |
+| Lever 3: streaming-input overlap, parallel DB, timers from receipt | **2453** | 8001 | same | 1 fallback: a 10.4s Supabase stall, now correctly cut at 8.0s |
+| Lever 4: streaming gate (sentences after a valid header) | 3085 | 6918 | 3464 / 7190 | 0 fallbacks; 3 of 10 runs had a 4.4–5.4s model wait |
+
+**The per-lever effect**, measured within runs, which is more reliable than comparing percentiles across runs:
+
+- **Lever 1:** `query()` → `init` fell from 2.36s to 0.54s. `query()` → speech fell from 4.28s (6s with a tool call) to 2.95s.
+- **Lever 3:** about 0.7s of CLI startup hidden behind the DB work. DB work became parallel, at 0.16–2.1s.
+- **Lever 4:** the first sentence is spoken 0.2–0.5s (median 0.33s) before the reply finishes.
+
+## Phase breakdown after all levers (lever-4 run, medians)
+
+| Phase | Median | Range | Owner |
+| --- | --- | --- | --- |
+| Parallel DB work: upsert, turn check, ranking (receipt → prompt yielded) | 715ms | 163–2084 | Supabase network |
+| Prompt yielded → first model event (CLI init tail + API time to first token) | 1320ms | 1069–**5444** | CLI + Anthropic API |
+| First text delta → first spoken sentence (header + first sentence) | 290ms | 6–480 | model output speed + gate |
+| First spoken → reply finished (streamed while speaking) | 325ms | 205–430 | model output speed |
+
+**Typical turn:** about 0.7 + 1.3 + 0.3 ≈ **2.3s** to first speech, which is within the p50 target.
+
+**The p95 tail isn't in our code.** It comes from two things:
+
+- time from prompt to first model event, 4.4–5.4s in 3 of 10 runs;
+- Supabase round trips, up to 2.1s here and 10–14s in earlier runs.
+
+## Still over target: what a long-lived session would change, and the D9 implication
+
+The remaining CLI cost sits inside the 1.3s prompt → first-model-event phase. A long-lived session per call would remove it from turns 2+, but it is **not built**, by decision. If it were:
+
+- Today the agent has no MCP tools, so there is no MCP server to keep alive.
+- Task 5 adds side-effect tools through MCP. A long-lived MCP server is spawned once per call, so it **cannot receive `TURN_INDEX` at spawn** (D9), and its logging context would be stale after turn 0.
+- It would need a backend-owned channel for the current turn. For example, the backend writes the active `(conversation_id, turn_index)` to a table the MCP server reads per call, or the MCP server is exposed over HTTP with a per-request header set by the backend. Either way, the model must still never supply it.
+
+## Candidates not yet tried (not built, pending decision)
+
+- **The auxiliary model call:** every query includes a ~918-input / 15-output `claude-haiku-4-5-20251001` call (D18). If it runs before the main call, it is on the critical path. This is unverified; a CLI setting that disables non-essential model calls might remove it.
+- **Supabase latency:** the DB phase ranges from 0.16 to 2.1s, with stalls up to 14s. Worth checking whether this is connection reuse or regional distance.
