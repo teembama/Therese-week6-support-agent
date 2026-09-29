@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "workspaces": [
     "backend",
@@ -13,10 +13,13 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:seed": "npm run seed -w @relaypay/db",
+    "db:verify": "npm run verify-seed -w @relaypay/scripts",
+    "db:test": "bash db/tests/schema-suite.sh && bash db/tests/race.sh"
   },
   "devDependencies": {
-    "@types/node": "^20.19.0",
+    "@types/node": "^22.20.4",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
