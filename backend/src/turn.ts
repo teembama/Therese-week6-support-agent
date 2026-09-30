@@ -23,6 +23,7 @@ import {
   AGENT_MAX_BUDGET_USD,
   AGENT_MAX_TURNS,
   AGENT_MCP_TOOLS,
+  MCP_TOOL_PREFIX,
   AGENT_MODEL,
   DB_CALL_TIMEOUT_MS,
   FALLBACK_LINE,
@@ -33,7 +34,7 @@ import {
   SAFE_DECLINE_LINE,
   TURN_HARD_CAP_MS,
 } from "./config.js";
-import { sentences, socialLine, StreamingGate, type GateEvidence, type SocialIntent } from "./gate.js";
+import { sentences, socialLine, StreamingGate, type GateEvidence, type ObservedTools, type SocialIntent } from "./gate.js";
 import { matchSocial } from "./social-fast-path.js";
 import { beginTurnAttempt, finishTurnAttempt, type AnswerType, type AttemptFinalStatus, type AttemptMetrics } from "./persistence.js";
 import { retryOnce, withTimeout } from "./bounded.js";
@@ -56,6 +57,13 @@ const MCP = pickMcpEntry();
 if (ATTACH_MCP && MCP.reason) console.error(`[relaypay] MCP server entry: ${MCP.path} (${MCP.reason})`);
 const MCP_ENTRY = MCP.path;
 export const MCP_ENTRY_KIND = MCP.kind;
+
+/** The parts of an SDK tool_result block the backend reads. */
+interface ToolResultLike {
+  tool_use_id: string;
+  content?: string | Array<{ type: string; text?: string } | null>;
+  is_error?: boolean;
+}
 
 export interface TurnInput {
   db: Db;
@@ -325,6 +333,16 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
 
     let retrievedIds: ReadonlySet<string> = new Set();
     let evidence: GateEvidence | undefined;
+    // Tool results as the BACKEND observed them in the SDK stream (D41): the gate grounds a
+    // tool-backed answer on these, never on the model's claim.
+    const toolNames = new Map<string, string>(); // tool_use_id -> short tool name
+    const toolStatuses = new Map<string, string[]>(); // short tool name -> statuses, in order
+    const toolCallsSeen: string[] = []; // "lookup_transaction:success", for notes and the turn log
+    const successRecords: string[] = [];
+    const observedTools: ObservedTools = {
+      succeeded: (name) => toolStatuses.get(name)?.includes("success") ?? false,
+      records: () => [...successRecords],
+    };
     let gate: StreamingGate | null = null;
     /** Logs sentences the runtime grounding filter dropped (D37); never spoken. */
     const logFiltered = () => {
@@ -335,6 +353,25 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         const excerpt = summarize(sentence.replace(/\d/g, "#"), 80);
         console.log(JSON.stringify({ event: "grounding_filtered", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: ctx.attemptId, checks, excerpt }));
       }
+    };
+    /** Records one tool result: its status from the tool's own JSON (withToolLogging's shape). */
+    const observeToolResult = (block: ToolResultLike) => {
+      const name = toolNames.get(block.tool_use_id) ?? "unknown";
+      const text = typeof block.content === "string"
+        ? block.content
+        : Array.isArray(block.content) ? block.content.map((c) => (c && c.type === "text" ? c.text ?? "" : "")).join("") : "";
+      let status = block.is_error ? "error" : "unknown";
+      let parsed: Record<string, unknown> | null = null;
+      try {
+        const value: unknown = JSON.parse(text);
+        if (value && typeof value === "object") parsed = value as Record<string, unknown>;
+      } catch {
+        // not JSON: status stays error/unknown, and nothing is added as evidence
+      }
+      if (typeof parsed?.["status"] === "string") status = parsed["status"];
+      toolStatuses.set(name, [...(toolStatuses.get(name) ?? []), status]);
+      toolCallsSeen.push(`${name}:${status}`);
+      if (status === "success" && parsed) successRecords.push(JSON.stringify(parsed));
     };
     let stopReason: string | null = null;
     const discarded: string[] = [];
@@ -424,6 +461,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
               const style = styleViolations(spokenParts.join(" "));
               if (style.length) notes.push(`style_violation: ${style.join(",")}`);
               if (outcome.unknownKbIds.length) notes.push(`cited ids not retrieved: ${outcome.unknownKbIds.join(",")}`);
+              if (outcome.tool) notes.push(`grounded on tool: ${outcome.tool}`);
               if (stopReason === "max_tokens") notes.push("final reply hit max_tokens");
               finish(outcome.type);
             } else {
@@ -435,7 +473,10 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
           }
         } else if (m.type === "assistant" && m.parent_tool_use_id === null) {
           for (const block of m.message.content) {
-            if (block.type === "tool_use") toolStarts.set(block.id, performance.now());
+            if (block.type === "tool_use") {
+              toolStarts.set(block.id, performance.now());
+              toolNames.set(block.id, block.name.replace(MCP_TOOL_PREFIX, ""));
+            }
           }
         } else if (m.type === "user" && Array.isArray(m.message.content)) {
           for (const block of m.message.content) {
@@ -443,6 +484,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
               const started = toolStarts.get(block.tool_use_id);
               if (started !== undefined) msTools += performance.now() - started;
               toolStarts.delete(block.tool_use_id);
+              observeToolResult(block as ToolResultLike);
             }
           }
         } else if (m.type === "result") {
@@ -515,7 +557,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         if (started.replacedAttemptIds.length) notes.push(`replaced attempt(s): ${started.replacedAttemptIds.join(",")}`);
         retrievedIds = new Set(chunks.map((c) => c.chunk_id));
         const callerWords = [...input.history.filter((h) => h.role === "caller").map((h) => h.text), input.userText].join("\n");
-        evidence = { chunks: new Map(chunks.map((c) => [c.chunk_id, `${c.heading}\n${c.content}`])), callerText: callerWords };
+        evidence = { chunks: new Map(chunks.map((c) => [c.chunk_id, `${c.heading}\n${c.content}`])), callerText: callerWords, tools: observedTools };
         if (chunks.length === 0) notes.push("pre-turn retrieval: insufficient_knowledge");
         retrievalLogged = logRetrievalResult(db, ctx, rq.query.slice(0, 1000), chunks);
         providePrompt(buildTurnPrompt(input.history, input.userText, chunks));
@@ -563,6 +605,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     }
     const finalResult = result as SDKResultMessage | null;
     if (finalResult && finalResult.subtype !== "success") notes.push(`result subtype ${finalResult.subtype}`);
+    if (toolCallsSeen.length) notes.push(`tools: ${toolCallsSeen.join(",")}`);
     if (discarded.length) {
       notes.push(`discarded ${discarded.length} non-final segment(s): ${summarize(discarded.join(" | "), 200)}`);
     }
@@ -630,6 +673,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       cost_usd_estimate: finalResult?.total_cost_usd ?? null,
       aborted: abort.signal.aborted,
       killed_pids: killedPids,
+      tools: toolCallsSeen.length ? toolCallsSeen : undefined,
       filter: filterStats && filterStats.sentences ? { sentences: filterStats.sentences, max_ms: Number(filterStats.maxMs.toFixed(3)) } : undefined,
       marks: { ...marks, released: msFirstToken },
     }));

@@ -20,7 +20,9 @@
 // answer sentence before it is spoken, and the backend drops flagged sentences. Places and
 // dropped hedges stay eval-only: they are lower precision and would silence good sentences.
 
-export type GroundingFlagKind = "strengthening_word" | "dropped_hedge" | "unsupported_specific" | "invented_attribution";
+export type GroundingFlagKind =
+  | "strengthening_word" | "dropped_hedge" | "unsupported_specific" | "invented_attribution"
+  | "outcome_promise" | "timeline_promise" | "unsupported_status";
 
 export interface GroundingFlag {
   kind: GroundingFlagKind;
@@ -74,39 +76,149 @@ function strengtheningIn(s: string, source: string): string[] {
   return STRENGTHENING.filter((w) => has(s, w) && !has(source, w) && !negated(s, w));
 }
 
-function attributionsIn(s: string, source: string, caller: string): string[] {
+function attributionsIn(s: string, source: string, caller: string, allowedNouns: ReadonlySet<string> = new Set()): string[] {
   if (has(source, "your")) return [];
   const out: string[] = [];
   for (const m of s.matchAll(/\byour\s+(?:own\s+|specific\s+|particular\s+)?([a-z]+)(?:\s+[a-z]+)?/g)) {
     const noun = m[1]!;
+    if (allowedNouns.has(noun)) continue;
     if (!has(caller, `my ${noun}`) && !has(caller, `our ${noun}`)) out.push(m[0]);
   }
   return out;
 }
 
+// ---- Outcome and timeline promises (D38, D41). Run on normalised text (number words -> digits).
+// escalation-rules.md: never promise specific outcomes or give timelines for disputes or reviews.
+// High precision on purpose: each pattern is a promise construction, not a lone word, so
+// "What can I help you with today?" or "timelines depend on external banking systems" pass.
+const OUTCOME_PROMISES: readonly RegExp[] = [
+  /\b(?:will|'ll|is going to|are going to|gonna)\s+(?:be\s+|get\s+)?(?:lifted|resolved|refunded|approved|reversed|released|unblocked|restored|reinstated|fixed|sorted|credited|cleared|unfrozen|reactivated)\b/,
+  /\bin most cases,?\s+(?:they|it|this|these|those|restrictions?|accounts?|reviews?|payments?|payouts?)(?:'re|'s|\s+are|\s+is|\s+will|\s+get|\s+gets)\b/,
+  /\b(?:usually|typically|normally|generally)\s+(?:gets?\s+|are\s+|is\s+)?(?:resolved|lifted|approved|refunded|cleared|released)\b/,
+  /\b(?:i|we)\s+promise\b/,
+  /\bguarantee(?:d|s)?\b/,
+];
+const TIMELINE_PROMISES: readonly RegExp[] = [
+  /\bright away\b/,
+  /\bstraight away\b/,
+  /\bimmediately\b/,
+  /\bas soon as possible\b|\basap\b/,
+  /\bwithin\s+(?:the\s+next\s+)?(?:\d+|a|an|a few|few|a couple of)\s*(?:-\s*\d+\s*|to\s+\d+\s+)?(?:business\s+|working\s+)?(?:minutes?|hours?|days?|weeks?)\b/,
+  /\bby\s+(?:tomorrow|tonight|today|end of (?:the\s+)?(?:day|week)|close of business|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/,
+  /\b(?:will|'ll|should|shall|going to)\s+(?:\S+\s+){0,3}(?:later\s+)?(?:today|tonight|tomorrow)\b/,
+  /\blater today\b/,
+  /\b(?:will|'ll)\s+(?:\S+\s+){0,4}(?:soon|shortly)\b/,
+  /\bin (?:the next )?\d+\s*(?:hours?|minutes?)\b/,
+];
+
 /**
- * Runtime sentence filter (D37). Built once per turn from the cited chunks ("heading\ncontent")
- * and everything the caller said; check() returns the blocking flags for one sentence (empty =
- * safe to speak). Unlike the eval checks, numbers are blocked even inside a disclaimer unless
- * the chunks or the caller said them: "I can't confirm it will arrive in 24 hours" still puts a
- * number in the caller's ear that no evidence supports.
+ * True if the phrase sits in the same clause after a negated commitment verb: "can't guarantee
+ * that it arrives within 7 days". A comma or other clause break ends the scope, so "I can't
+ * confirm it, but it will be lifted right away" is still a promise.
+ */
+function deniedInClause(s: string, term: string): boolean {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b(?:can'?t|cannot|can not|won'?t|unable to|not able to|couldn'?t)\\s+(?:\\w+\\s+){0,2}(?:guarantee|promise|confirm|commit to|say)\\b[^,.;!?]*${escaped}`).test(s);
+}
+
+/** Promise phrases in a normalised sentence that the evidence does not itself contain. */
+function promisesIn(s: string, source: string): Array<{ kind: "outcome_promise" | "timeline_promise"; term: string }> {
+  const out: Array<{ kind: "outcome_promise" | "timeline_promise"; term: string }> = [];
+  const scan = (kind: "outcome_promise" | "timeline_promise", patterns: readonly RegExp[]) => {
+    for (const re of patterns) {
+      const m = re.exec(s);
+      if (!m) continue;
+      const term = m[0].trim();
+      if (has(source, term)) continue; // the evidence itself says it
+      if ((term.startsWith("guarantee") || term === "immediately") && negated(s, term)) continue; // "can't guarantee"
+      if (deniedInClause(s, term)) continue; // "can't guarantee it arrives within 7 days" denies, not promises
+      out.push({ kind, term });
+    }
+  };
+  scan("outcome_promise", OUTCOME_PROMISES);
+  scan("timeline_promise", TIMELINE_PROMISES);
+  return out;
+}
+
+// ---- Record statuses and dates (only when a tool result is part of the evidence).
+const STATUS_TERMS = [
+  "completed", "delayed", "failed", "scheduled", "restricted", "approved", "suspended", "cancelled", "canceled",
+  "refunded", "reversed", "processing", "on hold", "under review", "pending", "rejected", "blocked", "frozen",
+  "successful", "succeeded", "arrived", "delivered", "paid",
+];
+const MONTHS: Record<string, string> = {
+  january: "01", february: "02", march: "03", april: "04", may: "05", june: "06",
+  july: "07", august: "08", september: "09", october: "10", november: "11", december: "12",
+};
+
+function statusesIn(s: string, source: string, caller: string): string[] {
+  return STATUS_TERMS.filter((t) => {
+    if (!has(s, t) || negated(s, t)) return false;
+    if (t === "under review") return !has(source, "review") && !has(caller, "review");
+    return !has(source, t) && !has(caller, t);
+  });
+}
+
+/** Month names in the sentence that no date in the evidence has ("August" needs a -08- date). */
+function monthsIn(s: string, source: string, caller: string): string[] {
+  // "may" is also a verb; only a "may <day>" date form counts.
+  return Object.entries(MONTHS)
+    .filter(([name]) => (name === "may" ? /\bmay\s+\d{1,2}(?:st|nd|rd|th)?\b/.test(s) : has(s, name)))
+    .filter(([name, mm]) => !has(source, name) && !has(caller, name) && !new RegExp(`\\d{4}-${mm}-\\d{2}`).test(source))
+    .map(([name]) => name);
+}
+
+export type FilterMode = "full" | "promises";
+
+export interface SentenceFilterOptions {
+  /** "full": every blocking check (answer, escalate). "promises": outcome/timeline promises only (clarify, decline). */
+  mode?: FilterMode;
+  /** Successful tool results observed in this attempt (JSON text); evidence like chunks (D41). */
+  records?: readonly string[];
+  /** Nouns "your <noun>" may use without evidence (requests such as "your name", or the looked-up record). */
+  allowedYourNouns?: readonly string[];
+}
+
+/**
+ * Runtime sentence filter (D37, D41). Built once per message from the cited chunks
+ * ("heading\ncontent"), the successful tool results, and everything the caller said; check()
+ * returns the blocking flags for one sentence (empty = safe to speak). Unlike the eval checks,
+ * numbers are blocked even inside a disclaimer unless the evidence or the caller said them:
+ * "I can't confirm it will arrive in 24 hours" still puts a number in the caller's ear that no
+ * evidence supports. Promise phrases are exempt only if the evidence (not the caller) contains
+ * the exact phrase.
  */
 export class SentenceFilter {
   private readonly source: string;
   private readonly caller: string;
+  private readonly mode: FilterMode;
+  private readonly hasRecords: boolean;
+  private readonly allowedNouns: ReadonlySet<string>;
 
-  constructor(citedChunks: string[], callerText = "") {
-    this.source = normalise(citedChunks.join("\n"));
+  constructor(citedChunks: string[], callerText = "", options: SentenceFilterOptions = {}) {
+    const records = options.records ?? [];
+    this.source = normalise([...citedChunks, ...records].join("\n"));
     this.caller = normalise(callerText);
+    this.mode = options.mode ?? "full";
+    this.hasRecords = records.length > 0;
+    this.allowedNouns = new Set(options.allowedYourNouns ?? []);
   }
 
   check(sentence: string): GroundingFlag[] {
     const s = normalise(sentence);
     const flags: GroundingFlag[] = [];
-    for (const w of strengtheningIn(s, this.source)) flags.push({ kind: "strengthening_word", term: w, sentence });
-    for (const a of attributionsIn(s, this.source, this.caller)) flags.push({ kind: "invented_attribution", term: a, sentence });
+    for (const p of promisesIn(s, this.source)) flags.push({ kind: p.kind, term: p.term, sentence });
+    if (this.mode === "promises") return flags;
+    for (const w of strengtheningIn(s, this.source)) {
+      if (!flags.some((f) => f.term.includes(w))) flags.push({ kind: "strengthening_word", term: w, sentence });
+    }
+    for (const a of attributionsIn(s, this.source, this.caller, this.allowedNouns)) flags.push({ kind: "invented_attribution", term: a, sentence });
     for (const n of numbersIn(s)) {
       if (!has(this.source, n) && !has(this.caller, n)) flags.push({ kind: "unsupported_specific", term: n, sentence });
+    }
+    if (this.hasRecords) {
+      for (const t of statusesIn(s, this.source, this.caller)) flags.push({ kind: "unsupported_status", term: t, sentence });
+      for (const m of monthsIn(s, this.source, this.caller)) flags.push({ kind: "unsupported_specific", term: m, sentence });
     }
     return flags;
   }
