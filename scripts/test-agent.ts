@@ -7,7 +7,7 @@
 //
 // Usage: npm run test:agent            (needs migration 005, npm run build, .env)
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,10 @@ const ONLY = argValue("--only")?.split(",").map((s) => s.trim().toUpperCase());
 // Model comparison (docs/model-choice.md): --model runs the backend with AGENT_MODEL=<model>,
 // --repeat N runs each selected test N times (fresh conversations).
 const MODEL = argValue("--model");
+// --base-url https://<domain>: test the DEPLOYED backend instead of a local one (no local server;
+// the real VAPI_LLM_SECRET from .env; timing marks from `railway logs`). The model is then the
+// Railway service's AGENT_MODEL (--model can't change it).
+const BASE_URL = argValue("--base-url")?.replace(/\/$/, "");
 const REPEAT = Number(argValue("--repeat") ?? 1);
 let nameSuffix = "";
 const RUN = new Date().toISOString().replace(/[:.]/g, "-");
@@ -68,7 +72,7 @@ async function post(secret: string, callId: string, callerTurns: string[], agent
     messages.push({ role: "user", content: c });
     if (agentTurns[i] !== undefined) messages.push({ role: "assistant", content: agentTurns[i] });
   });
-  const res = await fetch(`http://localhost:${PORT}/v/${secret}/chat/completions`, {
+  const res = await fetch(`${BASE_URL ?? `http://localhost:${PORT}`}/v/${secret}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: "relaypay-agent", stream: true, call: { id: callId }, messages }),
@@ -88,8 +92,23 @@ async function waitTurnRow(db: Db, id: string, idx: number): Promise<Row | null>
   return null;
 }
 
+/** Remote mode: pull the deployed turn-log line for this turn into serverLogs (Railway ingests with a delay). */
+async function pullRemoteTurnLog(id: string, idx: number): Promise<void> {
+  for (let i = 0; i < 9; i++) {
+    const r = spawnSync("railway", ["logs", "--service", "relaypay-backend", "--deployment", "--lines", "400", "--json"], { encoding: "utf8", shell: true, timeout: 90_000, maxBuffer: 32 * 1024 * 1024 });
+    const rows = (r.stdout ?? "").split("\n").filter(Boolean);
+    const hit = rows.some((l) => l.includes('"event":"turn"') && l.includes(`"conversation_id":"${id}"`) && l.includes(`"turn_index":${idx}`));
+    if (hit) {
+      serverLogs = rows;
+      return;
+    }
+    await new Promise((res) => setTimeout(res, 10_000));
+  }
+}
+
 async function turnReport(db: Db, id: string, idx: number, caller: string, spoken: string): Promise<TurnReport> {
   const row = await waitTurnRow(db, id, idx);
+  if (BASE_URL) await pullRemoteTurnLog(id, idx);
   const { data: calls } = await db.from("tool_calls").select("tool_name, status, input_summary, result_summary").eq("conversation_id", id).eq("turn_index", idx).order("id");
   const note = String(row?.["confidence_note"] ?? "");
   const logLine = serverLogs.map((l) => { try { return JSON.parse(l) as Row; } catch { return null; } })
@@ -192,8 +211,10 @@ const allSpoken = (o: Outcome) => o.turns.map((t) => t.spoken).join(" ");
 async function main(): Promise<number> {
   process.loadEnvFile(resolve(REPO, ".env"));
   const db = createServiceClient();
-  const secret = `test-${randomBytes(24).toString("hex")}`;
-  const server = await startServer(secret);
+  if (BASE_URL && MODEL) throw new Error("--model can't be combined with --base-url: set AGENT_MODEL on the Railway service instead");
+  const secret = BASE_URL ? process.env["VAPI_LLM_SECRET"]! : `test-${randomBytes(24).toString("hex")}`;
+  const server = BASE_URL ? null : await startServer(secret);
+  if (BASE_URL) console.log(`deployed: ${BASE_URL} (token path redacted)`);
   const done: Outcome[] = [];
   const track = (o: Outcome) => {
     done.push(o);
@@ -324,7 +345,7 @@ async function main(): Promise<number> {
       }
     }
   } finally {
-    server.kill();
+    server?.kill();
   }
 
   // Latency for tool-backed turns (a lookup ran).

@@ -11,6 +11,7 @@
     "test-mcp": "tsx test-mcp.ts",
     "test-tools": "tsx test-tools.ts",
     "test-agent": "tsx test-agent.ts",
+    "test-deployed": "tsx test-deployed.ts",
     "test-endpoint": "tsx test-endpoint.ts",
     "eval-grounding": "tsx eval-grounding.ts"
   },

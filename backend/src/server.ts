@@ -30,7 +30,7 @@ import { matchRoute, MIN_TOKEN_LENGTH, redactPath, sha256 } from "./routing.js";
 import { parseVapiBody } from "./vapi.js";
 import { classifyEvent, recordEndOfCall } from "./vapi-events.js";
 import { retryOnce } from "./bounded.js";
-import { handlePublic, isPublicRoute } from "./web.js";
+import { handleCspReport, handlePublic, isPublicRoute } from "./web.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -284,6 +284,10 @@ function main(): void {
     }
     // Public routes (D52): the voice page, its assets, /config (public Vapi IDs) and /health.
     if (isPublicRoute(req.method, pathname)) {
+      if (req.method === "POST") {
+        handleCspReport(req, res, log).catch(() => { if (!res.headersSent) { res.writeHead(204); res.end(); } });
+        return;
+      }
       req.resume();
       try {
         return handlePublic(req, res, pathname);

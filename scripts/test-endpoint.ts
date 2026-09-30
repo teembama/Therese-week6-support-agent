@@ -205,6 +205,12 @@ async function main(): Promise<number> {
     const health = await get("/health");
     check(health.status === 200 && health.text === '{"status":"ok"}', "GET /health -> {\"status\":\"ok\"} and nothing else");
     check((await get("/", "HEAD")).status === 200 && (await get("/nope")).status === 404 && (await get("/config", "POST")).status === 404, "HEAD / -> 200; unknown GET -> 404; POST /config -> 404");
+    check(csp.includes("report-uri /csp-report"), "CSP reports violations to /csp-report");
+    const cspPost = await fetch(`http://localhost:${A.port}/csp-report`, { method: "POST", headers: { "Content-Type": "application/csp-report" }, body: JSON.stringify({ "csp-report": { "effective-directive": "script-src-elem", "blocked-uri": "https://c.daily.co/static/call-machine-object-bundle.js?token=SECRET-MARKER", "source-file": "https://esm.sh/x.mjs" } }) });
+    STATUSES.push({ status: cspPost.status, label: "POST /csp-report" });
+    await new Promise((r) => setTimeout(r, 200));
+    const cspLog = A.logs.find((l) => l.includes('"event":"csp_violation"')) ?? "";
+    check(cspPost.status === 204 && cspLog.includes('"directive":"script-src-elem"') && cspLog.includes('"blocked":"c.daily.co"') && !cspLog.includes("SECRET-MARKER"), "POST /csp-report -> 204; logged directive and blocked host only (no path or query)");
 
     console.log("\n== Fees question");
     const feesId = `test-ep-${RUN}-fees`;

@@ -29,6 +29,9 @@ export const CONTENT_SECURITY_POLICY = [
   "frame-ancestors 'none'",
   "base-uri 'none'",
   "form-action 'none'",
+  // Violations are POSTed back here and logged (directive + blocked host only), so a blocked
+  // Daily bundle on a live call shows up in the server logs, not just in the caller's console.
+  "report-uri /csp-report",
 ].join("; ");
 
 const SECURITY_HEADERS = {
@@ -49,7 +52,38 @@ function load(file: string): Buffer {
 }
 
 export function isPublicRoute(method: string | undefined, pathname: string): boolean {
+  if (method === "POST" && pathname === "/csp-report") return true;
   return (method === "GET" || method === "HEAD") && (pathname in FILES || pathname === "/config" || pathname === "/health");
+}
+
+/** Just the host of a URL-ish CSP field ("https://c.daily.co/x.js" -> "c.daily.co"; keywords pass through). */
+function hostOnly(value: unknown): string {
+  const v = typeof value === "string" ? value.slice(0, 300) : "";
+  try {
+    return new URL(v).host || v.slice(0, 40);
+  } catch {
+    return v.slice(0, 40); // "inline", "eval", "blob", ...
+  }
+}
+
+/** POST /csp-report: logs directive and blocked host only (never full URLs, which could carry data); always 204. */
+export async function handleCspReport(req: IncomingMessage, res: ServerResponse, log: (e: Record<string, unknown>) => void): Promise<void> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > 20_000) break;
+    chunks.push(c as Buffer);
+  }
+  try {
+    const json = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+    const r = (json["csp-report"] ?? json) as Record<string, unknown>;
+    log({ event: "csp_violation", directive: String(r["effective-directive"] ?? r["violated-directive"] ?? "").slice(0, 60), blocked: hostOnly(r["blocked-uri"]), source: hostOnly(r["source-file"]) });
+  } catch {
+    log({ event: "csp_violation", directive: "(unparsable report)" });
+  }
+  res.writeHead(204);
+  res.end();
 }
 
 export function handlePublic(req: IncomingMessage, res: ServerResponse, pathname: string, env: NodeJS.ProcessEnv = process.env): void {
