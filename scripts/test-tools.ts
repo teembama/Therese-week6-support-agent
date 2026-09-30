@@ -128,11 +128,22 @@ async function main(): Promise<number> {
     check(ownPayout["status"] === "success" && ownPayout["payout_id"] === "PAY-7001", "own PAY-7001 -> success");
 
     console.log("\n== Support ticket");
-    const t1 = await call("create_support_ticket", { category: "payout", summary: "Caller asks why contractor payout PAY-7002 is on hold", payout_id: "PAY-7002", customer_id: "CUS-1003", priority: "low" }, "success");
+    // F3: a verified caller can't file a ticket on another customer's record, and the denial is
+    // identical to a reference that doesn't exist (no existence, status or priority leak).
+    const ticketsBefore = await count("support_tickets");
+    const foreignTxn = await call("create_support_ticket", { category: "payment", summary: "Caller asks about transaction TXN-9003", transaction_id: "TXN-9003" }, "denied");
+    check(foreignTxn["status"] === "denied" && foreignTxn["reason"] === "not_available" && foreignTxn["priority"] === undefined && noRecordFields(foreignTxn), "verified CUS-1001 + CUS-1003's TXN-9003 -> denied not_available, no priority");
+    const foreignPayout = await call("create_support_ticket", { category: "payout", summary: "Caller asks why payout PAY-7002 is on hold", payout_id: "PAY-7002" }, "denied");
+    check(foreignPayout["status"] === "denied" && foreignPayout["reason"] === "not_available", "verified CUS-1001 + CUS-1003's PAY-7002 -> denied not_available");
+    const missingTxn = await call("create_support_ticket", { category: "payment", summary: "Caller asks about transaction TXN-0000", transaction_id: "TXN-0000" }, "denied");
+    check(JSON.stringify(missingTxn) === JSON.stringify(foreignTxn), "verified: unknown TXN-0000 gets the identical denial (existence not confirmed)");
+    check((await count("support_tickets")) === ticketsBefore, "denied ticket calls wrote nothing");
+
+    const t1 = await call("create_support_ticket", { category: "payout", summary: "Caller asks when contractor payout PAY-7001 will land", payout_id: "PAY-7001", customer_id: "CUS-1003", priority: "high" }, "success");
     const { data: t1Row } = await db.from("support_tickets").select("customer_id, priority, payout_id, status").eq("ticket_id", String(t1["ticket_id"])).single();
-    check(t1["status"] === "success" && t1["ticket_status"] === "open" && t1["duplicate"] === false && t1["priority"] === "high", "ticket created; priority computed high (payout review required)");
+    check(t1["status"] === "success" && t1["ticket_status"] === "open" && t1["duplicate"] === false && t1["priority"] === "normal", "own PAY-7001 -> ticket created; model-supplied priority ignored (computed normal)");
     check((t1Row as Structured | null)?.["customer_id"] === "CUS-1001", "model-supplied customer_id CUS-1003 ignored; ticket customer = verified CUS-1001", JSON.stringify(t1Row));
-    const t1again = await call("create_support_ticket", { category: "payout", summary: "Same issue, asked again", payout_id: "PAY-7002" }, "success");
+    const t1again = await call("create_support_ticket", { category: "payout", summary: "Same issue, asked again", payout_id: "PAY-7001" }, "success");
     check(t1again["ticket_id"] === t1["ticket_id"] && t1again["duplicate"] === true, "duplicate returns the same ticket");
     const t2 = await call("create_support_ticket", { category: "payment", summary: "Caller asks about payout TXN-9001 arrival", transaction_id: "TXN-9001" }, "success");
     check(t2["priority"] === "normal" && t2["ticket_id"] !== t1["ticket_id"], "processing transaction -> separate ticket, priority normal");
@@ -168,7 +179,7 @@ async function main(): Promise<number> {
     // Already-used keys: they are never write-capped (decision 2), so these calls reach the
     // database guard and prove it, even for a duplicate.
     const deniedCalls: Array<[string, Structured]> = [
-      ["create_support_ticket", { category: "payout", summary: "Written after the attempt was replaced", payout_id: "PAY-7002" }],
+      ["create_support_ticket", { category: "payout", summary: "Written after the attempt was replaced", payout_id: "PAY-7001" }],
       ["create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Written after replacement" }],
       ["log_conversation_event", { event_type: "other", summary: "Written after replacement" }],
       ["lookup_customer", { contact_name: "Amara", company_name: "Lagos Ledger" }],
@@ -225,8 +236,11 @@ async function main(): Promise<number> {
   };
   try {
     const a = await capCall("create_support_ticket", { category: "other", summary: "Write cap test: first ticket" });
-    const b = await capCall("create_support_ticket", { category: "payment", summary: "Write cap test: second ticket", transaction_id: "TXN-9001" });
+    // Unverified conversation: the current behaviour (D44 applies only once verified), including
+    // the computed priority.
+    const b = await capCall("create_support_ticket", { category: "payment", summary: "Write cap test: second ticket", transaction_id: "TXN-9003" });
     check(a["status"] === "success" && b["status"] === "success" && a["ticket_id"] !== b["ticket_id"], "tickets 1 and 2 created");
+    check(b["priority"] === "high", "unverified + TXN-9003 (review required) -> ticket created, priority computed high (unchanged behaviour)");
     const c = await capCall("create_support_ticket", { category: "payout", summary: "Write cap test: third ticket", payout_id: "PAY-7003" });
     check(c["status"] === "denied" && c["reason"] === "conversation_write_limit", "third ticket -> denied, conversation_write_limit");
     const aAgain = await capCall("create_support_ticket", { category: "other", summary: "Write cap test: first ticket, asked again" });

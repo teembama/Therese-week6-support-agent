@@ -1,7 +1,7 @@
 import { guardedRpc, normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withWriteToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, logEvent, parseArgs, serialised, verifiedCustomerId, writeLimitOutcome, writeLimitReached } from "./common.js";
+import { invalid, logEvent, notAvailable, parseArgs, serialised, verifiedCustomerId, writeLimitOutcome, writeLimitReached } from "./common.js";
 
 export const name = "create_support_ticket";
 
@@ -32,10 +32,11 @@ export function ticketIdempotencyKey(conversationId: string, category: string, t
   return `ticket:${conversationId}:${category}:${transactionId ?? payoutId ?? "none"}`;
 }
 
-async function exists(db: Parameters<typeof verifiedCustomerId>[0], table: "transactions" | "payouts", column: string, id: string): Promise<boolean> {
-  const { data, error } = await db.from(table).select(column).eq(column, id).maybeSingle();
+/** The record's owner, or undefined if there is no such record. */
+async function ownerOf(db: Parameters<typeof verifiedCustomerId>[0], table: "transactions" | "payouts", column: string, id: string): Promise<string | undefined> {
+  const { data, error } = await db.from(table).select(`${column}, customer_id`).eq(column, id).maybeSingle();
   if (error) throw new Error(`${table} read failed (${error.code}): ${error.message}`);
-  return data !== null;
+  return (data as { customer_id: string } | null)?.customer_id;
 }
 
 export const handler = withWriteToolLogging(name, "Create (or return the existing) support ticket", (args, { db, ctx }) => serialised(async (): Promise<ToolOutcome> => {
@@ -46,18 +47,26 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
   const payoutId = input.payout_id ? normaliseReference(input.payout_id, "PAY") : null;
   if (input.transaction_id && !transactionId) return invalid("transaction_id must be TXN- followed by four digits.");
   if (input.payout_id && !payoutId) return invalid("payout_id must be PAY- followed by four digits.");
-  if (transactionId && !(await exists(db, "transactions", "transaction_id", transactionId))) {
-    return { status: "not_found", result: { found: false, message: `No transaction ${transactionId}; nothing was created.` }, resultSummary: `not_found ${transactionId}` };
-  }
-  if (payoutId && !(await exists(db, "payouts", "payout_id", payoutId))) {
-    return { status: "not_found", result: { found: false, message: `No payout ${payoutId}; nothing was created.` }, resultSummary: `not_found ${payoutId}` };
+  // D44 ownership, as in the lookups (F3): once the conversation is verified, a reference that
+  // belongs to another customer gets exactly the same denial as one that doesn't exist, before
+  // anything is written or any priority is computed, so the result confirms nothing.
+  const verified = await verifiedCustomerId(db, ctx.conversationId);
+  for (const [ref, table, column] of [[transactionId, "transactions", "transaction_id"], [payoutId, "payouts", "payout_id"]] as const) {
+    if (!ref) continue;
+    const owner = await ownerOf(db, table, column, ref);
+    if (verified && owner !== verified) {
+      return notAvailable(ref, owner ? `owned by another customer; conversation verified as ${verified}; no ticket` : "no such record; conversation verified; no ticket");
+    }
+    if (owner === undefined) {
+      return { status: "not_found", result: { found: false, message: `No ${table === "transactions" ? "transaction" : "payout"} ${ref}; nothing was created.` }, resultSummary: `not_found ${ref}` };
+    }
   }
 
   const key = ticketIdempotencyKey(ctx.conversationId, input.category, transactionId, payoutId);
   const cap = await writeLimitReached(db, ctx.conversationId, "ticket", key);
   if (cap.reached) return writeLimitOutcome("ticket", cap.existing);
 
-  const customerId = await verifiedCustomerId(db, ctx.conversationId);
+  const customerId = verified;
   const rows = await guardedRpc<TicketRow[]>(db, "create_support_ticket_guarded", {
     p_conversation_id: ctx.conversationId,
     p_customer_id: customerId,

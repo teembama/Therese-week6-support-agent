@@ -1013,6 +1013,19 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `gate.test.ts`: the declined_offer header speaks its line; the guard turns a model goodbye without context into the declined_offer line, and keeps it in context.
 - **End-call phrase (D36) still unverified live:** this call ended `customer-ended-call`, about 10 s after the goodbye line (turn received 22:01:25.7, spoken by about 22:01:27; ended 22:01:37). No call has ever ended with `assistant-said-end-call-phrase`. Either the phrase is not set on the assistant, or Vapi does not match it on Custom LLM output. Check the assistant's End Call Phrases in the dashboard.
 
+### D57. Ticket creation applies the D44 ownership rule (audit F3, Batch 3A item 1, 2026-10-01)
+
+- **Gap:** `create_support_ticket` only checked that a TXN or PAY reference existed. A verified caller could file a ticket on another customer's record. `not_found` vs `success` confirmed that the record existed, and the computed `priority: high` revealed that it was failed or under review.
+- **Rule now:** the same rule as the lookups. Once the conversation is verified, a reference owned by another customer gets **exactly the same** `denied` / `reason: not_available` result as one that doesn't exist (`notAvailable()`). This happens before the write cap, the guarded RPC and the priority computation, so nothing is written and no priority is computed.
+  - Unverified conversations keep the current behaviour: `not_found` for an unknown reference, otherwise the ticket is created.
+- **Tests** (`test:tools`, 61 checks, all pass):
+  - verified CUS-1001 + TXN-9003 → denied not_available, no priority;
+  - verified + PAY-7002 → denied;
+  - verified + unknown TXN-0000 → the identical denial;
+  - denied calls wrote nothing;
+  - unverified + TXN-9003 → created, priority high.
+  - The old check that filed a verified ticket on CUS-1003's PAY-7002 asserted the leak itself. It now uses CUS-1001's own PAY-7001.
+
 
 ## Migration log
 
