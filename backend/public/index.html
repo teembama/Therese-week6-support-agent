@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RelayPay Voice Support</title>
+  <meta name="description" content="Talk to RelayPay's voice support agent in your browser.">
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <main class="card" aria-labelledby="title">
+    <header class="brand">
+      <span class="logo" aria-hidden="true">R</span>
+      <div>
+        <h1 id="title">RelayPay voice support</h1>
+        <p class="lede">Ask about fees, payouts or a transaction, out loud.</p>
+      </div>
+    </header>
+
+    <section class="status" aria-label="Call status">
+      <span id="state-icon" class="state-icon" data-state="loading" aria-hidden="true"></span>
+      <div>
+        <p id="state-label" class="state-label">Loading…</p>
+        <p id="status" class="state-detail" role="status" aria-live="polite" aria-atomic="true">Getting the voice agent ready.</p>
+        <p id="timer" class="timer" aria-hidden="true" hidden>0:00</p>
+      </div>
+    </section>
+
+    <div id="error" class="error" role="alert" hidden>
+      <p id="error-title" class="error-title"></p>
+      <ul id="error-steps" class="error-steps"></ul>
+    </div>
+
+    <div class="actions">
+      <button id="start" type="button" class="button primary" disabled>Start call</button>
+      <button id="end" type="button" class="button secondary" disabled>End call</button>
+    </div>
+
+    <section class="tips" aria-labelledby="tips-title">
+      <h2 id="tips-title">Try asking…</h2>
+      <ul>
+        <li>“What fees does RelayPay charge for international payments?”</li>
+        <li>“Can you check transaction T X N nine zero zero one?”</li>
+        <li>“How long do international payouts take?”</li>
+      </ul>
+    </section>
+
+    <p class="note">Calls are logged for quality and last at most 4 minutes. Your browser will ask to use your microphone.</p>
+  </main>
+  <noscript><p class="note">This page needs JavaScript to start a voice call.</p></noscript>
+</body>
+</html>

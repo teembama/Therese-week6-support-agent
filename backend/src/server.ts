@@ -30,6 +30,7 @@ import { matchRoute, MIN_TOKEN_LENGTH, redactPath, sha256 } from "./routing.js";
 import { parseVapiBody } from "./vapi.js";
 import { classifyEvent, recordEndOfCall } from "./vapi-events.js";
 import { retryOnce } from "./bounded.js";
+import { handlePublic, isPublicRoute } from "./web.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -280,6 +281,17 @@ function main(): void {
       pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     } catch {
       /* malformed request target: treat as unknown path */
+    }
+    // Public routes (D52): the voice page, its assets, /config (public Vapi IDs) and /health.
+    if (isPublicRoute(req.method, pathname)) {
+      req.resume();
+      try {
+        return handlePublic(req, res, pathname);
+      } catch (err) {
+        log({ event: "request_error", stage: "public", path: pathname, ...errorDetails(err) });
+        if (!res.headersSent) return sendJson(res, 500, { error: "internal error" });
+        return;
+      }
     }
     const loggedPath = redactPath(pathname, secret);
     const route = matchRoute(req.method, pathname, secretDigest);

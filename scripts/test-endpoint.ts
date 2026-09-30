@@ -183,6 +183,29 @@ async function main(): Promise<number> {
     check(A.logs.some((l) => l.includes('"event":"not_found"') && l.includes('"path":"/v/[redacted]/chat/completions"')), "wrong-token 404 logged with the redacted path");
     check(A.logs.some((l) => l.includes('"event":"not_found"') && l.includes('"path":"/v1/chat/completions"')), "unknown-path 404 logged with method and path");
 
+    console.log("\n== Public web routes (D52): page, assets, /config, /health");
+    const get = async (path: string, method = "GET") => {
+      const r = await fetch(`http://localhost:${A.port}${path}`, { method });
+      STATUSES.push({ status: r.status, label: `${method} ${path}` });
+      return { status: r.status, headers: r.headers, text: await r.text() };
+    };
+    const page = await get("/");
+    check(page.status === 200 && /text\/html/.test(page.headers.get("content-type") ?? "") && page.text.includes("Start call") && page.text.includes("End call") && page.text.includes('role="status"') && page.text.includes('aria-live="polite"'), "GET / -> the voice page (Start/End call, aria-live status)");
+    const csp = page.headers.get("content-security-policy") ?? "";
+    check(csp.includes("script-src 'self' https://esm.sh https://*.daily.co") && csp.includes("frame-ancestors 'none'") && page.headers.get("x-content-type-options") === "nosniff", "page has the CSP (scripts: self, esm.sh, Daily) and nosniff");
+    const js = await get("/app.js");
+    check(js.status === 200 && js.text.includes("https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0") && !/pk_|vapiPublicKey\s*=\s*["']/.test(js.text), "GET /app.js -> SDK pinned (web 2.7.1, daily-js 0.87.0); no key in the file");
+    check((await get("/app.css")).status === 200, "GET /app.css -> 200");
+    const cfg = await get("/config");
+    const cfgJson = (() => { try { return JSON.parse(cfg.text) as Record<string, unknown>; } catch { return {}; } })();
+    const expected = process.env["VAPI_PUBLIC_KEY"] && process.env["VAPI_ASSISTANT_ID"];
+    check(expected
+      ? cfg.status === 200 && JSON.stringify(Object.keys(cfgJson).sort()) === JSON.stringify(["vapiAssistantId", "vapiPublicKey"]) && cfgJson["vapiPublicKey"] === process.env["VAPI_PUBLIC_KEY"] && cfgJson["vapiAssistantId"] === process.env["VAPI_ASSISTANT_ID"]
+      : cfg.status === 503, "GET /config -> exactly the two public Vapi values from env (values not printed)");
+    const health = await get("/health");
+    check(health.status === 200 && health.text === '{"status":"ok"}', "GET /health -> {\"status\":\"ok\"} and nothing else");
+    check((await get("/", "HEAD")).status === 200 && (await get("/nope")).status === 404 && (await get("/config", "POST")).status === 404, "HEAD / -> 200; unknown GET -> 404; POST /config -> 404");
+
     console.log("\n== Fees question");
     const feesId = `test-ep-${RUN}-fees`;
     const fees = await post(A.port, body(feesId, ["What fees does RelayPay charge for international payments?"]));

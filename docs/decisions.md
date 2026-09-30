@@ -876,6 +876,46 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - The timer is unref'd.
 - **Tests:** unit tests with a stub database (startup run, overlap guard, failure then recovery); `test:endpoint` checks the startup sweep's log line.
 
+### D52. Web voice page at /, served by the backend (Batch 2D step 3, 2026-09-30)
+
+- **Routes:** public `GET` (and `HEAD`) routes for `/`, `/app.js`, `/app.css`, `/config` and `/health`.
+  - They are checked before the token routes. Any other `GET` gets a 404, and the token routes are unchanged.
+  - `/config` returns exactly `{vapiPublicKey, vapiAssistantId}` from the environment, and a 503 if either is unset. They are public by design, but stay out of the repo.
+  - `/health` returns `{"status":"ok"}` and nothing else, so it exposes no configuration.
+- **SDK:**
+  - `@vapi-ai/web` 2.7.1 publishes no UMD/browser build (its `main` is CommonJS), so a plain `<script src>` can't load it.
+  - It is imported as an ES module from esm.sh, pinned twice: `https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0`. That pins the SDK version and its Daily WebRTC dependency.
+  - Not SRI-hashed: an import of an esm.sh module graph can't carry integrity for its sub-imports.
+- **Security headers on every public response:**
+  - CSP `default-src 'self'; script-src 'self' https://esm.sh https://*.daily.co; style-src 'self'; img-src 'self' data:; connect-src 'self' https: wss:; media-src 'self' blob: mediastream:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`;
+  - `nosniff`, `no-referrer`, and `Permissions-Policy: microphone=(self)`.
+  - Daily is allowed in `script-src` because the Daily client loads its call bundle at call start. That part was **not** exercised locally, because no call was started. Check it on the first real call from the deployed page.
+- **UX:**
+  - Brand colours: deep blue primary `#0b2a5b`, teal accent `#0f766e` (focus ring and the listening icon only), and an off-white background. System UI font, no web font. No transcript or chat UI.
+  - States in words: Loading → Ready → Requesting microphone → Connecting → Live (listening / RelayPay is speaking) → Call ended (a plain-English reason from `endedReason`) → Error.
+  - The icon's shape also changes with the state, so colour is never the only cue.
+  - A call timer with a 4-minute guard: a warning at 3:30, and the page stops the call at 4:00.
+- **Errors, each with steps the caller can take:**
+  - The microphone is checked with `getUserMedia` first, so a blocked mic, a missing device and a mic in use by another app are told apart.
+  - SDK `error` events are classified:
+    - microphone blocked: how to allow it;
+    - output device / `setSinkId`: use the built-in speakers and mic, and close apps using the mic;
+    - origin or key rejected;
+    - network: try another network or a hotspot;
+    - the SDK failed to load;
+    - not configured.
+- **Accessibility:**
+  - native buttons, so it is keyboard operable;
+  - a visible 3 px focus outline;
+  - `role="status" aria-live="polite"` for state changes, and `role="alert"` for errors;
+  - AA contrast (ratios listed in `app.css`);
+  - responsive: buttons go full width under 420 px, and there is no horizontal scroll.
+  - Focus moves to End call when a call starts, and back to Start when it ends.
+- **Checked:**
+  - In Chrome against the local backend, the page reached **Ready**: `/config` answered and the pinned SDK loaded under the CSP. No console errors, the focus ring was visible, and there was no overflow.
+  - `test:endpoint` checks the routes, headers, `/config` (exactly the two env values), `/health`, and the 404s.
+- **Also fixed:** the backend entry is now `dist/start.js`, which loads `.env` before anything reads it (see the commit). `npm start` had failed because the model is required from the environment (D49).
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
