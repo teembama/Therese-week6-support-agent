@@ -455,6 +455,80 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - A side-effect tool can therefore run even when the turn ends before the agent can confirm the action to the caller. It can also run again on a retried turn.
 - Every side-effect tool must protect itself: idempotency keys, unique constraints and state guards. Examples: `create_escalation_with_ticket` takes idempotency keys, and `support_tickets.idempotency_key` is UNIQUE.
 
+### D34. Never a 500: availability over correctness on the voice path
+
+- **Rule:** once the path and token match, every response is HTTP 200 with a well-formed SSE stream.
+  - A 500, a 4xx or a hung response makes Vapi end or stall the whole call. A spoken fallback ("Sorry, I'm having trouble checking that right now. Could you try again in a moment?") keeps the caller on the line.
+  - Only a wrong token or an unknown path still gets a 404 (security; D26).
+- **How:**
+  - A top-level wrapper (`speakFallback`) opens a fallback stream if nothing was sent, finishes an open stream (adding the fallback if nothing was spoken), or ends the response.
+  - Bad requests behind a valid token (invalid JSON, a body over 1 MB, a missing `call.id`) get 200 plus the fallback and a `bad_request` log line.
+  - A duplicate that joined a failing in-flight turn finishes with the fallback.
+- **Pre-turn database budget:**
+  - Each database call has a 3.0s timeout.
+  - The combined pre-turn work (begin attempt plus retrieval) has a 3.5s budget.
+  - So the caller hears something within about 4s even when Supabase hangs. The suite measured 3.57s against a TCP blackhole.
+  - The attempt then ends `failed` with the reason, recorded in the background once `begin` returns.
+- **Background persistence is bounded:** one retry, each try with a timeout (`retryOnce`), never on the caller's critical path. If both tries fail, the backend writes an explicit stderr line ("left in an unknown state") and does not retry again.
+- **Process-level handlers:**
+  - `unhandledRejection` is always a bug. It is logged (message plus redacted stack frames, never content or the token). Only the request it belongs to fails, via the fallback, when AsyncLocalStorage identifies it. The suite asserts zero unhandled rejections on servers without injected faults.
+  - `uncaughtException`: after one, process state can't be trusted, so the backend logs it the same way and calls `exit(1)`. It relies on the host's automatic restart (Fly.io restarts crashed machines; locally, restart by hand).
+- **Trade-off, stated plainly:**
+  - We choose availability over correctness of the record. When the database is down, the caller still gets a spoken reply.
+  - That turn may be recorded late, recorded only as `failed`, or (if both tries fail) not recorded at all, with only a stderr line as evidence.
+  - A database outage can therefore leave gaps in `conversation_turns` and `turn_attempts`. Anything reading those tables must not assume completeness during an incident.
+  - The fallback line promises nothing and states no facts, so choosing availability never trades away grounding.
+- **Tests:** fault injection via `RELAYPAY_FAULT_INJECT` (test-only) in `test:endpoint`:
+  - Supabase unreachable → 200 plus fallback in 0.35s;
+  - Supabase blackholed → 200 plus fallback in 3.57s;
+  - the fast path still works with the database down;
+  - a throw in the handler → 200 plus fallback;
+  - a throw in the turn → 200 plus fallback, attempt `failed`;
+  - an injected unhandled rejection → identified, fallback;
+  - an injected uncaught exception → exit code 1, and the log has no content.
+  - Across the suite: 45 responses, 0 with status ≥500.
+
+### D35. Deterministic social fast path with context-aware goodbye
+
+- **Why:**
+  - In live call `01a0ef57…`, "All right, thank you." waited 42.6s on the database and got the fallback.
+  - Thanks and goodbyes need no knowledge and no model. The fixed lines already exist (D31).
+- **Matcher** (`backend/src/social-fast-path.ts`):
+  - It works on the whole caller message: lowercased, punctuation stripped, fillers removed ("all right", "okay", "ok", "great", "perfect", "cool", "awesome").
+  - The result is compared against small phrase lists:
+    - thanks alone → thanks line;
+    - "bye" / "goodbye" → goodbye;
+    - "no, that's all" / "nothing else" with or without thanks → goodbye.
+- **Context-aware decline:**
+  - When the previous assistant line is the backend's own thanks line ("…anything else I can help you with?"), a whole-message short decline is a goodbye: "no", "nah", "nope", "I'm good", "no I'm good", "all good", "that's all", "not really", "no thanks", "nothing else", optionally with thanks.
+  - A bare "no" counts **only** in that context.
+- **Everything else goes to the model:**
+  - "thanks, and what about fees?";
+  - "no, actually, one more thing";
+  - "oh well";
+  - a bare "no" without context;
+  - "all right".
+- **Principle:** a false goodbye (hanging up on a caller who wasn't finished) is worse than asking again, so ambiguity goes to the model.
+  - The prompt tells the model to choose goodbye when the caller declines further help after "anything else?", and not to choose goodbye when unsure.
+- **Fast path behaviour:**
+  - It speaks immediately with no database wait. The suite measured 2–5ms, and 20ms with the database blackholed.
+  - It then records the attempt and turn in the background (bounded as in D34), as `answer_type = social` with `confidence_note = "fast_path; intent=…"`.
+  - The turn log line carries `fast_path: true` and cost 0.
+- **Unit tests:** 44 cases in `social-fast-path.test.ts`, including every listed decline after "anything else?" and the negatives above.
+
+### D36. Vapi hangs up on the fixed goodbye line via `endCallPhrases`
+
+- **Source:** Vapi assistant API, `endCallPhrases` (https://docs.vapi.ai/api-reference/assistants/create): "a list of phrases that, if spoken by the assistant, will trigger the call to be hung up"; case-insensitive.
+  - The call then ends with reason `assistant-said-end-call-phrase` (https://docs.vapi.ai/calls/call-ended-reason).
+- **Setting (the user sets it):** add `Thanks for calling RelayPay. Goodbye.` to the assistant's End Call Phrases.
+  - We have not verified its location in the dashboard; it is probably under the assistant's Advanced settings.
+- **Not documented:**
+  - whether matching is exact or substring;
+  - whether it applies to Custom LLM output before or after TTS.
+  - Verify with a live call that says goodbye, and check that the call's ended reason is `assistant-said-end-call-phrase`.
+  - Record the result here.
+- We don't add a bare "Goodbye" phrase: if matching is substring-based, any model answer containing "goodbye" would hang up. The fixed line is the only thing that should end a call.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
