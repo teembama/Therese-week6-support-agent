@@ -20,6 +20,11 @@ const PORT = 8793;
 const argValue = (flag: string) => { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : undefined; };
 const COST_CAP_USD = Number(argValue("--cap") ?? 0.15);
 const ONLY = argValue("--only")?.split(",").map((s) => s.trim().toUpperCase());
+// Model comparison (docs/model-choice.md): --model runs the backend with RELAYPAY_TEST_AGENT_MODEL,
+// --repeat N runs each selected test N times (fresh conversations).
+const MODEL = argValue("--model");
+const REPEAT = Number(argValue("--repeat") ?? 1);
+let nameSuffix = "";
 const RUN = new Date().toISOString().replace(/[:.]/g, "-");
 const FILLER = "One moment while I check that.";
 
@@ -43,7 +48,10 @@ let serverLogs: string[] = [];
 const spend = { total: 0 };
 
 async function startServer(secret: string): Promise<ChildProcess> {
-  const proc = spawn(process.execPath, [SERVER], { env: { ...process.env, PORT: String(PORT), VAPI_LLM_SECRET: secret }, stdio: ["ignore", "pipe", "pipe"] });
+  const proc = spawn(process.execPath, [SERVER], {
+    env: { ...process.env, PORT: String(PORT), VAPI_LLM_SECRET: secret, ...(MODEL ? { RELAYPAY_TEST_AGENT_MODEL: MODEL } : {}) },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   const collect = (d: Buffer) => serverLogs.push(...d.toString().split("\n").filter(Boolean));
   proc.stdout!.on("data", collect);
   proc.stderr!.on("data", collect);
@@ -112,7 +120,7 @@ interface Outcome {
 }
 
 async function converse(db: Db, secret: string, name: string, callerTurns: string[], until?: (o: Outcome) => Promise<boolean>): Promise<Outcome> {
-  const id = `test-agent-${RUN}-${name}`;
+  const id = `test-agent-${RUN}-${name}${nameSuffix}`;
   const agentTurns: string[] = [];
   const out: Outcome = { id, turns: [], tickets: [], escalations: [], events: [] };
   const refresh = async () => {
@@ -297,13 +305,16 @@ async function main(): Promise<number> {
   ];
 
   try {
-    for (const [name, run] of tests) {
-      if (ONLY && !ONLY.some((o) => name.toUpperCase().startsWith(o))) continue; // name prefixes, e.g. S3,SEC OTHER
-      if (!budgetLeft()) {
-        results.push({ name, pass: false, why: `not run: cost cap $${COST_CAP_USD} reached` });
-        continue;
+    for (let rep = 0; rep < REPEAT; rep++) {
+      nameSuffix = REPEAT > 1 ? `-r${rep}` : "";
+      for (const [name, run] of tests) {
+        if (ONLY && !ONLY.some((o) => name.toUpperCase().startsWith(o))) continue; // name prefixes, e.g. S3,SEC OTHER
+        if (!budgetLeft()) {
+          results.push({ name, pass: false, why: `not run: cost cap $${COST_CAP_USD} reached` });
+          continue;
+        }
+        await run();
       }
-      await run();
     }
   } finally {
     server.kill();
@@ -315,6 +326,17 @@ async function main(): Promise<number> {
   for (const t of toolTurns) console.log(`  filler=${t.msFiller ?? "-"}  first_answer_sentence=${t.msFirstSentence ?? "-"}  total=${t.msTotal ?? "-"}   ${JSON.stringify(t.caller).slice(0, 60)}`);
   const med = (xs: number[]) => { const s = xs.filter((x) => Number.isFinite(x)).sort((a, b) => a - b); return s.length ? s[Math.floor((s.length - 1) / 2)] : null; };
   console.log(`  median: filler=${med(toolTurns.map((t) => t.msFiller ?? NaN))} first_answer_sentence=${med(toolTurns.map((t) => t.msFirstSentence ?? NaN))} total=${med(toolTurns.map((t) => t.msTotal ?? NaN))}`);
+
+  // Per-run model stats (docs/model-choice.md): first answer sentence = first sentence of the
+  // model's reply (after the filler, on tool turns); cost per turn from the conversation totals.
+  const allTurns = done.flatMap((o) => o.turns);
+  const passes = results.filter((r) => r.pass).length;
+  console.log(`\n=== Model stats (model ${MODEL ?? "default (claude-haiku-4-5)"}, ${REPEAT} repeat(s))`);
+  console.log(`  pass rate: ${passes}/${results.length}`);
+  console.log(`  first answer sentence ms: ${allTurns.map((t) => t.msFirstSentence ?? "-").join(", ")}  median=${med(allTurns.map((t) => t.msFirstSentence ?? NaN))}`);
+  console.log(`  filler ms: ${allTurns.map((t) => t.msFiller ?? "-").join(", ")}  median=${med(allTurns.map((t) => t.msFiller ?? NaN))}`);
+  console.log(`  total ms: ${allTurns.map((t) => t.msTotal ?? "-").join(", ")}  median=${med(allTurns.map((t) => t.msTotal ?? NaN))}`);
+  console.log(`  cost per turn: ${allTurns.map((t) => t.cost.toFixed(4)).join(", ")}  mean=$${(allTurns.reduce((a, t) => a + t.cost, 0) / Math.max(1, allTurns.length)).toFixed(4)}`);
 
   console.log("\n=== Summary");
   for (const r of results) console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name}  ${r.pass ? "" : r.why}`);

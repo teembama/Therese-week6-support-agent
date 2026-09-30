@@ -1,6 +1,18 @@
 // Backend turn settings. Retrieval settings live in @relaypay/shared (config.ts).
 
-export const AGENT_MODEL = "claude-haiku-4-5";
+/** The production agent model. The choice is documented in docs/model-choice.md. */
+export const DEFAULT_AGENT_MODEL = "claude-haiku-4-5";
+
+/**
+ * Test-only override for the model comparison (scripts/test-agent.ts --model). Limited to the
+ * models being compared, so a typo or an unreviewed model can't be switched on by env.
+ */
+const COMPARABLE_MODELS = ["claude-haiku-4-5", "claude-sonnet-5-5"];
+const requestedModel = process.env["RELAYPAY_TEST_AGENT_MODEL"];
+if (requestedModel && !COMPARABLE_MODELS.includes(requestedModel)) {
+  throw new Error(`RELAYPAY_TEST_AGENT_MODEL must be one of ${COMPARABLE_MODELS.join(", ")}`);
+}
+export const AGENT_MODEL = requestedModel || DEFAULT_AGENT_MODEL;
 
 /** Agent SDK maxTurns: tool-use round trips per caller turn (checked after tools run, D18). */
 export const AGENT_MAX_TURNS = 4;
