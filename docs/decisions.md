@@ -694,6 +694,39 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 | `payouts.failure_reason` | Only as whitelisted customer-safe text | D39 |
 | ticket and escalation IDs, follow-up summary | To the caller whose conversation created them | No timelines or outcomes |
 
+### D41. Batch 2C: tools connected to the agent; choices and deviations from the spec
+
+- **Hiding `search_knowledge_base`.** `allowedTools` only grants permission: an MCP tool still appears in `init.tools`.
+  - So the backend spawns the MCP server with `MCP_TOOLSET=agent`, and the server neither lists nor runs `search_knowledge_base` (a call to it gets `unknown_tool`).
+  - Scripts and the Inspector default to `all`.
+  - The tool-list guard requires exactly the six `mcp__relaypay__*` tools and a connected server.
+- **MCP bundle (latency, measured in `docs/latency.md`).**
+  - The CLI starts the MCP server only after its own boot and emits `init` only once it has connected. So MCP startup sits on the critical path and can't overlap the database work.
+  - The backend spawns an esbuild bundle, `mcp-server/dist/bundle/server.mjs`, which starts about 300 ms faster than `dist/main.js`. It uses the bundle only when it is newer than every compiled source; otherwise it uses `main.js` and logs why.
+  - The `ANTHROPIC_API_KEY` scrub (D13) is tested against the bundle.
+  - The net cost of attaching MCP is about +1.0 s p50 first token on a KB-only turn.
+- **Grounding of tool-backed answers.**
+  - The backend records each tool result from the SDK stream (`tool_use` name, then the `tool_result`'s own JSON `status`).
+  - A header's `tool=` must name a grounding tool that returned `success` in this attempt. A false claim blocks the message even if a valid chunk is cited.
+  - **Deviation:** besides the three lookups, `create_support_ticket` and `create_escalation` also ground a `type=answer`. Otherwise "I've logged a ticket" has no valid type.
+- **Filter modes.**
+  - `answer` and `escalate` get the full filter; `clarify` and `decline` get the promise checks only.
+  - Evidence = the cited chunks, plus the successful tool results of this attempt (statuses, and month/day dates, must come from the evidence when a record is present), plus the caller's words.
+  - Promise phrases are exempt only if the **evidence** contains them (not the caller), or if they are denied in the same clause ("can't guarantee it arrives within 7 days").
+- **"your <noun>" in the full filter.** Always allowed for request nouns (name, email, preferred time, callback, details, reference…). Also allowed for record nouns (account, payout, transaction…) once a tool returned a record in this attempt. Otherwise the escalation flow ("your name and email") would be filtered to silence.
+- **Filler.** "One moment while I check that." is spoken by the backend at a tool start when nothing has been said yet, at most once per turn.
+  - **Deviation:** it applies to `create_support_ticket` and `create_escalation` too, not only lookups. In the first `test:agent` run, a `create_escalation` turn hit the 8 s first-token timeout **after** the escalation was created, so the caller heard the fallback line. `log_conversation_event` is excluded.
+  - Decisions that asked "was anything spoken?" now ask whether anything **other than the filler** was spoken, so a blocked reply after the filler still gets the safe decline line.
+- **Ticket vs escalation (prompt).**
+  - `lookup_transaction` returns `requires_escalation` with category `payment` for a failed transaction (2B), which conflicted with "a failed invoice payment with a reference is a ticket".
+  - Resolved: `escalation_category` `payment` means offer a support ticket. `compliance` / `account`, and the escalation-rules triggers, mean the escalation flow.
+- **Spoken emails.** The model passes the caller's words verbatim and the tool normalises them. In the first run, the model "corrected" "accra stack" to `accrastalk`.
+- **Identity for lookups.** `lookup_transaction` and `lookup_payout` need only the reference (they return only customer-safe fields, D40). Only account questions need `lookup_customer`.
+- **Known gaps after this batch:**
+  - S3: Haiku still asks for an email or ID after "I am Amara from LagosLedger" despite an explicit example.
+  - "They will follow up to help get this resolved" passes the promise filter (no promise construction). It's a soft phrase for the Task 6 judge.
+  - No per-turn ticket cap in the tool. Idempotency keys are per category, so a model making parallel calls in several categories could create several tickets. The five-tickets test passed only because the model refused.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

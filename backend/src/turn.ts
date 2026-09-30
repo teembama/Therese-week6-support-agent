@@ -28,7 +28,7 @@ import {
   DB_CALL_TIMEOUT_MS,
   FALLBACK_LINE,
   FILLER_LINE,
-  LOOKUP_TOOL_NAMES,
+  FILLER_TOOL_NAMES,
   FAULT_INJECT,
   PRETURN_DB_BUDGET_MS,
   FIRST_TOKEN_TIMEOUT_MS,
@@ -439,10 +439,10 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
           } else if (!gate) {
             continue;
           } else if (e.type === "content_block_start" && e.content_block.type === "tool_use") {
-            // Filler: a lookup is starting and the caller has heard nothing yet this turn. A fixed
-            // backend line, at most once per turn; never model text.
+            // Filler: a lookup or write tool is starting and the caller has heard nothing yet this
+            // turn. A fixed backend line, at most once per turn; never model text.
             const toolName = e.content_block.name.replace(MCP_TOOL_PREFIX, "");
-            if (!fillerSpoken && spokenParts.length === 0 && (LOOKUP_TOOL_NAMES as readonly string[]).includes(toolName)) {
+            if (!fillerSpoken && spokenParts.length === 0 && FILLER_TOOL_NAMES.includes(toolName)) {
               fillerSpoken = true;
               mark("filler");
               speak(FILLER_LINE);

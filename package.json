@@ -22,6 +22,7 @@
     "eval:retrieval": "npm run build && npm run eval-retrieval -w @relaypay/scripts --",
     "test:mcp": "npm run build && npm run test-mcp -w @relaypay/scripts --",
     "test:tools": "npm run build && npm run test-tools -w @relaypay/scripts --",
+    "test:agent": "npm run build && npm run test-agent -w @relaypay/scripts --",
     "test:endpoint": "npm run build && npm run test-endpoint -w @relaypay/scripts --",
     "test:gate": "npm run build && npm run test:gate -w @relaypay/backend",
     "eval:grounding": "npm run build && npm run eval-grounding -w @relaypay/scripts --"

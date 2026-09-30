@@ -99,9 +99,14 @@ export const SAFE_DECLINE_LINE =
 
 /** Spoken on timeout or internal failure. */
 /**
- * Spoken by the BACKEND (never model text) when a lookup tool call starts and nothing has been
- * said yet in the turn; at most once per turn (Batch 2C step 5).
+ * Spoken by the BACKEND (never model text) when a lookup or write tool call starts and nothing
+ * has been said yet in the turn; at most once per turn (Batch 2C step 5). Write tools are
+ * included because a create_escalation turn otherwise hit the 8 s first-token timeout after the
+ * escalation was created (test:agent S7, first run).
  */
 export const FILLER_LINE = "One moment while I check that.";
+
+/** Tools whose start triggers the filler line (not log_conversation_event, which is instant). */
+export const FILLER_TOOL_NAMES: readonly string[] = ["lookup_customer", "lookup_transaction", "lookup_payout", "create_support_ticket", "create_escalation"];
 
 export const FALLBACK_LINE = "Sorry, I'm having trouble checking that right now. Could you try again in a moment?";
