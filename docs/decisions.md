@@ -721,6 +721,9 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `lookup_transaction` returns `requires_escalation` with category `payment` for a failed transaction (2B), which conflicted with "a failed invoice payment with a reference is a ticket".
   - Resolved: `escalation_category` `payment` means offer a support ticket. `compliance` / `account`, and the escalation-rules triggers, mean the escalation flow.
 - **Spoken emails.** The model passes the caller's words verbatim and the tool normalises them. In the first run, the model "corrected" "accra stack" to `accrastalk`.
+  - Confirmed on 2026-09-30 (decision 4): the prompt says VERBATIM for `create_escalation` (never respell, join, correct or complete it; on `invalid_input`, ask again) and for any email given to `lookup_customer` (D42).
+  - Both tools run `normaliseEmail` in code (unit-tested; `test:tools` checks "amara at lagos ledger dot example" → `amara@lagosledger.example`). So the only conversion is in code.
+  - Whether the model now copies verbatim is checked by the S7 rerun (the `create_escalation` input is printed).
 - **Identity for lookups.** `lookup_transaction` and `lookup_payout` need only the reference (they return only customer-safe fields, D40). Only account questions need `lookup_customer`.
 - **Known gaps after this batch:**
   - S3: Haiku still asks for an email or ID after "I am Amara from LagosLedger" despite an explicit example.
