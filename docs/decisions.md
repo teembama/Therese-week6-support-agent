@@ -823,6 +823,26 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - **Prompt:** a reply after a tool that did not succeed is `decline` or `clarify`, never `answer`. (The live header was `type=answer`, which stays blocked.)
 - **Unit test:** the live sentence under `type=decline` with a denied lookup is spoken; a never-called tool is still rejected; `type=answer` with the denied lookup is still rejected.
 
+### D49. The agent model comes only from the environment, with a one-shot fallback on model_not_found (2026-09-30)
+
+- **Config:** `AGENT_MODEL` (required; the backend refuses to start without it) and `AGENT_MODEL_FALLBACK` (optional). Both must look like a Claude model id. No model id is hard-coded in the backend.
+- The decision is Haiku 4.5, with Sonnet 5.5 as the fallback (docs/model-choice.md).
+- **Unit tests** preload `backend/dist/test-env.js`, which sets a test `AGENT_MODEL`. No unit test calls a model.
+- **Detection:** probed on 2026-09-30 with an unknown model id.
+  - The CLI emits `init` (about 1.4 s), then an assistant message with `error: "model_not_found"` and a synthetic text (about 2.4 s), then an error result.
+  - The backend stops that run on the `model_not_found` assistant message, before the synthetic text can reach the gate.
+- **Fallback, only when all of these hold:**
+  - the error is `model_not_found`. Other errors (rate limit, overloaded, auth, billing) are **not** a reason to switch models;
+  - nothing has been spoken yet;
+  - the turn isn't finished;
+  - at least `MODEL_FALLBACK_MIN_REMAINING_MS` (3 s) of the 8 s first-token budget remains.
+  - Then the primary run's CLI tree is killed, and the same prompt runs once more with the fallback model on a fresh CLI/MCP, with a fresh gate and stdin.
+- **Logging:** a `model_fallback` event (from, to, `ms_remaining`, `retried`). The turn note says "model fallback: A -> B", and `conversation_turns.model` / `turn_attempts.model` record the model that actually answered.
+- **If the fallback isn't possible** (no fallback set, not enough time, or the fallback is also unavailable), the caller hears the fallback line and the turn is `error`.
+- **Tests (`test:endpoint`):**
+  - an unknown primary with Haiku as fallback → the fees question is answered, the row has `model = claude-haiku-4-5`, and `model_fallback` shows `retried: true`;
+  - an unknown primary with no fallback → 200 plus the fallback line, and `retried: false`.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

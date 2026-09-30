@@ -1,18 +1,27 @@
 // Backend turn settings. Retrieval settings live in @relaypay/shared (config.ts).
 
-/** The production agent model. The choice is documented in docs/model-choice.md. */
-export const DEFAULT_AGENT_MODEL = "claude-haiku-4-5";
+// The agent model comes ONLY from the environment (D49; the choice is in docs/model-choice.md):
+//   AGENT_MODEL           required, e.g. claude-haiku-4-5
+//   AGENT_MODEL_FALLBACK  optional, e.g. claude-sonnet-5-5: used once per turn, only when the
+//                         primary is reported unavailable / retired / not found (model_not_found)
+const MODEL_ID = /^claude-[a-z0-9][a-z0-9.-]*$/;
+function modelFromEnv(name: string, required: boolean): string | null {
+  const value = process.env[name]?.trim() ?? "";
+  if (!value) {
+    if (required) throw new Error(`${name} is not set (see .env.example; docs/model-choice.md)`);
+    return null;
+  }
+  if (!MODEL_ID.test(value)) throw new Error(`${name} is not a Claude model id: ${JSON.stringify(value.slice(0, 60))}`);
+  return value;
+}
+export const AGENT_MODEL: string = modelFromEnv("AGENT_MODEL", true)!;
+export const AGENT_MODEL_FALLBACK: string | null = modelFromEnv("AGENT_MODEL_FALLBACK", false);
 
 /**
- * Test-only override for the model comparison (scripts/test-agent.ts --model). Limited to the
- * models being compared, so a typo or an unreviewed model can't be switched on by env.
+ * The fallback run is started only if at least this much of the first-token budget remains:
+ * a fresh CLI + MCP start plus a model reply takes ~3 s (docs/latency.md).
  */
-const COMPARABLE_MODELS = ["claude-haiku-4-5", "claude-sonnet-5-5"];
-const requestedModel = process.env["RELAYPAY_TEST_AGENT_MODEL"];
-if (requestedModel && !COMPARABLE_MODELS.includes(requestedModel)) {
-  throw new Error(`RELAYPAY_TEST_AGENT_MODEL must be one of ${COMPARABLE_MODELS.join(", ")}`);
-}
-export const AGENT_MODEL = requestedModel || DEFAULT_AGENT_MODEL;
+export const MODEL_FALLBACK_MIN_REMAINING_MS = 3_000;
 
 /** Agent SDK maxTurns: tool-use round trips per caller turn (checked after tools run, D18). */
 export const AGENT_MAX_TURNS = 4;

@@ -1,6 +1,27 @@
 # Model Choice: Evidence for the Agent Model
 
-**Status:** no decision yet. The agent runs `claude-haiku-4-5` (`backend/src/config.ts`, `DEFAULT_AGENT_MODEL`). This page collects the evidence for the choice. It is not the decision.
+**Status: decided on 2026-09-30.** The agent runs **`claude-haiku-4-5`** (`AGENT_MODEL`), with **`claude-sonnet-5-5`** as `AGENT_MODEL_FALLBACK`.
+
+## Decision
+
+- **Haiku 4.5 stays the default:**
+  - it is about 1.3 s faster to the first answer sentence on a tool-backed turn (median 5.2 s vs 6.5 s);
+  - it is about 2.4× cheaper per turn with a warm cache ($0.0018 vs $0.0043);
+  - it was equally reliable on S3 (5/5 each) once the prompt and the tool description stopped inviting identity gatekeeping.
+- **The latency matters most on a voice call.** The filler covers the tool time, but the caller still waits for the answer.
+- **Safety doesn't depend on the model's judgement,** so a smaller model is acceptable here. The rules are enforced in code:
+  - identity (two identifiers, in the tool, D39, D42);
+  - no amounts (never selected, D40);
+  - ownership (not_available, D44);
+  - write caps (D43);
+  - supersession (D29);
+  - the runtime sentence filter (D37, D41, D45).
+- **Retirement risk** ("not sooner than October 15, 2026"), mitigated three ways (D49):
+  1. The model comes only from the environment (`AGENT_MODEL`), so a switch is a Railway variable change, not a code change.
+  2. The backend automatically retries a turn once with `AGENT_MODEL_FALLBACK`, but only when the SDK reports `model_not_found` (unavailable, retired or unknown), only if nothing was spoken, and only while at least 3 s of the 8 s first-token budget remain. Each fallback is logged (`model_fallback`) and recorded in the turn's note and `model` column.
+  3. `docs/pre-submission-checklist.md`: check Haiku's deprecation status before grading.
+
+The rest of this page is the evidence behind the decision.
 
 ## The candidates
 

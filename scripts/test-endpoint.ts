@@ -345,6 +345,27 @@ async function main(): Promise<number> {
     for (const l of debugLines) console.log(`  ${l.slice(0, 400)}`);
     check(debugLines.some((l) => l.includes('"token_ok":true') && l.includes('"body_shape"')) && debugLines.some((l) => l.includes('"token_ok":false')), "debug log: structure for token ok and token failed");
     check(!debugLines.some((l) => l.includes(marker) || l.includes(secret) || l.includes(wrongToken)), "debug log: no message content, no token");
+
+    console.log("\n== Model fallback (D49): unknown primary model -> one retry with AGENT_MODEL_FALLBACK");
+    const F = await startServer(8789, { AGENT_MODEL: "claude-nonexistent-0-0", AGENT_MODEL_FALLBACK: "claude-haiku-4-5" });
+    servers.push(F);
+    const fbId = `test-ep-${RUN}-model-fallback`;
+    const fb = await post(F.port, body(fbId, ["What fees does RelayPay charge for international payments?"]));
+    const fbRow = await turnRow(db, fbId);
+    const fbLog = F.logs.find((l) => l.includes('"event":"model_fallback"')) ?? "";
+    console.log(`spoken in ${fb.ms}ms: ${JSON.stringify(fb.text.slice(0, 120))} | model=${fbRow?.["model"]} | ${fbLog.slice(0, 220)}`);
+    check(fbRow?.["answer_type"] === "answer" && fbRow?.["model"] === "claude-haiku-4-5", "unknown primary -> answered by the fallback model, recorded as claude-haiku-4-5");
+    check(fbLog.includes('"retried":true') && fbLog.includes('"from":"claude-nonexistent-0-0"') && fbLog.includes('"to":"claude-haiku-4-5"'), "model_fallback logged (from, to, retried)");
+    check(String(fbRow?.["confidence_note"]).includes("model fallback: claude-nonexistent-0-0 -> claude-haiku-4-5"), "turn note records the fallback");
+    const G = await startServer(8788, { AGENT_MODEL: "claude-nonexistent-0-0", AGENT_MODEL_FALLBACK: "" });
+    servers.push(G);
+    const nfId = `test-ep-${RUN}-model-no-fallback`;
+    const nf = await post(G.port, body(nfId, ["What fees does RelayPay charge for international payments?"]));
+    const nfRow = await turnRow(db, nfId);
+    check(nf.status === 200 && nf.text === FALLBACK && nfRow?.["answer_type"] === "error", "unknown primary and no fallback set -> 200 + fallback line, answer_type error");
+    check(G.logs.some((l) => l.includes('"event":"model_fallback"') && l.includes('"retried":false')), "model_fallback logged with retried:false");
+    G.proc.kill();
+    F.proc.kill();
    }
 
     const variants: Array<{ name: string; server: Server }> = [{ name: "default", server: A }];

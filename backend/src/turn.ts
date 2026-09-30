@@ -25,6 +25,8 @@ import {
   AGENT_MCP_TOOLS,
   MCP_TOOL_PREFIX,
   AGENT_MODEL,
+  AGENT_MODEL_FALLBACK,
+  MODEL_FALLBACK_MIN_REMAINING_MS,
   DB_CALL_TIMEOUT_MS,
   FALLBACK_LINE,
   FILLER_LINE,
@@ -332,14 +334,16 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     // --- Streaming input: the CLI boots now; the user message is yielded once it is ready.
     let providePrompt!: (prompt: string | null) => void;
     const promptReady = new Promise<string | null>((r) => (providePrompt = r));
-    let closeInput!: () => void;
-    const inputClosed = new Promise<void>((r) => (closeInput = r));
-    async function* userMessages(): AsyncGenerator<SDKUserMessage> {
-      const prompt = await promptReady;
-      if (prompt === null) return; // replay or already failed: never send anything
-      mark("message_yielded");
-      yield { type: "user", message: { role: "user", content: prompt }, parent_tool_use_id: null };
-      await inputClosed; // keep stdin open until the result, then let the CLI exit
+    // Each agent run (the primary model, and at most one fallback run, D49) has its own stdin.
+    let closeInput: () => void = () => {};
+    function userMessages(inputClosed: Promise<void>): AsyncGenerator<SDKUserMessage> {
+      return (async function* () {
+        const prompt = await promptReady;
+        if (prompt === null) return; // replay or already failed: never send anything
+        mark("message_yielded");
+        yield { type: "user", message: { role: "user", content: prompt }, parent_tool_use_id: null } as SDKUserMessage;
+        await inputClosed; // keep stdin open until the result, then let the CLI exit
+      })();
     }
 
     let retrievedIds: ReadonlySet<string> = new Set();
@@ -391,11 +395,16 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     let msTools = 0;
     let result: SDKResultMessage | null = null;
 
-    mark("query_start");
+    let modelUsed = AGENT_MODEL;
+    /** One agent run with `model`; resolves true if the model was reported unavailable (D49). */
+    const runAgent = (model: string): Promise<boolean> => {
+    let modelUnavailable = false;
+    const inputClosed = new Promise<void>((r) => (closeInput = r));
+    mark(model === AGENT_MODEL ? "query_start" : "fallback_query_start");
     const q = query({
-      prompt: userMessages(),
+      prompt: userMessages(inputClosed),
       options: {
-        model: AGENT_MODEL,
+        model,
         systemPrompt: SYSTEM_PROMPT,
         tools: [],
         allowedTools: [...AGENT_MCP_TOOLS],
@@ -422,7 +431,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       },
     });
 
-    const consume = (async () => {
+    return (async () => {
       for await (const m of q) {
         if (m.type === "system" && m.subtype === "init") {
           mark("init");
@@ -495,6 +504,12 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
             }
           }
         } else if (m.type === "assistant" && m.parent_tool_use_id === null) {
+          if (m.error === "model_not_found" && !spokeContent() && !finished) {
+            // Retired / unavailable / unknown model: stop this run; the caller decides on the fallback.
+            modelUnavailable = true;
+            notes.push(`model unavailable: ${model} (model_not_found)`);
+            break;
+          }
           for (const block of m.message.content) {
             if (block.type === "tool_use") {
               toolStarts.set(block.id, performance.now());
@@ -519,9 +534,31 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     })()
       .catch((err: unknown) => {
         // The SDK iterator throws after an error result (e.g. error_max_turns) and on abort.
-        if (!abort.signal.aborted) notes.push(`agent error: ${summarize(err instanceof Error ? err.message : String(err), 300)}`);
+        if (!abort.signal.aborted && !modelUnavailable) notes.push(`agent error: ${summarize(err instanceof Error ? err.message : String(err), 300)}`);
       })
-      .finally(() => closeInput());
+      .finally(() => closeInput())
+      .then(() => modelUnavailable);
+    };
+
+    // Primary model, then at most ONE fallback run, and only for an unavailable model, only if
+    // nothing was spoken, and only while enough of the first-token budget remains (D49).
+    const consume = (async () => {
+      const unavailable = await runAgent(AGENT_MODEL);
+      if (!unavailable) return;
+      const remaining = FIRST_TOKEN_TIMEOUT_MS - elapsed();
+      const canRetry = AGENT_MODEL_FALLBACK !== null && !finished && !spokeContent() && remaining >= MODEL_FALLBACK_MIN_REMAINING_MS;
+      console.log(JSON.stringify({ event: "model_fallback", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: ctx.attemptId, from: AGENT_MODEL, to: canRetry ? AGENT_MODEL_FALLBACK : null, reason: "model_not_found", ms_remaining: remaining, retried: canRetry }));
+      await killCliTree(); // the primary run's CLI and MCP server
+      if (!canRetry) {
+        if (!finished) release(FALLBACK_LINE, "error", `model ${AGENT_MODEL} unavailable; ${AGENT_MODEL_FALLBACK ? "no time left for the fallback" : "no AGENT_MODEL_FALLBACK set"}`);
+        return;
+      }
+      modelUsed = AGENT_MODEL_FALLBACK!;
+      notes.push(`model fallback: ${AGENT_MODEL} -> ${modelUsed}`);
+      gate = null; // a fresh gate for the fallback run
+      const again = await runAgent(modelUsed);
+      if (again && !finished) release(FALLBACK_LINE, "error", `fallback model ${modelUsed} also unavailable`);
+    })();
 
     // --- Independent DB work, in parallel, while the CLI boots.
     let msRetrieval: number | null = null;
@@ -650,7 +687,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       ms_retrieval: msRetrieval,
       ms_first_token: msFirstToken,
       ms_total: msTotal,
-      model: AGENT_MODEL,
+      model: modelUsed,
       input_tokens: usage.inputTokens,
       output_tokens: usage.outputTokens,
       cache_read_tokens: usage.cacheReadTokens,
