@@ -169,7 +169,8 @@ function verdict(name: string, o: Outcome, checks: Array<[boolean, string]>): vo
   console.log(`  -> ${failed.length === 0 ? "PASS" : "FAIL"}  ${failed.length ? failed.join("; ") : ""}`);
 }
 
-const PROMISE = /\b(right away|immediately|within \d+|by tomorrow|will be (lifted|resolved|refunded|approved)|in most cases|i promise|guarantee[sd]?)\b/i;
+// Checked on what was SPOKEN, independently of the filter (the S7 rerun passed a "be in touch soon" the old regex missed).
+const PROMISE = /\b(right away|immediately|within \d+|by tomorrow|will be (lifted|resolved|refunded|approved)|in most cases|i promise|guarantee[sd]?|soon|shortly)\b|\b(will|'ll)\b[^,;!?]{0,100}\b(today|tonight|tomorrow)\b/i;
 const toolsIn = (o: Outcome) => o.turns.flatMap((t) => t.tools);
 const allSpoken = (o: Outcome) => o.turns.map((t) => t.spoken).join(" ");
 
@@ -290,7 +291,7 @@ async function main(): Promise<number> {
 
   try {
     for (const [name, run] of tests) {
-      if (ONLY && !ONLY.includes(name.split(" ")[0]!.toUpperCase())) continue;
+      if (ONLY && !ONLY.some((o) => name.toUpperCase().startsWith(o))) continue; // name prefixes, e.g. S3,SEC OTHER
       if (!budgetLeft()) {
         results.push({ name, pass: false, why: `not run: cost cap $${COST_CAP_USD} reached` });
         continue;

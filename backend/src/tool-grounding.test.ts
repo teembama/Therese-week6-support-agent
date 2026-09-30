@@ -126,6 +126,14 @@ describe("outcome and timeline promises (every spoken type)", () => {
       "I'm not able to promise a timeline for the review.",
     ]) assert.deepEqual(f.check(s), [], s);
   });
+  it("drops the live S7 confirmation (follow-up 'tomorrow morning' after an email; 'be in touch soon')", () => {
+    const f = new SentenceFilter([], "Yes, that's correct. Tomorrow morning would be good for a callback.", { mode: "full", allowedYourNouns: ["name", "email", "preferred", "callback", "time", "account"] });
+    const kinds = (x: string) => f.check(x).map((g) => g.kind);
+    assert.deepEqual(kinds("A RelayPay support specialist will follow up with you at efua@accrastack.example tomorrow morning at your preferred time."), ["timeline_promise"]);
+    assert.deepEqual(kinds("They'll look into your restricted account and be in touch soon."), ["timeline_promise"]);
+    // Noting the caller's preferred time, in its own clause, is not a promise (the tool's own wording).
+    assert.deepEqual(kinds("A RelayPay support specialist will follow up with you at efua@accrastack.example, and your preferred time, tomorrow morning, has been noted."), []);
+  });
   it("a clause break ends a denial: 'I can't confirm it, but it will be lifted right away' is a promise", () => {
     const f = new SentenceFilter([], "", { mode: "promises" });
     assert.deepEqual(f.check("I can't confirm it, but it will be lifted right away.").map((x) => x.kind).sort(), ["outcome_promise", "timeline_promise"]);

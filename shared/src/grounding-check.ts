@@ -79,10 +79,11 @@ function strengtheningIn(s: string, source: string): string[] {
 function attributionsIn(s: string, source: string, caller: string, allowedNouns: ReadonlySet<string> = new Set()): string[] {
   if (has(source, "your")) return [];
   const out: string[] = [];
-  for (const m of s.matchAll(/\byour\s+(?:own\s+|specific\s+|particular\s+)?([a-z]+)(?:\s+[a-z]+)?/g)) {
-    const noun = m[1]!;
-    if (allowedNouns.has(noun)) continue;
-    if (!has(caller, `my ${noun}`) && !has(caller, `our ${noun}`)) out.push(m[0]);
+  for (const m of s.matchAll(/\byour\s+(?:own\s+|specific\s+|particular\s+)?([a-z]+)(?:\s+([a-z]+))?/g)) {
+    // Either word can be the noun: "your restricted account" is about the caller's account.
+    const words = [m[1]!, m[2]].filter((w): w is string => Boolean(w));
+    if (words.some((w) => allowedNouns.has(w))) continue;
+    if (!words.some((w) => has(caller, `my ${w}`) || has(caller, `our ${w}`))) out.push(m[0]);
   }
   return out;
 }
@@ -105,9 +106,10 @@ const TIMELINE_PROMISES: readonly RegExp[] = [
   /\bas soon as possible\b|\basap\b/,
   /\bwithin\s+(?:the\s+next\s+)?(?:\d+|a|an|a few|few|a couple of)\s*(?:-\s*\d+\s*|to\s+\d+\s+)?(?:business\s+|working\s+)?(?:minutes?|hours?|days?|weeks?)\b/,
   /\bby\s+(?:tomorrow|tonight|today|end of (?:the\s+)?(?:day|week)|close of business|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/,
-  /\b(?:will|'ll|should|shall|going to)\s+(?:\S+\s+){0,3}(?:later\s+)?(?:today|tonight|tomorrow)\b/,
+  // Anywhere in the same clause (live S7: "will follow up with you at <email> tomorrow morning").
+  /\b(?:will|'ll|should|shall|going to)\b[^,.;!?]{0,80}?\b(?:today|tonight|tomorrow)\b/,
   /\blater today\b/,
-  /\b(?:will|'ll)\s+(?:\S+\s+){0,4}(?:soon|shortly)\b/,
+  /\b(?:will|'ll)\b[^,.;!?]{0,80}?\b(?:soon|shortly)\b/, // live S7: "They'll look into your restricted account and be in touch soon"
   /\bin (?:the next )?\d+\s*(?:hours?|minutes?)\b/,
 ];
 
@@ -122,7 +124,9 @@ function deniedInClause(s: string, term: string): boolean {
 }
 
 /** Promise phrases in a normalised sentence that the evidence does not itself contain. */
-function promisesIn(s: string, source: string): Array<{ kind: "outcome_promise" | "timeline_promise"; term: string }> {
+function promisesIn(sentence: string, source: string): Array<{ kind: "outcome_promise" | "timeline_promise"; term: string }> {
+  // An email address's dots are not clause breaks.
+  const s = sentence.replace(/[^\s@]+@[^\s@]+\.[a-z]{2,}/g, "email");
   const out: Array<{ kind: "outcome_promise" | "timeline_promise"; term: string }> = [];
   const scan = (kind: "outcome_promise" | "timeline_promise", patterns: readonly RegExp[]) => {
     for (const re of patterns) {
