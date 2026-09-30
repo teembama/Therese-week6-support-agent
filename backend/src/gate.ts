@@ -53,6 +53,8 @@ const RECORD_NOUNS = ["account", "payout", "payouts", "transaction", "transactio
 export interface ObservedTools {
   /** True if the named tool (short name) returned status success at least once in this attempt. */
   succeeded(name: string): boolean;
+  /** True if the named tool was called at all in this attempt, whatever its status. */
+  called(name: string): boolean;
   /** Successful results as JSON text, for the sentence filter's evidence. */
   records(): string[];
 }
@@ -123,19 +125,26 @@ export type HeaderVerdict =
   | { ok: true; type: ReplyType; citedKbIds: string[]; validKbIds: string[]; unknownKbIds: string[]; tool: string | null }
   | { ok: false; reason: string };
 
-const NO_TOOLS: ObservedTools = { succeeded: () => false, records: () => [] };
+const NO_TOOLS: ObservedTools = { succeeded: () => false, called: () => false, records: () => [] };
 
 /**
  * Checks a parsed header against the turn's retrieved chunk ids and the tool results the backend
- * observed. A named tool must be a grounding tool that succeeded in this attempt, whatever the type:
- * a false claim blocks the message even if a chunk is also cited.
+ * observed. A false claim blocks the message even if a chunk is also cited.
+ * - answer / escalate: a named tool must be a grounding tool that SUCCEEDED in this attempt.
+ * - decline / clarify (D48): a named tool only has to have been CALLED in this attempt, whatever
+ *   its status: "I can't share details on that reference" after a denied lookup is exactly right,
+ *   and these types assert no facts from the result.
  */
 export function validateHeader(header: ParsedHeader, retrievedIds: ReadonlySet<string>, tools: ObservedTools = NO_TOOLS): HeaderVerdict {
   const validKbIds = header.kbIds.filter((id) => retrievedIds.has(id));
   const unknownKbIds = header.kbIds.filter((id) => !retrievedIds.has(id));
   if (header.tool !== null) {
-    if (!GROUNDING_TOOLS.has(header.tool)) return { ok: false, reason: `tool=${header.tool} is not a grounding tool` };
-    if (!tools.succeeded(header.tool)) return { ok: false, reason: `tool=${header.tool} claimed, but no successful ${header.tool} result in this attempt` };
+    if (header.type === "decline" || header.type === "clarify") {
+      if (!tools.called(header.tool)) return { ok: false, reason: `tool=${header.tool} claimed, but it was not called in this attempt` };
+    } else {
+      if (!GROUNDING_TOOLS.has(header.tool)) return { ok: false, reason: `tool=${header.tool} is not a grounding tool` };
+      if (!tools.succeeded(header.tool)) return { ok: false, reason: `tool=${header.tool} claimed, but no successful ${header.tool} result in this attempt` };
+    }
   }
   if (header.type === "answer" && validKbIds.length === 0 && header.tool === null) {
     if (header.kbIds.length === 0) return { ok: false, reason: "type=answer with kb=none and tool=none" };

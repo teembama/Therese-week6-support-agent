@@ -804,6 +804,25 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - **Filter:** "will … tomorrow" / "will … soon" in the same clause is filtered even when "tomorrow morning" is the caller's own words. Promise phrases are exempt only when the cited evidence contains them, and the caller's words are not evidence for promises (D41). The "noted as your preferred callback time" framing has no promise construction and is spoken.
 - **Unit test:** the live S7 shape. With the caller's "tomorrow morning" and a `create_escalation` record in evidence, "A representative will call you tomorrow morning." is filtered, while "I've noted tomorrow morning as your preferred callback time." and "A representative will follow up." are spoken.
 
+### D47. A gate violation mid-reply does not end the turn (2026-09-30)
+
+- **Live case (other-customer test):** the model spoke "I'd be happy to help, Amara." and then called a tool in the same message. The gate cut the rest of that message (as designed, D23), the agent loop continued, and the next message was empty. Because something had been spoken, no safe line was added, and the caller heard a dangling sentence.
+- **Rule:**
+  - The rest of the violating message is still dropped, and the agent loop continues. The NEXT message is spoken if it has its own valid header, which the gate already allowed.
+  - What changed: sentences spoken from a cut-off message no longer count as "the caller heard a reply". If nothing valid follows, the turn appends the safe line (blocked) or the fallback line (error), exactly as for a turn where only the filler was spoken.
+- **Prompt:** "Never write text before a tool call."
+- **Unit tests:** the live case followed by a valid answer, where the answer is spoken; and the live case followed by an empty message, where the final message is blocked.
+
+### D48. decline / clarify may name any tool that was called (2026-09-30)
+
+- **Live case:** after `lookup_transaction` returned `denied` / `not_available`, the model's correct reply "I can't share details on that transaction reference over the phone…" was blocked. Its header claimed `tool=lookup_transaction`, and D41 required a successful result, so the caller got the generic decline instead.
+- **Rule:**
+  - For `type=decline` and `type=clarify` only, a tool claim is valid if that tool was **called** in this attempt, whatever its status. Those types assert no facts from the result.
+  - A tool that was never called is still a false claim, and blocks the message.
+  - `type=answer` and `type=escalate` still require a successful grounding tool (or a cited chunk, for answer).
+- **Prompt:** a reply after a tool that did not succeed is `decline` or `clarify`, never `answer`. (The live header was `type=answer`, which stays blocked.)
+- **Unit test:** the live sentence under `type=decline` with a denied lookup is spoken; a never-called tool is still rejected; `type=answer` with the denied lookup is still rejected.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

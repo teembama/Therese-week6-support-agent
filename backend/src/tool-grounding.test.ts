@@ -17,6 +17,7 @@ const TXN_9001 = JSON.stringify({ status: "success", found: true, transaction_id
 function observed(results: Array<[string, string, string?]>): ObservedTools {
   return {
     succeeded: (name) => results.some(([n, s]) => n === name && s === "success"),
+    called: (name) => results.some(([n]) => n === name),
     records: () => results.filter(([, s]) => s === "success").map(([, , r]) => r ?? "{}"),
   };
 }
@@ -65,9 +66,52 @@ describe("type=answer grounding (verified from observed tool results, never the 
     assert.equal(validateHeader(h("[[type=answer; kb=none; tool=none]] x"), RETRIEVED).ok, false);
     assert.equal(validateHeader(h("[[type=escalate; kb=none; tool=none]] x"), RETRIEVED).ok, true);
   });
+  it("decline/clarify accept a tool that was CALLED, whatever its status (D48; live 'can't share details' case)", () => {
+    const denied = observed([["lookup_customer", "success", "{}"], ["lookup_transaction", "denied"]]);
+    const r = run(["[[type=decline; kb=none; tool=mcp__relaypay__lookup_transaction]] I can't share details on that transaction reference over the phone. ", "Would you like me to connect you with a RelayPay specialist who can help?"], denied, "Can you check transaction TXN-9003?");
+    assert.equal(r.outcome.kind, "final");
+    assert.equal(r.spoken.length, 2);
+    assert.equal(validateHeader(h("[[type=clarify; kb=none; tool=lookup_payout]] x"), RETRIEVED, observed([["lookup_payout", "not_found"]])).ok, true);
+    // Not called at all: still a false claim.
+    assert.equal(validateHeader(h("[[type=decline; kb=none; tool=lookup_payout]] x"), RETRIEVED, denied).ok, false);
+    // type=answer still needs success (the live header was type=answer and stays blocked).
+    assert.equal(validateHeader(h("[[type=answer; kb=none; tool=lookup_transaction]] x"), RETRIEVED, denied).ok, false);
+  });
   it("a ticket the backend saw created grounds the confirmation", () => {
     const v = validateHeader(h("[[type=answer; kb=none; tool=create_support_ticket]] x"), RETRIEVED, observed([["create_support_ticket", "success", "{}"]]));
     assert.equal(v.ok, true);
+  });
+});
+
+describe("gate violation mid-reply (D47)", () => {
+  it("live case: 'I'd be happy to help, Amara.' then tool_use, then a valid answer -> the answer is spoken", () => {
+    const customer = JSON.stringify({ status: "success", found: true, verified: true, customer_id: "CUS-1001", company_name: "LagosLedger", contact_name: "Amara Okafor", plan: "Growth", account_status: "active", kyc_status: "approved", requires_escalation: false });
+    const results: Array<[string, string, string?]> = [];
+    const g = new StreamingGate(RETRIEVED, undefined, { chunks: CHUNKS, callerText: "I am Amara from LagosLedger. Can you check my account?", tools: observed(results) });
+    // Message 1: text, then a tool call. The first sentence already went out; the rest is dropped.
+    g.start();
+    const first = g.text("[[type=clarify; kb=none; tool=none]] I'd be happy to help, Amara. Could you give me your");
+    const cut = g.toolUse();
+    assert.deepEqual(first, ["I'd be happy to help, Amara."]);
+    assert.equal(cut.violation, true);
+    assert.deepEqual(g.text(" account email?"), []);
+    assert.equal(g.end("tool_use").kind, "discarded");
+    // The tool runs; message 2 has its own valid header and is spoken.
+    results.push(["lookup_customer", "success", customer]);
+    g.start();
+    const spoken = g.text("[[type=answer; kb=none; tool=lookup_customer]] I've found your account, and it's active. ");
+    const end = g.end("end_turn");
+    assert.equal(end.kind, "final");
+    assert.deepEqual([...spoken, ...(end.kind === "final" ? end.speak : [])], ["I've found your account, and it's active."]);
+  });
+  it("if nothing valid follows, the final message is blocked (the turn then appends the safe line)", () => {
+    const g = new StreamingGate(RETRIEVED, undefined, { chunks: CHUNKS, callerText: "", tools: observed([]) });
+    g.start();
+    g.text("[[type=clarify; kb=none; tool=none]] I'd be happy to help, Amara. ");
+    g.toolUse();
+    g.end("tool_use");
+    g.start();
+    assert.equal(g.end("end_turn").kind, "blocked"); // empty final message, as in the live run
   });
 });
 

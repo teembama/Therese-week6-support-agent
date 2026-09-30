@@ -251,8 +251,14 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     let killedPids: number[] = [];
     let filterStats = null as StreamingGate["filterStats"] | null; // set inside a closure
     let fillerSpoken = false;
-    /** True once the caller heard something other than the filler line (a real reply or fixed line). */
-    const spokeContent = () => spokenParts.length > (fillerSpoken ? 1 : 0);
+    /** Sentences spoken from a message that was then cut off by a tool call (gate violation). */
+    let cutOffParts = 0;
+    /**
+     * True once the caller heard a real reply or fixed line: not just the filler, and not just the
+     * start of a message that a tool call cut off (D47). If only those were spoken, a turn that
+     * ends without a valid reply still gets the safe line, instead of leaving a dangling sentence.
+     */
+    const spokeContent = () => spokenParts.length > (fillerSpoken ? 1 : 0) + cutOffParts;
 
     const begin = (source: TurnResult["source"]) => {
       if (sinkBegun) return;
@@ -346,6 +352,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     const successRecords: string[] = [];
     const observedTools: ObservedTools = {
       succeeded: (name) => toolStatuses.get(name)?.includes("success") ?? false,
+      called: (name) => toolStatuses.has(name),
       records: () => [...successRecords],
     };
     let gate: StreamingGate | null = null;
@@ -449,6 +456,9 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
             }
             const t = gate.toolUse();
             if (t.violation) {
+              // The rest of this message is dropped; the agent loop continues and the NEXT message
+              // is spoken if it has its own valid header (D47).
+              cutOffParts += t.spokenBeforeToolUse.length;
               const sent = summarize(t.spokenBeforeToolUse.join(" "), 300);
               notes.push(`gate_violation: tool_use after speech had started; already sent: ${sent}`);
               console.log(JSON.stringify({ event: "gate_violation", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, already_sent: sent }));
