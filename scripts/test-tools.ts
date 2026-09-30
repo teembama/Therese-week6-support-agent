@@ -82,6 +82,22 @@ async function main(): Promise<number> {
     check(txnUnverified["found"] === true && noAmounts(txnUnverified), "TXN-9001 unverified -> amount and currency ABSENT");
     check(txnUnverified["status"] === "success" && txnUnverified["transaction_status"] === "processing", "tool status 'success' is not overwritten by the record's own status (transaction_status)");
 
+    const malformed = await call("lookup_transaction", { transaction_id: "TXN-12" }, "invalid_input");
+    check(malformed["status"] === "invalid_input", "malformed ID TXN-12 -> invalid_input");
+    const unknown = await call("lookup_transaction", { transaction_id: "TXN-0000" }, "not_found");
+    check(unknown["status"] === "not_found" && unknown["found"] === false, "unverified: unknown TXN-0000 -> found:false");
+
+    console.log("\n== Payout before verification");
+    const payout = await call("lookup_payout", { payout_id: "PAY-7002" }, "success");
+    check(payout["status"] === "success" && payout["requires_escalation"] === true && payout["escalation_category"] === "compliance", "PAY-7002 -> requires_escalation, category compliance");
+    check(noAmounts(payout), "PAY-7002 (5300 GBP) -> amount and currency ABSENT");
+    check(payout["failure_reason"] === "The payout is under review." && !String(payout["support_summary"]).includes("undefined"), "PAY-7002 failure_reason is the customer-safe text");
+    const byTxn = await call("lookup_payout", { transaction_id: "TXN-9004" }, "success");
+    check(byTxn["payout_id"] === "PAY-7003" && byTxn["failure_reason"] === "The beneficiary details need review.", "lookup by transaction_id TXN-9004 -> PAY-7003");
+    check(!/"(amount|currency)"|800|USD/.test(JSON.stringify(byTxn)), "PAY-7003 (800 USD) -> amount and currency ABSENT");
+    const noPayout = await call("lookup_payout", { payout_id: "PAY-0000" }, "not_found");
+    check(noPayout["found"] === false, "unverified: unknown PAY-0000 -> found:false");
+
     const verified = await call("lookup_customer", { contact_name: "Amara", company_name: "Lagos Ledger" }, "success");
     const verifiedText = JSON.stringify(verified);
     check(verified["verified"] === true && verified["customer_id"] === "CUS-1001", "'Amara' + 'Lagos Ledger' verifies CUS-1001");
@@ -90,27 +106,21 @@ async function main(): Promise<number> {
     const { data: conv } = await db.from("conversations").select("verified_customer_id").eq("conversation_id", conversationId).single();
     check((conv as Structured | null)?.["verified_customer_id"] === "CUS-1001", "conversations.verified_customer_id = CUS-1001");
 
-    console.log("\n== Transaction after verification");
+    console.log("\n== After verification: ownership rule (D44)");
     const txnVerified = await call("lookup_transaction", { transaction_id: "txn 9001" }, "success");
-    check(txnVerified["found"] === true && noAmounts(txnVerified), "verified as CUS-1001 (owner) -> amount and currency still ABSENT");
+    check(txnVerified["found"] === true && noAmounts(txnVerified), "own TXN-9001 -> success, amount and currency still ABSENT");
     check(txnVerified["past_estimated_arrival"] === true && txnVerified["type"] === "outgoing payout", "past_estimated_arrival true; type mapped from transaction_type");
-    const otherTxn = await call("lookup_transaction", { transaction_id: "TXN-9003" }, "success");
-    check(noAmounts(otherTxn) && otherTxn["requires_escalation"] === true && otherTxn["escalation_category"] === "compliance", "another customer's TXN-9003 -> no amount; review required -> compliance escalation");
-    const malformed = await call("lookup_transaction", { transaction_id: "TXN-12" }, "invalid_input");
-    check(malformed["status"] === "invalid_input", "malformed ID TXN-12 -> invalid_input");
-    const unknown = await call("lookup_transaction", { transaction_id: "TXN-0000" }, "not_found");
-    check(unknown["status"] === "not_found" && unknown["found"] === false, "unknown TXN-0000 -> found:false");
-
-    console.log("\n== Payout");
-    const payout = await call("lookup_payout", { payout_id: "PAY-7002" }, "success");
-    check(payout["status"] === "success" && payout["payout_status"] === "review required" && payout["requires_escalation"] === true && payout["escalation_category"] === "compliance", "PAY-7002 -> requires_escalation, category compliance");
-    check(noAmounts(payout), "PAY-7002 (5300 GBP) -> amount and currency ABSENT");
-    check(payout["failure_reason"] === "The payout is under review." && !String(payout["support_summary"]).includes("undefined"), "PAY-7002 failure_reason is the customer-safe text");
-    const byTxn = await call("lookup_payout", { transaction_id: "TXN-9004" }, "success");
-    check(byTxn["payout_id"] === "PAY-7003" && byTxn["failure_reason"] === "The beneficiary details need review.", "lookup by transaction_id TXN-9004 -> PAY-7003");
-    check(!/"(amount|currency)"|800|USD/.test(JSON.stringify(byTxn)), "PAY-7003 (800 USD) -> amount and currency ABSENT");
-    const noPayout = await call("lookup_payout", { payout_id: "PAY-0000" }, "not_found");
-    check(noPayout["found"] === false, "unknown PAY-0000 -> found:false");
+    const otherTxn = await call("lookup_transaction", { transaction_id: "TXN-9003" }, "denied");
+    const noRecordFields = (x: Structured) => !/transaction_status|payout_status|support_summary|failure_reason|scheduled_for|estimated_arrival|review|compliance|TXN-9003|PAY-7002/i.test(JSON.stringify(x));
+    check(otherTxn["status"] === "denied" && otherTxn["reason"] === "not_available" && noRecordFields(otherTxn), "CUS-1003's TXN-9003 -> denied not_available, no status or summary");
+    const unknownVerified = await call("lookup_transaction", { transaction_id: "TXN-0000" }, "denied");
+    check(JSON.stringify(unknownVerified) === JSON.stringify(otherTxn), "verified: unknown TXN-0000 gets the identical result (existence not confirmed)");
+    const otherPayout = await call("lookup_payout", { payout_id: "PAY-7002" }, "denied");
+    check(otherPayout["status"] === "denied" && otherPayout["reason"] === "not_available" && noRecordFields(otherPayout), "CUS-1003's PAY-7002 -> denied not_available, no status or summary");
+    const otherPayoutByTxn = await call("lookup_payout", { transaction_id: "TXN-9004" }, "denied");
+    check(JSON.stringify(otherPayoutByTxn) === JSON.stringify(otherPayout), "CUS-1004's payout via TXN-9004 -> the same denial");
+    const ownPayout = await call("lookup_payout", { payout_id: "PAY-7001" }, "success");
+    check(ownPayout["status"] === "success" && ownPayout["payout_id"] === "PAY-7001", "own PAY-7001 -> success");
 
     console.log("\n== Support ticket");
     const t1 = await call("create_support_ticket", { category: "payout", summary: "Caller asks why contractor payout PAY-7002 is on hold", payout_id: "PAY-7002", customer_id: "CUS-1003", priority: "low" }, "success");

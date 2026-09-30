@@ -89,6 +89,24 @@ export function serialised<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/**
+ * Ownership rule (D44). A reference works as a bearer token only while no identity is
+ * established. Once the conversation is verified, a record that belongs to another customer is
+ * refused with exactly the same result as a reference that doesn't exist, so the answer never
+ * confirms that the record exists and carries no status or summary.
+ */
+export function notAvailable(ref: string, detail: string): ToolOutcome {
+  return {
+    status: "denied",
+    result: {
+      found: false,
+      reason: "not_available",
+      message: "Details for this reference can't be shared on this call. Tell the caller you can't share details on that reference, and offer to connect them with a RelayPay specialist.",
+    },
+    resultSummary: `denied: not_available ${ref} (${detail})`,
+  };
+}
+
 /** Today's date (UTC) as YYYY-MM-DD, for comparisons with DATE columns. */
 export function todayUtc(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);

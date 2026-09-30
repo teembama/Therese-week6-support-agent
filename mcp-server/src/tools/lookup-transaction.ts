@@ -1,7 +1,7 @@
 import { normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, parseArgs, todayUtc } from "./common.js";
+import { invalid, notAvailable, parseArgs, todayUtc, verifiedCustomerId } from "./common.js";
 
 export const name = "lookup_transaction";
 
@@ -18,6 +18,8 @@ export const inputSchema = z.object({
 // Amount and currency are never selected, so they can never be returned or spoken (D40).
 interface TransactionRow {
   transaction_id: string;
+  /** Read only for the ownership rule (D44); never returned. */
+  customer_id: string;
   transaction_type: string;
   status: string;
   estimated_arrival: string | null;
@@ -35,16 +37,20 @@ export function transactionEscalation(status: string): { requires_escalation: bo
   return { requires_escalation: false };
 }
 
-export const handler = withToolLogging(name, "Look up a transaction's customer-safe status", async (args, { db }): Promise<ToolOutcome> => {
+export const handler = withToolLogging(name, "Look up a transaction's customer-safe status", async (args, { db, ctx }): Promise<ToolOutcome> => {
   const parsed = parseArgs(inputSchema, args, "transaction_id must be a string like TXN-9001.");
   if (!parsed.ok) return parsed.outcome;
   const id = normaliseReference(parsed.data.transaction_id, "TXN");
   if (!id) return invalid("transaction_id must be TXN- followed by four digits, e.g. TXN-9001. Ask the caller to repeat it.");
 
   const { data, error } = await db.from("transactions")
-    .select("transaction_id, transaction_type, status, estimated_arrival, support_summary")
+    .select("transaction_id, customer_id, transaction_type, status, estimated_arrival, support_summary")
     .eq("transaction_id", id).maybeSingle();
   if (error) throw new Error(`transactions read failed (${error.code}): ${error.message}`);
+  const verified = await verifiedCustomerId(db, ctx.conversationId);
+  if (verified && (!data || (data as TransactionRow).customer_id !== verified)) {
+    return notAvailable(id, data ? `owned by another customer; conversation verified as ${verified}` : "no such record; conversation verified");
+  }
   if (!data) {
     return { status: "not_found", result: { found: false, transaction_id: id, message: "No transaction with this reference. Ask the caller to check it." }, resultSummary: `not_found ${id}` };
   }

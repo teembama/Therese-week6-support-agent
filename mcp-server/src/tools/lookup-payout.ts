@@ -1,7 +1,7 @@
 import { normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, parseArgs } from "./common.js";
+import { invalid, notAvailable, parseArgs, verifiedCustomerId } from "./common.js";
 
 export const name = "lookup_payout";
 
@@ -18,6 +18,8 @@ export const inputSchema = z.object({
 
 interface PayoutRow {
   payout_id: string;
+  /** Read only for the ownership rule (D44); never returned. */
+  customer_id: string;
   transaction_id: string;
   status: string;
   scheduled_for: string | null;
@@ -51,7 +53,7 @@ export function payoutSupportSummary(status: string, transactionSummary: string 
   return transactionSummary ? `${base} ${transactionSummary}` : base;
 }
 
-export const handler = withToolLogging(name, "Look up a payout by payout or transaction reference", async (args, { db }): Promise<ToolOutcome> => {
+export const handler = withToolLogging(name, "Look up a payout by payout or transaction reference", async (args, { db, ctx }): Promise<ToolOutcome> => {
   const parsed = parseArgs(inputSchema, args, "payout_id and transaction_id must be short strings.");
   if (!parsed.ok) return parsed.outcome;
   const { payout_id, transaction_id } = parsed.data;
@@ -61,13 +63,17 @@ export const handler = withToolLogging(name, "Look up a payout by payout or tran
   if (payout_id && !payoutId) return invalid("payout_id must be PAY- followed by four digits, e.g. PAY-7001.");
   if (transaction_id && !transactionId) return invalid("transaction_id must be TXN- followed by four digits, e.g. TXN-9001.");
 
-  let q = db.from("payouts").select("payout_id, transaction_id, status, scheduled_for, failure_reason, transactions!payouts_transaction_id_fkey(support_summary)"); // two FKs to transactions: name the plain one
+  let q = db.from("payouts").select("payout_id, customer_id, transaction_id, status, scheduled_for, failure_reason, transactions!payouts_transaction_id_fkey(support_summary)"); // two FKs to transactions: name the plain one
   if (payoutId) q = q.eq("payout_id", payoutId);
   if (transactionId) q = q.eq("transaction_id", transactionId); // both given: they must agree
   const { data, error } = await q.order("payout_id").limit(1);
   if (error) throw new Error(`payouts read failed (${error.code}): ${error.message}`);
   const p = ((data ?? []) as unknown as PayoutRow[])[0];
   const ref = [payoutId, transactionId].filter(Boolean).join(" / ");
+  const verified = await verifiedCustomerId(db, ctx.conversationId);
+  if (verified && (!p || p.customer_id !== verified)) {
+    return notAvailable(ref, p ? `owned by another customer; conversation verified as ${verified}` : "no such record; conversation verified");
+  }
   if (!p) {
     return { status: "not_found", result: { found: false, message: "No payout matches this reference. Ask the caller to check it." }, resultSummary: `not_found ${ref}` };
   }

@@ -768,6 +768,22 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - a second escalation in another category is `denied` / `conversation_write_limit`;
   - the rows are 2 plain tickets plus 1 escalation with its ticket.
 
+### D44. Ownership rule: a reference is a bearer token only until an identity is established (2026-09-30)
+
+- **The leak:** in `test:agent`, a caller verified as CUS-1001 asked about TXN-9003 and heard its status ("under compliance review"). TXN-9003 belongs to CUS-1003.
+- **Rule (`lookup_transaction`, `lookup_payout`):**
+  - **Conversation not verified:** a reference-only lookup returns the customer-safe fields, as before. Scenario 4 still passes: knowing a reference is the only credential there is.
+  - **Conversation verified, and the record belongs to a different customer:** `denied`, `reason: not_available`. No status, summary or date is returned, and the result doesn't confirm the record exists.
+    - A verified caller asking about a reference that doesn't exist gets the byte-identical result, so the tool can't be used to probe which references exist.
+    - The `tool_calls` row records the real reason, for the audit.
+  - The agent says it can't share details on that reference and offers a specialist.
+- **Why:** before anyone has proven an identity, a reference is all we have, and the fields are customer-safe. Once a caller has proven to be customer A, asking about customer B's record is not a normal support question. It is a misuse signal (a shared phone, a guessed reference, social engineering), so the proven identity wins.
+- **Ownership is read from the database:** `transactions.customer_id` / `payouts.customer_id` against `conversations.verified_customer_id`. Never from tool input.
+- **Tests (`test:tools`):**
+  - unverified TXN-9001 → success;
+  - verified CUS-1001: own TXN-9001 → success; TXN-9003 → denied with no status or summary; unknown TXN-0000 → the identical denial;
+  - PAY-7002, and PAY-7003 via TXN-9004 → denied; own PAY-7001 → success.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
