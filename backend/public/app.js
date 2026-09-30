@@ -22,6 +22,11 @@ let lastEndedReason = null;
 let callStartedAt = 0;
 let tick = null;
 let warned = false;
+// Set when the browser blocks something by Content Security Policy (e.g. the Daily bundle).
+let cspBlocked = null;
+document.addEventListener("securitypolicyviolation", (e) => {
+  cspBlocked = `${e.effectiveDirective || e.violatedDirective || "csp"}`;
+});
 
 function setState(state, label, detail) {
   ui.icon.dataset.state = state;
@@ -29,9 +34,10 @@ function setState(state, label, detail) {
   ui.status.textContent = detail;
 }
 
-function showError(title, steps) {
+function showError(title, steps, code) {
   ui.errorTitle.textContent = title;
-  ui.errorSteps.replaceChildren(...steps.map((s) => Object.assign(document.createElement("li"), { textContent: s })));
+  const items = code ? [...steps, `Error code for support: ${code}`] : steps;
+  ui.errorSteps.replaceChildren(...items.map((s) => Object.assign(document.createElement("li"), { textContent: s })));
   ui.error.hidden = false;
 }
 
@@ -70,14 +76,20 @@ const ERRORS = {
   notConfigured: ["Voice calls aren't set up on this server yet.", [
     "Please try again later.",
   ]],
-  sdkLoad: ["The voice component didn't load.", [
-    "Your network or a browser extension may be blocking it. Try another network, or disable ad blockers for this page.",
-    "Reload the page and try again.",
+  component: ["The call couldn't start because the voice component failed to load.", [
+    "This is a problem on our side, not your microphone or network.",
+    "Please try again later.",
   ]],
   generic: ["Something went wrong with the call.", [
     "Reload the page and try again.",
   ]],
 };
+
+/** A short, non-sensitive code for support: the SDK's error type or name, or "unknown". */
+function errorCode(err) {
+  const raw = err?.type || err?.error?.type || err?.error?.name || err?.name || "unknown";
+  return String(raw).toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 40) || "unknown";
+}
 
 function classify(err) {
   const text = (() => {
@@ -87,6 +99,8 @@ function classify(err) {
       return String(err);
     }
   })();
+  // The component itself failed (blocked by CSP, bundle or module failed to load): our side.
+  if (cspBlocked || /Content Security Policy|unsafe-eval|EvalError|call-machine|bundle|dynamically imported module|Failed to load module|ChunkLoadError|Loading chunk/i.test(text)) return "component";
   if (/NotAllowedError|SecurityError|permission (denied|dismissed)|not.*allowed.*microphone|microphone.*permission/i.test(text)) return "micBlocked";
   if (/setSinkId|sinkId|output device|audiooutput|NotFoundError|NotReadableError|OverconstrainedError|AbortError|device/i.test(text)) return "noDevice";
   if (/Key doesn't allow|allowed origin|origin|\b40[13]\b|Unauthorized|Forbidden/i.test(text)) return "notAllowed";
@@ -94,15 +108,17 @@ function classify(err) {
   return "generic";
 }
 
-function fail(kind) {
+function fail(kind, err) {
   const [title, steps] = ERRORS[kind] ?? ERRORS.generic;
+  // Only the truly unknown case shows a code, so support can tell errors apart.
+  const code = kind === "generic" ? errorCode(err) : null;
   stopTimer();
   if (inCall && vapi) {
     try { vapi.stop(); } catch { /* already stopped */ }
   }
   inCall = false;
   setState("error", "Error", title);
-  showError(title, steps);
+  showError(title, steps, code);
   setButtons({ start: Boolean(vapi && assistantId), end: false, startText: "Try again" });
 }
 
@@ -170,11 +186,12 @@ function attach(v) {
     setButtons({ start: true, end: false, startText: "Start a new call" });
     ui.start.focus();
   });
-  v.on("error", (e) => fail(classify(e)));
+  v.on("error", (e) => fail(classify(e), e));
 }
 
 async function startCall() {
   clearError();
+  cspBlocked = null; // only violations during THIS attempt count
   endedByUser = false;
   lastEndedReason = null;
   setButtons({ start: false, end: false });
@@ -185,14 +202,14 @@ async function startCall() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((t) => t.stop());
   } catch (err) {
-    return fail(classify(err));
+    return fail(classify(err), err);
   }
   setState("connecting", "Connecting", "Connecting you to RelayPay support…");
   setButtons({ start: false, end: true });
   try {
     await vapi.start(assistantId);
   } catch (err) {
-    fail(classify(err));
+    fail(classify(err), err);
   }
 }
 
@@ -223,7 +240,7 @@ async function init() {
   try {
     Vapi = (await import(SDK_URL)).default;
   } catch {
-    return fail("sdkLoad");
+    return fail("component");
   }
   assistantId = config.vapiAssistantId;
   vapi = new Vapi(config.vapiPublicKey);

@@ -20,7 +20,10 @@ const FILES: Record<string, { file: string; type: string }> = {
 
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' https://esm.sh https://*.daily.co",
+  // 'unsafe-eval' ONLY because Daily's bundle (loaded via the pinned Vapi SDK) calls eval: the first
+  // live call was blocked by exactly this (CSP report: script-src, blocked eval, source esm.sh).
+  // No 'unsafe-inline'; everything else unchanged (D55).
+  "script-src 'self' 'unsafe-eval' https://esm.sh https://*.daily.co",
   "style-src 'self'",
   "img-src 'self' data:",
   "connect-src 'self' https: wss:",

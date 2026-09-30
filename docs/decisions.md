@@ -959,6 +959,30 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - **Risk:** if Vapi ever waited on one of these messages (e.g. `transfer-destination-request`, `tool-calls`), our 200 without a body would be the answer. We use neither transfers nor Vapi tools (D8), so no call path depends on them.
 - **To revisit:** if a private key is ever available, set `serverMessages: ["end-of-call-report"]`.
 
+### D55. The Vapi/Daily SDK needs 'unsafe-eval'; allowed in script-src only (2026-09-30)
+
+- **What happened:** the first live call from the deployed page failed before starting.
+  - Chrome reported "Content Security Policy blocks the use of eval" in `daily-esm.js`.
+  - Our CSP report route recorded exactly **2× `script-src`, blocked `eval`, source `esm.sh`** and nothing else.
+  - The page showed the generic error.
+  - This was the untested gap noted in D52: Daily's call bundle only runs when a call starts.
+- **Change:** `script-src 'self' 'unsafe-eval' https://esm.sh https://*.daily.co`.
+  - **Only** `'unsafe-eval'` was added, because it's the only thing the reports showed. No `'unsafe-inline'`, and every other directive is unchanged.
+  - If the retry reports another block (worker, blob, wasm, media or connect), add only that one and list it here.
+- **Trade-off, accepted:**
+  - `'unsafe-eval'` lets any script already running on the page turn a string into code. So it widens what a script-injection bug could do.
+  - Mitigations:
+    - there are no inline scripts, and `'unsafe-inline'` stays off, so injected markup can't run;
+    - the page has no user-generated content: it renders only our static text, the server's state strings, and error text from fixed tables;
+    - script sources are limited to `'self'`, esm.sh and Daily;
+    - the SDK is pinned: `@vapi-ai/web@2.7.1` with `@daily-co/daily-js@0.87.0`;
+    - `frame-ancestors 'none'`, `base-uri 'none'` and `form-action 'none'`.
+  - The vendor requires eval; the alternative is no web calls.
+- **Error messages (the page):**
+  - A component or bundle load failure, or a failure while the browser reported a CSP violation in this attempt, now says: "The call couldn't start because the voice component failed to load. This is a problem on our side, not your microphone or network."
+  - The microphone, device, network, origin and not-configured messages are unchanged.
+  - The generic "Something went wrong" appears only for truly unknown errors, with "Error code for support: <sdk error type>" (lower-case, 40 characters at most).
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
