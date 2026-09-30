@@ -1,0 +1,14 @@
+# Never in the image or the upload: secrets, local builds, git, docs.
+.env
+.env.*
+!.env.example
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+*.log
+.git
+.vscode
+.idea
+docs
+assets
+db/tests

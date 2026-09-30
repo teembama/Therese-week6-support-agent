@@ -42,6 +42,9 @@ export function cliEnv(source: NodeJS.ProcessEnv = process.env): Record<string, 
     // request that generates a session title. A/B-measured: p50 first token 2855 -> 1960ms and
     // cost per turn halved (docs/latency.md, D25).
     CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
+    // No automatic memory files for a stateless per-turn agent (the CLI would otherwise write
+    // memory under HOME in the container).
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
   };
 }
 
