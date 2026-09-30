@@ -118,6 +118,8 @@ export const SOCIAL_LINES = {
   thanks: "You're welcome. Is there anything else I can help you with?",
   goodbye: "Thanks for calling RelayPay. Goodbye.",
   greeting: "Hello, how can I help you with RelayPay today?",
+  /** The caller declined an offer (a ticket, a callback); NOT a goodbye. Asks "anything else?". */
+  declined_offer: "No problem. Is there anything else I can help you with?",
 } as const;
 
 /** Spoken when the gate blocks a reply. */

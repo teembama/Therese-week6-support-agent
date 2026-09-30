@@ -1029,3 +1029,22 @@ Seed enum values all fall within the schema guide's lists. `payouts.status` valu
   - The docs' tool-calling integration page instead shows `url: "https://custom-llm-url/chat/completions"`.
   - We follow the base-URL reading (D4). The first live request confirms which is right; record the result here.
 - **X2. Vapi streaming.** The docs recommend streaming, and one page implies a JSON response is accepted. Neither `stream` nor `max_tokens` is documented as a request field. We stream SSE `chat.completion.chunk` lines ending with `data: [DONE]`.
+
+### D56. Declining an offer is not goodbye: `declined_offer` social intent and a guard on the model's goodbye (2026-09-30)
+
+- **What happened:** live call `01a0f455…` from the deployed page. Turn 1 offered a ticket ("…Would you like me to log a ticket for the support team to look into this?"), and the caller said "No, thank you."
+  - The fast path correctly returned null: a decline outside the "anything else?" context went to the model.
+  - The **model** chose `intent=goodbye` (the turn row: `model = claude-haiku-4-5`, cost $0.0017, no `fast_path` note), following the D35 prompt rule "if you just asked whether there is anything else and the caller declines… choose goodbye". So the goodbye line was spoken to someone who had only declined a ticket.
+- **Fix, in three places:**
+  - **Fast path** (`social-fast-path.ts`): a whole-message short decline ("no", "no thanks", "no thank you", "I'm good", …) is
+    - `goodbye` ONLY when the previous assistant line is one of the fixed "anything else?" lines (thanks or declined_offer);
+    - `declined_offer` when the previous line asked a question (ends in "?") or made an offer ("would you like", "if you'd like", "do you want");
+    - otherwise, including no previous line or a plain statement, it goes to the model.
+    - Clear goodbyes ("bye", "no, that's all", "nothing else") still end the call in any context, as in D35.
+  - **New fixed line** `SOCIAL_LINES.declined_offer`: "No problem. Is there anything else I can help you with?" It sets up the anything-else context, so the next "no" is a goodbye. It contains no "goodbye", so it can't trigger the end-call phrase.
+  - **Prompt:** the goodbye rule now requires the caller to say goodbye, or the last line to be exactly "Is there anything else I can help you with?". Declining a ticket, callback or specialist is `intent=declined_offer`.
+  - **Guard in the gate** (the model is not trusted to end the call): a model `intent=goodbye` stands only if `goodbyeAllowed(caller message, previous agent line)`, meaning the previous line was a fixed "anything else?" line, or the caller's message contains bye / goodbye / that's all / that's it / nothing else. Otherwise the gate speaks the declined_offer line.
+- **Tests:**
+  - `social-fast-path.test.ts`: after the live ticket offer, "No, thank you." → declined_offer (and the line has no "goodbye"); "No thanks", "No", "I'm good" likewise; an offer without "?" ("…if you'd like.") likewise; after "anything else?" → goodbye; after the declined_offer line → goodbye; a bare "no" with no context → model; clear goodbyes after an offer still end the call; `goodbyeAllowed` cases.
+  - `gate.test.ts`: the declined_offer header speaks its line; the guard turns a model goodbye without context into the declined_offer line, and keeps it in context.
+- **End-call phrase (D36) still unverified live:** this call ended `customer-ended-call`, about 10 s after the goodbye line (turn received 22:01:25.7, spoken by about 22:01:27; ended 22:01:37). No call has ever ended with `assistant-said-end-call-phrase`. Either the phrase is not set on the assistant, or Vapi does not match it on Custom LLM output. Check the assistant's End Call Phrases in the dashboard.

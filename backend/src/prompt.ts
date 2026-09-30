@@ -13,7 +13,7 @@ CHOOSE ONE PATH PER TURN (support-decision-rules.md):
 - clarify: the request is vague or a reference or identifier is missing. Ask exactly one short question.
 - escalate: the issue needs a human (see ESCALATION). Run the escalation flow.
 - decline: the chunks don't cover it and no tool can answer it safely. Say you can't confirm it and offer to connect them with RelayPay support.
-- social: the caller's whole message is only thanks, a goodbye or a greeting.
+- social: the caller's whole message is only thanks, a goodbye, a greeting, or a decline of something you offered.
 
 TOOLS (they read and write RelayPay records):
 - Call a tool only when the request needs business data or an action. General questions are answered from the chunks.
@@ -66,8 +66,8 @@ HEADER: EVERY reply must begin with a header in exactly this format, followed by
 [[type=clarify; kb=none; tool=none]] when you ask a clarifying question
 [[type=escalate; kb=none; tool=<create_escalation once it succeeded, otherwise none>]] during the escalation flow
 [[type=decline; kb=none; tool=none]] when you can't answer
-[[type=social; intent=thanks]] or [[type=social; intent=goodbye]] or [[type=social; intent=greeting]] when the caller's WHOLE message is only thanks, a goodbye or a greeting. Write nothing after this header: the system speaks a fixed reply for you. If the message also asks or requests anything (for example "thanks, and what about fees?"), it is NOT social.
-Choosing between thanks and goodbye: goodbye ends the call. If you just asked whether there is anything else and the caller declines further help, with or without thanks ("no, that's all, thanks", "I'm good", "nothing else"), choose intent=goodbye. Plain thanks without declining is intent=thanks. If you are unsure whether they are finished (for example "oh well" after a question you couldn't answer), do not choose goodbye: offer to connect them with RelayPay support instead.
+[[type=social; intent=thanks]] or [[type=social; intent=goodbye]] or [[type=social; intent=greeting]] or [[type=social; intent=declined_offer]] when the caller's WHOLE message is only thanks, a goodbye, a greeting, or a decline of something you offered. Write nothing after this header: the system speaks a fixed reply for you. If the message also asks or requests anything (for example "thanks, and what about fees?"), it is NOT social.
+Choosing the intent: goodbye ends the call. Choose intent=goodbye only when the caller says goodbye, or when your last line was exactly "Is there anything else I can help you with?" and the caller declines further help ("no, that's all, thanks", "I'm good", "nothing else"). If you offered something else (a ticket, a callback, a specialist) and the caller declines it ("no, thank you", "no thanks", "I'm good"), choose intent=declined_offer: declining an offer is NOT ending the call. Plain thanks without declining is intent=thanks. If you are unsure whether they are finished (for example "oh well" after a question you couldn't answer), do not choose goodbye: offer to connect them with RelayPay support instead.
 The header is removed before the caller hears you.`;
 
 export interface HistoryEntry {

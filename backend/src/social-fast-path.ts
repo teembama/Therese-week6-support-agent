@@ -5,7 +5,11 @@
 // Design principle: goodbye ENDS the call (Vapi end-call phrase, D36), so a false goodbye (hanging
 // up on a caller who still has a question) is worse than asking "anything else?" once more. The
 // fast path therefore only fires on clear phrases; short declines like a bare "no" count as
-// goodbye ONLY right after the backend asked "anything else?" (the thanks line).
+// goodbye ONLY right after the backend's fixed "anything else?" line (thanks or declined_offer).
+// After any other question or offer (a ticket, a callback), the same decline declines THAT offer:
+// the backend speaks the declined_offer line, which asks "anything else?" and so sets up the
+// goodbye context for the next reply (live call 01a0f455…: "No, thank you." to a ticket offer
+// was taken as goodbye and hung up).
 
 import { SOCIAL_LINES } from "./config.js";
 import type { SocialIntent } from "./gate.js";
@@ -24,7 +28,7 @@ const THANKS = [
 const GOODBYE = ["bye", "goodbye", "good bye", "bye bye"];
 const DONE = ["that's all", "no that's all", "nothing else", "no nothing else"];
 
-/** Short declines that mean goodbye ONLY right after the backend asked "anything else?". */
+/** Short declines: goodbye right after "anything else?", declined_offer after another question or offer. */
 const DECLINE_AFTER_ANYTHING_ELSE = [
   "no", "nah", "nope", "i'm good", "no i'm good", "nah i'm good", "all good", "that's all",
   "not really", "no thanks", "no thank you", "nothing else", "no nothing else", "no that's all",
@@ -46,7 +50,18 @@ const CLEAR_GOODBYE = new RegExp(`^(?:(?:${THANKS_RE}) )?(?:${alt([...GOODBYE, .
 const THANKS_THEN_BYE = new RegExp(`^(?:${THANKS_RE}) (?:${alt(GOODBYE)})$`);
 const DECLINE_IN_CONTEXT = new RegExp(`^(?:(?:${THANKS_RE}) )?(?:${alt(DECLINE_AFTER_ANYTHING_ELSE)})(?: (?:${THANKS_RE}))?$`);
 
-const ANYTHING_ELSE = normalise(SOCIAL_LINES.thanks);
+/** The fixed lines that ask "anything else?"; only after one of these can a decline be a goodbye. */
+const ANYTHING_ELSE_LINES = new Set([normalise(SOCIAL_LINES.thanks), normalise(SOCIAL_LINES.declined_offer)]);
+
+function askedAnythingElse(previousAgentLine: string | null): boolean {
+  return previousAgentLine !== null && ANYTHING_ELSE_LINES.has(normalise(previousAgentLine));
+}
+
+/** The agent's line asked a question or made an offer (a ticket, a callback, a specialist). */
+function askedOrOffered(previousAgentLine: string | null): boolean {
+  if (previousAgentLine === null) return false;
+  return /\?\s*$/.test(previousAgentLine) || /\b(?:would you like|if you'd like|if you would like|do you want)\b/.test(normalise(previousAgentLine));
+}
 
 /**
  * The social intent for this caller message, or null to send it to the model.
@@ -56,8 +71,20 @@ export function matchSocial(callerText: string, previousAgentLine: string | null
   const s = normalise(callerText);
   if (!s) return null; // e.g. "All right." alone: no intent, let the model (or the fuller request) decide
   if (CLEAR_GOODBYE.test(s) || THANKS_THEN_BYE.test(s)) return "goodbye";
-  const askedAnythingElse = previousAgentLine !== null && normalise(previousAgentLine) === ANYTHING_ELSE;
-  if (askedAnythingElse && DECLINE_IN_CONTEXT.test(s)) return "goodbye";
+  if (DECLINE_IN_CONTEXT.test(s)) {
+    if (askedAnythingElse(previousAgentLine)) return "goodbye";
+    if (askedOrOffered(previousAgentLine)) return "declined_offer";
+  }
   if (PURE_THANKS.test(s)) return "thanks";
   return null;
+}
+
+/**
+ * Whether a model-chosen goodbye may stand (the gate's guard; the model is not trusted to end the
+ * call). Allowed right after the fixed "anything else?" line, or when the caller's message itself
+ * says goodbye or that they're done. Otherwise the gate speaks the declined_offer line instead.
+ */
+export function goodbyeAllowed(callerText: string, previousAgentLine: string | null): boolean {
+  if (askedAnythingElse(previousAgentLine)) return true;
+  return /\b(?:bye|goodbye|good bye|that's all|that's it|nothing else)\b/.test(normalise(callerText));
 }

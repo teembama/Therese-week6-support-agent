@@ -74,7 +74,7 @@ export interface ParsedHeader {
 const HEADER_RE = /^\s*\[\[\s*type\s*=\s*(answer|clarify|decline|escalate)\s*;\s*kb\s*=\s*([^\];]*?)\s*(?:;\s*tool\s*=\s*([a-z_]+)\s*)?\]\]/i;
 // Social header carries an intent and NO kb field; anything else (unknown intent, kb=..., extra
 // fields) does not match and is treated as a malformed header.
-const SOCIAL_HEADER_RE = /^\s*\[\[\s*type\s*=\s*social\s*;\s*intent\s*=\s*(thanks|goodbye|greeting)\s*\]\]/i;
+const SOCIAL_HEADER_RE = /^\s*\[\[\s*type\s*=\s*social\s*;\s*intent\s*=\s*(thanks|goodbye|greeting|declined_offer)\s*\]\]/i;
 
 /** The fixed line the backend speaks for a social intent. */
 export function socialLine(intent: SocialIntent): string {
@@ -183,6 +183,12 @@ export interface GateEvidence {
   chunks: ReadonlyMap<string, string>;
   callerText: string;
   tools?: ObservedTools;
+  /**
+   * False when a model-chosen goodbye must not end the call (no "anything else?" context and the
+   * caller didn't say goodbye; social-fast-path.ts goodbyeAllowed): the declined_offer line is
+   * spoken instead. Absent = allowed.
+   */
+  goodbyeAllowed?: boolean;
 }
 
 /** The sentence-filter configuration for a reply type (null = not filtered). */
@@ -270,8 +276,10 @@ export class StreamingGate {
       this.verdict = verdict;
       if (header.type === "social") {
         // Speak the backend's fixed line now; never speak (or even keep) the model's own words.
-        this.socialIntent = header.intent!;
-        const line = socialLine(header.intent!);
+        // Goodbye ends the call, so the model can't choose it out of context (live call 01a0f455…).
+        const intent = header.intent === "goodbye" && this.evidence?.goodbyeAllowed === false ? "declined_offer" : header.intent!;
+        this.socialIntent = intent;
+        const line = socialLine(intent);
         this.spokenInMessage.push(line);
         return [line];
       }

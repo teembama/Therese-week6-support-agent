@@ -207,6 +207,24 @@ describe("social reply type (D31)", () => {
     assert.equal(evaluateReply("Sure. [[type=social; intent=thanks]]", RETRIEVED).ok, false);
   });
 
+  it("declined_offer intent speaks the 'No problem. Is there anything else…' line", () => {
+    const v = evaluateReply("[[type=social; intent=declined_offer]]", RETRIEVED);
+    assert.equal(v.ok && v.spoken, "No problem. Is there anything else I can help you with?");
+  });
+
+  it("guard: a model goodbye without context speaks the declined_offer line, never the goodbye (end-call) line", () => {
+    const g = new StreamingGate(RETRIEVED, undefined, { chunks: new Map(), callerText: "No, thank you.", goodbyeAllowed: false });
+    g.start();
+    assert.deepEqual(g.text("[[type=social; intent=goodbye]]"), ["No problem. Is there anything else I can help you with?"]);
+    assert.equal(g.end("end_turn").kind, "final");
+  });
+
+  it("guard: a model goodbye in context still says goodbye", () => {
+    const g = new StreamingGate(RETRIEVED, undefined, { chunks: new Map(), callerText: "No, thank you.", goodbyeAllowed: true });
+    g.start();
+    assert.deepEqual(g.text("[[type=social; intent=goodbye]]"), ["Thanks for calling RelayPay. Goodbye."]);
+  });
+
   it("greeting intent speaks the greeting line", () => {
     const v = evaluateReply("[[type=social; intent=greeting]]", RETRIEVED);
     assert.equal(v.ok && v.spoken, "Hello, how can I help you with RelayPay today?");

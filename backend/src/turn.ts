@@ -39,7 +39,7 @@ import {
   TURN_HARD_CAP_MS,
 } from "./config.js";
 import { sentences, socialLine, StreamingGate, type GateEvidence, type ObservedTools, type SocialIntent } from "./gate.js";
-import { matchSocial } from "./social-fast-path.js";
+import { goodbyeAllowed, matchSocial } from "./social-fast-path.js";
 import { beginTurnAttempt, finishTurnAttempt, type AnswerType, type AttemptFinalStatus, type AttemptMetrics } from "./persistence.js";
 import { retryOnce, withTimeout } from "./bounded.js";
 import { isAlive, killTree, spawnCli } from "./process-tree.js";
@@ -617,7 +617,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         if (started.replacedAttemptIds.length) notes.push(`replaced attempt(s): ${started.replacedAttemptIds.join(",")}`);
         retrievedIds = new Set(chunks.map((c) => c.chunk_id));
         const callerWords = [...input.history.filter((h) => h.role === "caller").map((h) => h.text), input.userText].join("\n");
-        evidence = { chunks: new Map(chunks.map((c) => [c.chunk_id, `${c.heading}\n${c.content}`])), callerText: callerWords, tools: observedTools };
+        evidence = { chunks: new Map(chunks.map((c) => [c.chunk_id, `${c.heading}\n${c.content}`])), callerText: callerWords, tools: observedTools, goodbyeAllowed: goodbyeAllowed(input.userText, previousAgentLine(input.history)) };
         if (chunks.length === 0) notes.push("pre-turn retrieval: insufficient_knowledge");
         retrievalLogged = logRetrievalResult(db, ctx, rq.query.slice(0, 1000), chunks);
         providePrompt(buildTurnPrompt(input.history, input.userText, chunks));
