@@ -61,7 +61,7 @@ export const handler = withToolLogging(name, "Look up a payout by payout or tran
   if (payout_id && !payoutId) return invalid("payout_id must be PAY- followed by four digits, e.g. PAY-7001.");
   if (transaction_id && !transactionId) return invalid("transaction_id must be TXN- followed by four digits, e.g. TXN-9001.");
 
-  let q = db.from("payouts").select("payout_id, transaction_id, status, scheduled_for, failure_reason, transactions(support_summary)");
+  let q = db.from("payouts").select("payout_id, transaction_id, status, scheduled_for, failure_reason, transactions!payouts_transaction_id_fkey(support_summary)"); // two FKs to transactions: name the plain one
   if (payoutId) q = q.eq("payout_id", payoutId);
   if (transactionId) q = q.eq("transaction_id", transactionId); // both given: they must agree
   const { data, error } = await q.order("payout_id").limit(1);
@@ -78,7 +78,7 @@ export const handler = withToolLogging(name, "Look up a payout by payout or tran
       found: true,
       payout_id: p.payout_id,
       transaction_id: p.transaction_id,
-      status: p.status,
+      payout_status: p.status,
       scheduled_for: p.scheduled_for,
       failure_reason: safeFailureReason(p.failure_reason),
       support_summary: payoutSupportSummary(p.status, p.transactions?.support_summary ?? null),

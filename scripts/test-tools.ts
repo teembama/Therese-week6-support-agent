@@ -58,6 +58,8 @@ async function main(): Promise<number> {
 
   const expectedStatuses: string[] = [];
   let newer: string | null = null; // the attempt that replaces ours in the guard test
+  // D40: no lookup ever returns an amount or currency, verified or not.
+  const noAmounts = (s: Structured) => !/"(amount|currency|amount_withheld)"|2400|5300|USD|GBP/.test(JSON.stringify(s));
   const call = async (tool: string, args: Structured, expectStatus: string): Promise<Structured> => {
     const r = await client.callTool({ name: tool, arguments: args });
     const s = (r.structuredContent ?? {}) as Structured;
@@ -77,7 +79,8 @@ async function main(): Promise<number> {
 
     console.log("\n== Transaction before verification");
     const txnUnverified = await call("lookup_transaction", { transaction_id: "TXN-9001" }, "success");
-    check(txnUnverified["found"] === true && !("amount" in txnUnverified) && !("currency" in txnUnverified) && txnUnverified["owner_verified"] === false, "TXN-9001 unverified -> no amount or currency");
+    check(txnUnverified["found"] === true && noAmounts(txnUnverified), "TXN-9001 unverified -> amount and currency ABSENT");
+    check(txnUnverified["status"] === "success" && txnUnverified["transaction_status"] === "processing", "tool status 'success' is not overwritten by the record's own status (transaction_status)");
 
     const verified = await call("lookup_customer", { contact_name: "Amara", company_name: "Lagos Ledger" }, "success");
     const verifiedText = JSON.stringify(verified);
@@ -89,10 +92,10 @@ async function main(): Promise<number> {
 
     console.log("\n== Transaction after verification");
     const txnVerified = await call("lookup_transaction", { transaction_id: "txn 9001" }, "success");
-    check(txnVerified["amount"] === 2400 && txnVerified["currency"] === "USD" && txnVerified["owner_verified"] === true, "verified as CUS-1001 -> amount 2400 USD present");
+    check(txnVerified["found"] === true && noAmounts(txnVerified), "verified as CUS-1001 (owner) -> amount and currency still ABSENT");
     check(txnVerified["past_estimated_arrival"] === true && txnVerified["type"] === "outgoing payout", "past_estimated_arrival true; type mapped from transaction_type");
     const otherTxn = await call("lookup_transaction", { transaction_id: "TXN-9003" }, "success");
-    check(!("amount" in otherTxn) && otherTxn["requires_escalation"] === true && otherTxn["escalation_category"] === "compliance", "another customer's TXN-9003 -> no amount; review required -> compliance escalation");
+    check(noAmounts(otherTxn) && otherTxn["requires_escalation"] === true && otherTxn["escalation_category"] === "compliance", "another customer's TXN-9003 -> no amount; review required -> compliance escalation");
     const malformed = await call("lookup_transaction", { transaction_id: "TXN-12" }, "invalid_input");
     check(malformed["status"] === "invalid_input", "malformed ID TXN-12 -> invalid_input");
     const unknown = await call("lookup_transaction", { transaction_id: "TXN-0000" }, "not_found");
@@ -100,17 +103,19 @@ async function main(): Promise<number> {
 
     console.log("\n== Payout");
     const payout = await call("lookup_payout", { payout_id: "PAY-7002" }, "success");
-    check(payout["requires_escalation"] === true && payout["escalation_category"] === "compliance", "PAY-7002 -> requires_escalation, category compliance");
+    check(payout["status"] === "success" && payout["payout_status"] === "review required" && payout["requires_escalation"] === true && payout["escalation_category"] === "compliance", "PAY-7002 -> requires_escalation, category compliance");
+    check(noAmounts(payout), "PAY-7002 (5300 GBP) -> amount and currency ABSENT");
     check(payout["failure_reason"] === "The payout is under review." && !String(payout["support_summary"]).includes("undefined"), "PAY-7002 failure_reason is the customer-safe text");
     const byTxn = await call("lookup_payout", { transaction_id: "TXN-9004" }, "success");
     check(byTxn["payout_id"] === "PAY-7003" && byTxn["failure_reason"] === "The beneficiary details need review.", "lookup by transaction_id TXN-9004 -> PAY-7003");
+    check(!/"(amount|currency)"|800|USD/.test(JSON.stringify(byTxn)), "PAY-7003 (800 USD) -> amount and currency ABSENT");
     const noPayout = await call("lookup_payout", { payout_id: "PAY-0000" }, "not_found");
     check(noPayout["found"] === false, "unknown PAY-0000 -> found:false");
 
     console.log("\n== Support ticket");
     const t1 = await call("create_support_ticket", { category: "payout", summary: "Caller asks why contractor payout PAY-7002 is on hold", payout_id: "PAY-7002", customer_id: "CUS-1003", priority: "low" }, "success");
     const { data: t1Row } = await db.from("support_tickets").select("customer_id, priority, payout_id, status").eq("ticket_id", String(t1["ticket_id"])).single();
-    check(t1["duplicate"] === false && t1["priority"] === "high", "ticket created; priority computed high (payout review required)");
+    check(t1["status"] === "success" && t1["ticket_status"] === "open" && t1["duplicate"] === false && t1["priority"] === "high", "ticket created; priority computed high (payout review required)");
     check((t1Row as Structured | null)?.["customer_id"] === "CUS-1001", "model-supplied customer_id CUS-1003 ignored; ticket customer = verified CUS-1001", JSON.stringify(t1Row));
     const t1again = await call("create_support_ticket", { category: "payout", summary: "Same issue, asked again", payout_id: "PAY-7002" }, "success");
     check(t1again["ticket_id"] === t1["ticket_id"] && t1again["duplicate"] === true, "duplicate returns the same ticket");
@@ -123,7 +128,7 @@ async function main(): Promise<number> {
     const e1 = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", preferred_time_text: "tomorrow after 2pm Lagos time" }, "success");
     const { data: eRow } = await db.from("escalations").select("user_email, call_booked, preferred_time_text, customer_id, ticket_id").eq("escalation_id", String(e1["escalation_id"])).single();
     const eR = (eRow ?? {}) as Structured;
-    check(e1["duplicate"] === false && typeof e1["ticket_id"] === "string" && eR["ticket_id"] === e1["ticket_id"], "escalation created with a linked ticket");
+    check(e1["status"] === "success" && e1["escalation_status"] === "open" && e1["duplicate"] === false && typeof e1["ticket_id"] === "string" && eR["ticket_id"] === e1["ticket_id"], "escalation created with a linked ticket");
     check(eR["user_email"] === "amara@lagosledger.example", "spoken email normalised to amara@lagosledger.example", String(eR["user_email"]));
     check(eR["call_booked"] === true && eR["preferred_time_text"] === "tomorrow after 2pm Lagos time" && eR["customer_id"] === "CUS-1001", "call_booked true with the verbatim preferred time; customer from verified state");
     check(!/\b(within|hours?|days?|soon|shortly)\b/i.test(String(e1["follow_up_summary"])), "follow_up_summary promises no timeline");

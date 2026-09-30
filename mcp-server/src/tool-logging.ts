@@ -49,6 +49,15 @@ export function withToolLogging(toolName: string, purpose: string, handler: Tool
     let outcome: ToolOutcome;
     try {
       outcome = await handler(args, deps);
+      if ("status" in outcome.result) {
+        // "status" is the tool-call status the model reads; a record's own status must use a
+        // prefixed key (transaction_status, ticket_status, ...) or it would silently replace it.
+        outcome = {
+          status: "error",
+          result: { error: { code: "internal_error", message: "The tool failed unexpectedly. Do not retry; tell the caller you could not complete this step." } },
+          errorMessage: `tool result uses the reserved key "status" (${summarize(outcome.result["status"], 40)})`,
+        };
+      }
     } catch (err) {
       outcome = {
         status: "error",

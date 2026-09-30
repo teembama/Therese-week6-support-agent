@@ -72,7 +72,7 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
   }
   return {
     status: "success",
-    result: { ticket_id: t.ticket_id, status: t.status, priority: t.priority, duplicate: !t.created },
+    result: { ticket_id: t.ticket_id, ticket_status: t.status, priority: t.priority, duplicate: !t.created },
     resultSummary: `${t.created ? "created" : "existing"} ${t.ticket_id} ${input.category}/${t.priority}; customer=${customerId ?? "unverified"}`,
   };
 });

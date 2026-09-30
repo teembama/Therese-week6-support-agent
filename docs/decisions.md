@@ -590,7 +590,7 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `attempt_id` is nullable, so the Batch 2D webhook can log events that no attempt made. Guarded writes always set it.
 - **`set_verified_customer`:**
   - Re-verifying the same customer is a no-op.
-  - A **different** customer than the one already verified is refused with `P0001 VERIFIED_CUSTOMER_CONFLICT`: one call acts for one customer. This keeps a second identity from silently unlocking another customer's amounts mid-call.
+  - A **different** customer than the one already verified is refused with `P0001 VERIFIED_CUSTOMER_CONFLICT`: one call acts for one customer. This keeps a second identity from silently unlocking another customer's amounts mid-call. (Since D40 no tool returns amounts; the rule still protects the customer projection and the customer recorded on tickets and escalations.)
 - **Ticket priority** looks only at the transaction and payout passed in, and uses each one's own status.
   - The ticket function does not cross-check that they belong to the ticket's customer. Tickets are internal records and expose nothing to the caller.
   - On a duplicate key, the existing ticket's fields (including its priority) are returned unchanged.
@@ -629,7 +629,7 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - IDs are accepted in any case, with or without a separator ("txn 9001" → `TXN-9001`), but must be exactly four digits.
   - `past_estimated_arrival` = an arrival date is set, the status is not `completed`, and today (UTC) is after it.
   - `failed` → `payment` escalation; `review required` → `compliance`.
-  - `customer_id` is never returned. The amount and currency are replaced by an `amount_withheld` note unless the verified customer owns the transaction.
+  - `customer_id` is never returned. *(Superseded by D40: amount and currency are never returned, verified or not.)* ~~The amount and currency are replaced by an `amount_withheld` note unless the verified customer owns the transaction.~~
 - **`lookup_payout`:**
   - Takes a payout ID or a transaction ID. When both are given, they must refer to the same payout.
   - `failure_reason` passes through a whitelist of customer-safe texts. Any unlisted reason becomes "The payout could not be completed.", and "compliance review" is spoken as "The payout is under review." (escalation rules: no internal compliance explanations).
@@ -657,6 +657,43 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `lookup_customer` is a write tool: it sets the verified customer and logs events, so it is guarded too.
 - **Not in 2B:** the agent's tool allowlist and prompt are unchanged. The tools exist and are tested directly; wiring them to the agent is Batch 2C.
 
+### D40. Sensitive data: tools never return amounts, verified or not (supersedes the D39 amount rule)
+
+- **Change (2026-09-30, before the first `test:tools` run):**
+  - `lookup_transaction` never returns `amount` or `currency`. It doesn't even select them.
+  - D39 had returned them when the verified customer owned the transaction.
+- **Why:**
+  - Our voice identity check is weak: a company name plus a contact's first name is guessable.
+  - `escalation-rules.md` forbids the agent to "access or display sensitive account data in a spoken response".
+  - Scenario 4 needs only the customer-safe status summary.
+  - A field the tool never returns can't be spoken, whatever the prompt, the model or the filter do. This is the same move as D37: enforce it in code instead of instructing the model.
+- **`lookup_payout`** was checked the same way. It selects and returns no amount, currency or recipient name.
+- **Tests:** `scripts/test-tools.ts` asserts that amount and currency are absent before and after verification, for another customer's transaction, and for both payouts. No output contains the seed amounts or currencies.
+
+**Fixes found by the first `test:tools` run (2026-09-30), before anything was committed:**
+- **Reserved `status` key.**
+  - `toToolResult` builds `{ status: <tool status>, ...result }`, so a record's own `status` silently replaced the tool status the model reads. For example, `lookup_transaction` showed `"status":"processing"` instead of `"success"`. The `tool_calls` rows were always correct.
+  - Record statuses are now `transaction_status`, `payout_status`, `ticket_status` and `escalation_status`.
+  - `withToolLogging` turns any result that still uses `status` into a logged `error`, and a unit test covers it.
+- **`lookup_payout` embed.** `payouts` has two foreign keys to `transactions` (the plain one and the composite consistency one from 001), so PostgREST refused the embed (`PGRST201`). The embed now names `payouts_transaction_id_fkey`.
+- **`log_conversation_event.metadata`** accepted any value. The MCP Inspector's `--strict` schema check flagged it. It is now a flat object with string (≤200), number, boolean or null values.
+
+**Sensitive-data matrix (what each tool may return):**
+
+| Field | Returned? | Notes |
+| --- | --- | --- |
+| `customers.support_notes` | Never | Internal notes |
+| `customers.contact_email` | Never | Used only to match an identifier the caller gave |
+| `customers.region` | Never | Not needed for support answers |
+| customer_id, company, contact name, plan, account and KYC status | After verification only | `lookup_customer`'s safe projection |
+| `transactions.amount`, `currency` | **Never** (D40) | Was "for the verified owner" in D39 |
+| `transactions.customer_id`, `destination_country` | Never | |
+| transaction type, status, support summary, estimated arrival, past-arrival flag | Always, by reference | Customer-safe status (scenario 4) |
+| `payouts.amount`, `currency`, `recipient_name` | Never | |
+| payout status, scheduled date | Always, by reference | |
+| `payouts.failure_reason` | Only as whitelisted customer-safe text | D39 |
+| ticket and escalation IDs, follow-up summary | To the caller whose conversation created them | No timelines or outcomes |
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
@@ -667,6 +704,10 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - User-verified after applying: EXECUTE on `begin_turn_attempt`, `finish_turn_attempt`, `attempt_is_active`, `require_active_attempt` and `recompute_conversation_totals` is held only by `postgres` and `service_role`.
 - 004 applied to Supabase from commit 8144fcc on 2026-09-29.
   - User-verified after applying: `conversation_turns_answer_type_check` lists all 7 values, including `'social'`.
+- 005 applied to Supabase from commit 29b7227 on 2026-09-30.
+  - User-verified after applying: the old 13-argument `create_escalation_with_ticket` is gone (`to_regprocedure(...) is null` = true).
+  - EXECUTE on `check_attempt_scope`, `create_support_ticket_guarded`, `create_escalation_with_ticket` (v2), `set_verified_customer`, `log_conversation_event_guarded`, `begin_turn_attempt` and `abandon_stale_conversations` is held by `service_role` and not by `anon`.
+  - RLS is true on `conversation_events`.
 
 ## Task 1 findings, classified
 

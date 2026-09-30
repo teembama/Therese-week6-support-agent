@@ -21,7 +21,11 @@ export const METADATA_MAX_BYTES = 2048;
 export const inputSchema = z.object({
   event_type: z.enum(MODEL_EVENT_TYPES).describe("What kind of decision this was."),
   summary: z.string().trim().min(1).max(2000).describe(`A short factual summary (stored up to ${SUMMARY_MAX_CHARS} characters).`),
-  metadata: z.record(z.string(), z.unknown()).optional().describe(`Optional small JSON object of details (at most ${METADATA_MAX_BYTES} bytes).`),
+  // Flat scalar values only: enough for IDs, flags and counts, and no nested structure to hide data in.
+  metadata: z
+    .record(z.string().max(60), z.union([z.string().max(200), z.number(), z.boolean(), z.null()]))
+    .optional()
+    .describe(`Optional small flat object of details: string, number, boolean or null values (at most ${METADATA_MAX_BYTES} bytes).`),
 });
 
 export const handler = withWriteToolLogging(name, "Record an agent decision in conversation_events", async (args, { db, ctx }): Promise<ToolOutcome> => {

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { guardedRpc, type Db } from "@relaypay/shared";
-import { withWriteToolLogging, type ToolDeps } from "./tool-logging.js";
+import { withToolLogging, withWriteToolLogging, type ToolDeps } from "./tool-logging.js";
 
 interface Stub {
   db: Db;
@@ -72,5 +72,16 @@ describe("withWriteToolLogging + guardedRpc (supersession guard, single transact
     (s.db as unknown as { rpc: unknown }).rpc = async () => ({ data: null, error: { code: "23505", message: "duplicate key" } });
     const r = await createTicket({ summary: "x" }, { db: s.db, ctx: { conversationId: "c", turnIndex: 0, attemptId: "ATT-NEW" } } as ToolDeps);
     assert.equal(r.structuredContent["status"], "error");
+  });
+});
+
+describe("reserved result key", () => {
+  it("a result that uses 'status' becomes a logged error instead of hiding the tool status", async () => {
+    const s = stubDb(new Set(["ATT-NEW"]));
+    const tool = withToolLogging("clash", "test", async () => ({ status: "success", result: { status: "processing" } }));
+    const r = await tool({}, { db: s.db, ctx: { conversationId: "c", turnIndex: 0, attemptId: "ATT-NEW" } } as ToolDeps);
+    assert.equal(r.structuredContent["status"], "error");
+    assert.equal(s.logged[0]?.["status"], "error");
+    assert.match(String(s.logged[0]?.["error_message"]), /reserved key "status"/);
   });
 });

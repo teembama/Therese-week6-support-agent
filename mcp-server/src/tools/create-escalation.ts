@@ -72,7 +72,7 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
     result: {
       escalation_id: e.escalation_id,
       ticket_id: e.ticket_id,
-      status: "open",
+      escalation_status: "open",
       call_booked: callBooked,
       duplicate: !e.created,
       follow_up_summary: followUpSummary(email, input.preferred_time_text),
