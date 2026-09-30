@@ -742,6 +742,10 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - The tool enforces the two-identifier rule in code (D39) and returns `needs_second_identifier`, `ambiguous` or `no_match`.
   - Only then does the model ask for another identifier, without saying which detail was wrong.
 - "Clarify before calling" stays only for a missing transaction or payout reference. Without it there is nothing to look up, and guessing one would be worse.
+- **What actually fixed S3:** the prompt change alone did not. `lookup_customer`'s own tool description still said "Needs at least TWO identifiers … With fewer, it refuses and you must ask for another one", and Haiku kept gatekeeping.
+  - With the description rewritten to "call it with whatever details the caller gave; this tool decides", S3 called the tool and verified CUS-1001 on the next run.
+  - Lesson: tool descriptions are prompt text too, and must follow the same rule.
+- The live S3 answer "Your account is active and your KYC status is approved" was dropped by the attribution check. "kyc" and "status" are now allowed record nouns when a tool returned the caller's record (unit test with the live sentence).
 - General principle for Phase 2: anything security- or policy-critical (identity, amounts, write limits, idempotency, supersession) is enforced in code or in SQL. The prompt only describes what to do with the tool's answer.
 
 ### D43. Per-conversation write cap in the MCP tools: 2 tickets, 1 escalation (2026-09-30, decision 2)

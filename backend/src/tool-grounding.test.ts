@@ -88,6 +88,11 @@ describe("sentence filter with tool records", () => {
     assert.deepEqual(r.spoken, ["Your transaction TXN-9001 is processing."]);
     assert.deepEqual(r.filtered.map((f) => f.flags[0]!.kind), ["unsupported_status", "unsupported_specific", "timeline_promise"]);
   });
+  it("speaks the verified account's own fields (live S3: 'your KYC status is approved')", () => {
+    const customer = JSON.stringify({ status: "success", found: true, verified: true, customer_id: "CUS-1001", company_name: "LagosLedger", contact_name: "Amara Okafor", plan: "Growth", account_status: "active", kyc_status: "approved", requires_escalation: false });
+    const r = run(["[[type=answer; kb=none; tool=lookup_customer]] Your account is active and your KYC status is approved."], observed([["lookup_customer", "success", customer]]), "I am Amara from LagosLedger. Can you check my account?");
+    assert.equal(r.filtered.length, 0, JSON.stringify(r.filtered));
+  });
   it("without a tool result, 'your transaction' is still an invented attribution", () => {
     const r = run([`[[type=answer; kb=${PAYOUTS}]] International payouts usually take 2 to 5 business days. `, "Your transaction is on track."]);
     assert.deepEqual(r.spoken, ["International payouts usually take 2 to 5 business days."]);

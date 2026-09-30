@@ -47,7 +47,7 @@ export const GROUNDING_TOOLS: ReadonlySet<string> = new Set([...LOOKUP_TOOL_NAME
 /** "your <noun>" the model may always say: things it asks the caller for (D41). */
 const REQUEST_NOUNS = ["name", "email", "preferred", "callback", "call", "time", "details", "reference", "request", "question", "questions", "patience"];
 /** "your <noun>" allowed once a tool has returned the caller's record in this attempt. */
-const RECORD_NOUNS = ["account", "payout", "payouts", "transaction", "transactions", "payment", "payments", "transfer", "invoice", "ticket", "escalation", "case", "record", "business", "company", "plan", "verification"];
+const RECORD_NOUNS = ["account", "payout", "payouts", "transaction", "transactions", "payment", "payments", "transfer", "invoice", "ticket", "escalation", "case", "record", "business", "company", "plan", "verification", "kyc", "status"];
 
 /** What the backend observed the agent's tools return in this attempt (never the model's claim). */
 export interface ObservedTools {
