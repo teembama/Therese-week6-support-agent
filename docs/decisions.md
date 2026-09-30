@@ -1104,6 +1104,25 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - With `RELAYPAY_SHUTDOWN_GRACE_MS=500` and a turn in flight: it exited at 581 ms, reporting `turns_unfinished: 1`. That turn's attempt stays active until the stale sweep closes it (D51).
 - **Real SIGTERM on Linux:** checked on the next redeploy, in the old deployment's logs (`shutdown_started` / `shutdown_complete`).
 
+### D61. A call with no answered turn is `failed` (no_interaction), whatever Vapi's ended reason (Batch 3A item 5, 2026-10-01)
+
+- **Gap:** D50 mapped `final_status` from `endedReason` alone. A call where the caller never got a reply (silence timeout, a hang-up before any answer) showed as `completed`. Example: the 2026-09-30 18:46 voice call, `silence-timed-out` with 0 turns.
+- **Rule** (`vapi-events.ts`):
+  - An **answered turn** is one where something was spoken and `answer_type` is not `error`. Fallback and busy lines are errors. A `blocked` turn counts, because the safe decline was spoken (`isAnswered`).
+  - With 0 answered turns, `finalStatusFor(endedReason, 0)` is `failed`.
+  - The summary gets "No interaction: no answered turn." appended.
+  - Vapi's `ended_reason` is stored unchanged. The summary and final_status carry our reading of it.
+- **Tests:** `vapi-events.test.ts`:
+  - zero answered turns → failed for five reasons, including `customer-ended-call` and `assistant-said-end-call-phrase`;
+  - `isAnswered` cases;
+  - summaries for 0 turns and for 2 error-only turns.
+  - The backend suite has 171 tests, all passing.
+- **Existing rows, read-only preview (2026-10-01):** 12 webhook-closed conversations, 6 of them with no answered turn.
+  - `final_status` would change on **1**: the 18:46 voice call `01a0f3a3…` (`silence-timed-out`), from `completed` to `failed`.
+  - The other 5 are already `failed`: two `test-ep-…` with `pipeline-error-custom-llm-llm-failed`, and three voice calls with `…did-not-receive-customer-audio`.
+  - All 6 summaries would gain the no-interaction sentence.
+  - **Not yet applied:** waiting for the user's go-ahead.
+
 
 ## Migration log
 

@@ -22,9 +22,22 @@ const NORMAL_ENDINGS = new Set([
   "manually-canceled", "voicemail", "call-deleted", "silence-timed-out", "exceeded-max-duration",
 ]);
 
-/** final_status for a Vapi endedReason. Anything not known to be a normal ending counts as failed. */
-export function finalStatusFor(endedReason: string | null | undefined): FinalStatus {
+/**
+ * final_status for a call. With no answered turn the call failed (no_interaction, D61) whatever
+ * Vapi's endedReason says: a silence timeout or a hang-up before any answer is not a completed
+ * support call. Otherwise anything not known to be a normal ending counts as failed.
+ */
+export function finalStatusFor(endedReason: string | null | undefined, answeredTurns: number): FinalStatus {
+  if (answeredTurns === 0) return "failed";
   return endedReason && NORMAL_ENDINGS.has(endedReason) ? "completed" : "failed";
+}
+
+/**
+ * A turn the caller got a real reply to: something was spoken and it wasn't an error line
+ * (fallback or busy). A blocked turn counts: the safe decline line was spoken (D61).
+ */
+export function isAnswered(turn: { answer_type: string; assistant_response: string | null }): boolean {
+  return turn.answer_type !== "error" && turn.assistant_response !== null;
 }
 
 /** The subset of Vapi's report we keep: latency metrics, cost and duration (no transcript). */
@@ -54,6 +67,8 @@ export function vapiMetricsFrom(message: Record<string, unknown>): Record<string
 
 export interface SummaryFacts {
   turns: number;
+  /** Turns with a real reply (isAnswered). */
+  answered: number;
   answerTypes: Record<string, number>;
   tickets: string[]; // categories
   escalations: string[]; // categories
@@ -73,22 +88,25 @@ export function buildSummary(f: SummaryFacts): string {
     `Tickets: ${f.tickets.length}${list(f.tickets)}.`,
     `Escalations: ${f.escalations.length}${list(f.escalations)}.`,
     `Ended: ${f.endedReason ?? "unknown"}.`,
+    ...(f.answered === 0 ? ["No interaction: no answered turn."] : []),
   ].join(" ");
 }
 
 async function summaryFacts(db: Db, conversationId: string, endedReason: string | null): Promise<SummaryFacts> {
   const [turns, tickets, escalations, events] = await Promise.all([
-    db.from("conversation_turns").select("answer_type").eq("conversation_id", conversationId),
+    db.from("conversation_turns").select("answer_type, assistant_response").eq("conversation_id", conversationId),
     db.from("support_tickets").select("category, idempotency_key").eq("conversation_id", conversationId),
     db.from("escalations").select("category").eq("conversation_id", conversationId),
     db.from("conversation_events").select("event_type").eq("conversation_id", conversationId).in("event_type", ["identity_verified", "identity_failed", "identity_ambiguous"]),
   ]);
   for (const r of [turns, tickets, escalations, events]) if (r.error) throw new Error(`summary read failed (${r.error.code}): ${r.error.message}`);
   const answerTypes: Record<string, number> = {};
-  for (const t of (turns.data ?? []) as Array<{ answer_type: string }>) answerTypes[t.answer_type] = (answerTypes[t.answer_type] ?? 0) + 1;
+  const turnRows = (turns.data ?? []) as Array<{ answer_type: string; assistant_response: string | null }>;
+  for (const t of turnRows) answerTypes[t.answer_type] = (answerTypes[t.answer_type] ?? 0) + 1;
   const eventTypes = ((events.data ?? []) as Array<{ event_type: string }>).map((e) => e.event_type);
   return {
-    turns: (turns.data ?? []).length,
+    turns: turnRows.length,
+    answered: turnRows.filter(isAnswered).length,
     answerTypes,
     // Plain tickets only; an escalation's own ticket is counted under escalations.
     tickets: ((tickets.data ?? []) as Array<{ category: string; idempotency_key: string }>).filter((t) => t.idempotency_key.startsWith("ticket:")).map((t) => t.category),
@@ -132,8 +150,9 @@ export async function recordEndOfCall(db: Db, conversationId: string, message: R
     created = true;
   }
 
-  const finalStatus = finalStatusFor(endedReason);
-  const summary = buildSummary(await summaryFacts(db, conversationId, endedReason));
+  const facts = await summaryFacts(db, conversationId, endedReason);
+  const finalStatus = finalStatusFor(endedReason, facts.answered);
+  const summary = buildSummary(facts);
   const { error: updateError } = await db.from("conversations").update({
     ended_at: endedAt,
     ended_reason: endedReason,
