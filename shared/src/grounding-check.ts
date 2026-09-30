@@ -22,7 +22,7 @@
 
 export type GroundingFlagKind =
   | "strengthening_word" | "dropped_hedge" | "unsupported_specific" | "invented_attribution"
-  | "outcome_promise" | "timeline_promise" | "unsupported_status" | "internal_term";
+  | "outcome_promise" | "timeline_promise" | "unsupported_status" | "internal_term" | "speculative_diagnosis";
 
 export interface GroundingFlag {
   kind: GroundingFlagKind;
@@ -52,7 +52,11 @@ function normalise(text: string): string {
   return text
     .toLowerCase()
     .replace(/[’`]/g, "'")
-    .replace(/\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty)\b/g, (w) => NUMBER_WORDS[w]!)
+    // "one" as a pronoun or in a set phrase is not the number 1 ("is it one you're sending?",
+    // "one moment"); D58 replay of the stored clarify replies.
+    .replace(/\bone\b(?=\s+(?:you|you're|that|which|who|of|i|i'm|we|they|is|was|moment|more|another|thing)\b)/g, "one\u0000")
+    .replace(/\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty)\b(?!\u0000)/g, (w) => NUMBER_WORDS[w]!)
+    .replace(/\u0000/g, "")
     .replace(/\s+/g, " ");
 }
 
@@ -172,6 +176,40 @@ function monthsIn(s: string, source: string, caller: string): string[] {
     .map(([name]) => name);
 }
 
+// ---- Non-answer replies (decline, clarify, escalate; D58). Their evidence is only the tool
+// results and the caller's words, so a reason or a guess about the caller's case has nothing
+// behind it: "your account was likely flagged because of unusual activity" is a diagnosis
+// (escalation-rules.md: never diagnose account issues or explain compliance decisions).
+const DIAGNOSIS: readonly RegExp[] = [
+  /\b(?:most likely|likely|probably|possibly|presumably)\b/,
+  /\b(?:because of|due to|caused by|as a result of|triggered by)\b/,
+  /\bflagged\b/,
+];
+
+/** Diagnosis phrases in a normalised sentence that the evidence does not itself contain. */
+function diagnosesIn(s: string, source: string): string[] {
+  const out: string[] = [];
+  for (const re of DIAGNOSIS) {
+    const m = re.exec(s);
+    if (!m) continue;
+    const term = m[0];
+    if (has(source, term) || deniedInClause(s, term)) continue; // "I can't say why it was flagged"
+    out.push(term);
+  }
+  return out;
+}
+
+/**
+ * Reference-format descriptions a clarify reply needs ("TXN followed by four digits", "a
+ * reference like TXN-9001"): they describe a format, not a fact, so their numbers (and the
+ * "exactly" in "exactly four digits") are not checked. Run on normalised text.
+ */
+function withoutReferenceFormats(s: string): string {
+  return s
+    .replace(/\b(?:like|such as|for example|for instance|e\.?g\.?|say)\s*,?\s*(?:txn|pay|cus)[\s-]?\d{4}\b/g, " ")
+    .replace(/\b(?:exactly\s+)?\d+[\s-]?(?:digits?|numbers?)\b/g, " ");
+}
+
 /** Words never spoken unless the caller used them first (D45). */
 const INTERNAL_TERMS = ["compliance"];
 
@@ -184,6 +222,12 @@ export interface SentenceFilterOptions {
   records?: readonly string[];
   /** Nouns "your <noun>" may use without evidence (requests such as "your name", or the looked-up record). */
   allowedYourNouns?: readonly string[];
+  /**
+   * Decline, clarify and escalate replies (D58): also flag speculative diagnoses; skip
+   * reference-format descriptions; and don't treat "your X" in a question as an attribution
+   * ("Is your payment incoming or outgoing?" asks, it doesn't claim).
+   */
+  nonAnswer?: boolean;
 }
 
 /**
@@ -201,6 +245,7 @@ export class SentenceFilter {
   private readonly mode: FilterMode;
   private readonly hasRecords: boolean;
   private readonly allowedNouns: ReadonlySet<string>;
+  private readonly nonAnswer: boolean;
 
   constructor(citedChunks: string[], callerText = "", options: SentenceFilterOptions = {}) {
     const records = options.records ?? [];
@@ -209,6 +254,7 @@ export class SentenceFilter {
     this.mode = options.mode ?? "full";
     this.hasRecords = records.length > 0;
     this.allowedNouns = new Set(options.allowedYourNouns ?? []);
+    this.nonAnswer = options.nonAnswer ?? false;
   }
 
   check(sentence: string): GroundingFlag[] {
@@ -219,11 +265,14 @@ export class SentenceFilter {
     // "explaining compliance decisions" (escalation-rules.md). Allowed only as an echo.
     for (const t of INTERNAL_TERMS) if (has(s, t) && !has(this.caller, t)) flags.push({ kind: "internal_term", term: t, sentence });
     if (this.mode === "promises") return flags;
-    for (const w of strengtheningIn(s, this.source)) {
+    const checked = this.nonAnswer ? withoutReferenceFormats(s) : s;
+    for (const w of strengtheningIn(checked, this.source)) {
       if (!flags.some((f) => f.term.includes(w))) flags.push({ kind: "strengthening_word", term: w, sentence });
     }
-    for (const a of attributionsIn(s, this.source, this.caller, this.allowedNouns)) flags.push({ kind: "invented_attribution", term: a, sentence });
-    for (const n of numbersIn(s)) {
+    const asks = this.nonAnswer && /\?\s*$/.test(sentence);
+    if (!asks) for (const a of attributionsIn(s, this.source, this.caller, this.allowedNouns)) flags.push({ kind: "invented_attribution", term: a, sentence });
+    if (this.nonAnswer) for (const d of diagnosesIn(s, this.source)) flags.push({ kind: "speculative_diagnosis", term: d, sentence });
+    for (const n of numbersIn(checked)) {
       if (!has(this.source, n) && !has(this.caller, n)) flags.push({ kind: "unsupported_specific", term: n, sentence });
     }
     if (this.hasRecords) {

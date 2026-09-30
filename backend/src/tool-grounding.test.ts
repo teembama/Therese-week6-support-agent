@@ -214,3 +214,50 @@ describe("outcome and timeline promises (every spoken type)", () => {
     assert.equal(r.outcome.kind, "blocked");
   });
 });
+
+describe("full filter on decline, clarify and escalate (D58, audit G2/G3)", () => {
+  const S7 = "My account is restricted and nobody is helping me. This is really frustrating.";
+  it("escalate: an invented diagnosis is filtered, even when the caller said 'my account'", () => {
+    const r = run(["[[type=escalate; kb=none; tool=none]] I'm sorry this has been frustrating. ", "Your account was likely flagged because of unusual activity. ", "A RelayPay specialist needs to review it, and I can arrange a callback."], observed([]), S7);
+    assert.deepEqual(r.spoken, ["I'm sorry this has been frustrating.", "A RelayPay specialist needs to review it, and I can arrange a callback."]);
+    assert.deepEqual(r.filtered.map((f) => f.flags.map((x) => x.kind)), [["speculative_diagnosis", "speculative_diagnosis", "speculative_diagnosis"]]);
+  });
+  it("escalate: evidence is tool results + caller words, not cited chunks ('suspicious activity' from a chunk can't be pinned on the caller)", () => {
+    const r = run([`[[type=escalate; kb=${RESTRICT}; tool=none]] Your account was restricted due to suspicious activity. `, "A specialist can help."], observed([]), S7);
+    assert.deepEqual(r.spoken, ["A specialist can help."]);
+  });
+  it("decline: an unsupported number is filtered (previously only promises were checked)", () => {
+    const r = run(["[[type=decline; kb=none; tool=none]] Transfers to Kenya cost 3 percent, but I can't confirm that. ", "I can connect you with a RelayPay specialist if you'd like."]);
+    assert.deepEqual(r.spoken, ["I can connect you with a RelayPay specialist if you'd like."]);
+    assert.equal(r.filtered[0]!.flags[0]!.kind, "unsupported_specific");
+  });
+  it("decline: an invented strengthening word and attribution are filtered", () => {
+    const r = run(["[[type=decline; kb=none; tool=none]] Your bank always delays these. ", "I can connect you with a specialist."]);
+    assert.deepEqual(r.spoken, ["I can connect you with a specialist."]);
+  });
+  it("clarify: reference-format descriptions are spoken", () => {
+    const r = run(["[[type=clarify; kb=none; tool=none]] Could you give me the reference? ", "It's TXN followed by four digits, like TXN-9001. ", "A payout reference is PAY followed by exactly four numbers."]);
+    assert.equal(r.filtered.length, 0, JSON.stringify(r.filtered));
+    assert.equal(r.spoken.length, 3);
+  });
+  it("clarify: an invented number outside a format description is still filtered", () => {
+    const r = run(["[[type=clarify; kb=none; tool=none]] Payments over 5000 dollars need extra checks. ", "Which payment is it?"]);
+    assert.deepEqual(r.spoken, ["Which payment is it?"]);
+  });
+  it("clarify: 'your X' in a question asks rather than claims; 'one' as a pronoun is not a number", () => {
+    const r = run(["[[type=clarify; kb=none; tool=none]] Is your payment incoming or outgoing? ", "Is it one you're sending, or one you're expecting to receive?"], observed([]), "A payment is stuck.");
+    assert.equal(r.filtered.length, 0, JSON.stringify(r.filtered));
+  });
+  it("escalate: 'your name and email' and 'your preferred time' stay allowed", () => {
+    const r = run(["[[type=escalate; kb=none; tool=none]] Could I have your name and email? ", "I'll also note your preferred time for the callback."], observed([]), S7);
+    assert.equal(r.filtered.length, 0, JSON.stringify(r.filtered));
+  });
+  it("a denied diagnosis is not a diagnosis: \"I can't say why it was flagged\"", () => {
+    const f = new SentenceFilter([], "", { mode: "full", nonAnswer: true });
+    assert.deepEqual(f.check("I can't say why it was flagged."), []);
+  });
+  it("answers are unchanged: no diagnosis check (a cited chunk may explain causes)", () => {
+    const f = new SentenceFilter(["Delays can happen due to bank processing times."], "", { mode: "full" });
+    assert.deepEqual(f.check("Delays can happen due to bank processing times."), []);
+  });
+});

@@ -46,6 +46,13 @@ export const GROUNDING_TOOLS: ReadonlySet<string> = new Set([...LOOKUP_TOOL_NAME
 
 /** "your <noun>" the model may always say: things it asks the caller for (D41). */
 const REQUEST_NOUNS = ["name", "email", "preferred", "callback", "call", "time", "details", "reference", "request", "question", "questions", "patience"];
+/**
+ * "your <noun>" a decline, clarify or escalate reply may use without a record (D58, from the
+ * replay of the stored replies): verification requests ("verify your identity"), pointers ("your
+ * dashboard") and the caller's matter in general terms. A claim ABOUT it is still checked
+ * (diagnosis, numbers, promises, statuses).
+ */
+const NON_ANSWER_NOUNS = ["identity", "information", "account", "dashboard", "customer", "id", "company", "issue", "concern", "frustration", "situation"];
 /** "your <noun>" allowed once a tool has returned the caller's record in this attempt. */
 const RECORD_NOUNS = ["account", "payout", "payouts", "transaction", "transactions", "payment", "payments", "transfer", "invoice", "ticket", "escalation", "case", "record", "business", "company", "plan", "verification", "kyc", "status"];
 
@@ -194,8 +201,15 @@ export interface GateEvidence {
 /** The sentence-filter configuration for a reply type (null = not filtered). */
 export function filterOptionsFor(type: ReplyType, records: readonly string[]): SentenceFilterOptions | null {
   if (type === "social") return null;
-  if (type === "clarify" || type === "decline") return { mode: "promises", records };
-  return { mode: "full", records, allowedYourNouns: records.length ? [...REQUEST_NOUNS, ...RECORD_NOUNS] : REQUEST_NOUNS };
+  const nonAnswer = type !== "answer";
+  const allowedYourNouns = [...REQUEST_NOUNS, ...(records.length ? RECORD_NOUNS : []), ...(nonAnswer ? NON_ANSWER_NOUNS : [])];
+  // D58: every spoken type gets every check; decline/clarify/escalate also get the diagnosis check.
+  return { mode: "full", records, allowedYourNouns, nonAnswer };
+}
+
+/** Types whose evidence is only tool results and the caller's words, never cited chunks (D58). */
+export function citesChunks(type: ReplyType): boolean {
+  return type === "answer";
 }
 
 export interface FilteredSentence {
@@ -286,7 +300,7 @@ export class StreamingGate {
       if (this.evidence) {
         const records = this.evidence.tools?.records() ?? [];
         const options = filterOptionsFor(header.type, records);
-        const cited = verdict.validKbIds.map((id) => this.evidence!.chunks.get(id) ?? "");
+        const cited = citesChunks(header.type) ? verdict.validKbIds.map((id) => this.evidence!.chunks.get(id) ?? "") : [];
         if (options) this.filter = new SentenceFilter(cited, this.evidence.callerText, options);
       }
       this.body = header.rest;

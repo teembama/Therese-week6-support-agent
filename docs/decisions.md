@@ -1026,6 +1026,36 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - unverified + TXN-9003 → created, priority high.
   - The old check that filed a verified ticket on CUS-1003's PAY-7002 asserted the leak itself. It now uses CUS-1001's own PAY-7001.
 
+### D58. The full sentence filter runs on decline, clarify and escalate replies (audit G2/G3, Batch 3A item 2, 2026-10-01)
+
+- **Gap:**
+  - Decline and clarify replies were only checked for promises and "compliance".
+  - Escalate replies got the full filter, but it had no check for a number-free diagnosis. "Your account was likely flagged because of unusual activity" passed whenever the caller had said "my account" (an echo).
+- **Now** (`gate.ts filterOptionsFor`, `shared/src/grounding-check.ts`): every spoken type except social gets every check: promises, "compliance", strengthening words, invented "your X", unsupported numbers, plus statuses and months when a tool record is present.
+- **Decline, clarify and escalate also get:**
+  - **Evidence** = this attempt's successful tool results + the caller's words. Cited chunks don't count for these types, so a chunk's "suspicious activity" can't be pinned on the caller.
+  - **`speculative_diagnosis`:** "likely / probably / possibly / most likely / presumably", "because of / due to / caused by / as a result of / triggered by", and "flagged".
+    - Allowed if the evidence contains the phrase.
+    - Allowed when it sits under a denial in the same clause ("I can't say why it was flagged").
+    - Answers don't get this check, because a cited chunk may legitimately explain causes.
+  - **Reference-format descriptions** are not checked for numbers or "exactly": "TXN followed by four digits", "exactly four numbers", "like TXN-9001".
+  - **"your X" in a question** asks, not claims ("Is your payment incoming or outgoing?").
+  - **Extra allowed "your" nouns:** identity, information, account, dashboard, customer, id, company, issue, concern, frustration, situation. "your name / email / preferred time" stay allowed as before.
+- **Also:** "one" as a pronoun or in a set phrase is no longer read as the number 1 ("is it one you're sending", "one moment").
+- **Replay:** all 106 stored decline/clarify/escalate replies (235 sentences, from Supabase, read-only) were run through the new filter with evidence = caller words only. That is stricter than at runtime, because tool records aren't stored in full.
+  - The first pass flagged 14 sentences that the old filter passed, all false positives. They led to the allowances above: the pronoun "one", "four numbers", "your identity / dashboard / account".
+  - The final pass flags **0** of them.
+- **Tests:** 10 in `tool-grounding.test.ts`. Among them:
+  - the escalate diagnosis → filtered, even with "my account" said;
+  - the chunk-sourced cause → filtered;
+  - decline with "3 percent" → filtered;
+  - decline "Your bank always…" → filtered;
+  - reference formats → spoken;
+  - an invented number in clarify → filtered;
+  - a question with "your payment" → spoken.
+  - The backend suite now has 165 tests, all passing.
+- **Still not caught (G1):** a number-free unsupported claim in an **answer** that cites a valid chunk. See `limitations.md`.
+
 
 ## Migration log
 
