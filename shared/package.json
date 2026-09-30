@@ -11,6 +11,6 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test dist/grounding-check.test.js"
+    "test": "node --test dist/grounding-check.test.js dist/identity.test.js"
   }
 }
