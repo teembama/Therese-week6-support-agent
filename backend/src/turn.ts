@@ -27,6 +27,8 @@ import {
   AGENT_MODEL,
   DB_CALL_TIMEOUT_MS,
   FALLBACK_LINE,
+  FILLER_LINE,
+  LOOKUP_TOOL_NAMES,
   FAULT_INJECT,
   PRETURN_DB_BUDGET_MS,
   FIRST_TOKEN_TIMEOUT_MS,
@@ -248,6 +250,9 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     let cliChild: ChildProcess | null = null;
     let killedPids: number[] = [];
     let filterStats = null as StreamingGate["filterStats"] | null; // set inside a closure
+    let fillerSpoken = false;
+    /** True once the caller heard something other than the filler line (a real reply or fixed line). */
+    const spokeContent = () => spokenParts.length > (fillerSpoken ? 1 : 0);
 
     const begin = (source: TurnResult["source"]) => {
       if (sinkBegun) return;
@@ -308,7 +313,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     }, Math.max(0, FIRST_TOKEN_TIMEOUT_MS - elapsed()));
     const hardCapTimer = setTimeout(() => {
       stop(`hard cap ${TURN_HARD_CAP_MS}ms`);
-      if (spokenParts.length) finish("error", "hard cap reached mid-reply");
+      if (spokeContent()) finish("error", "hard cap reached mid-reply");
       else release(FALLBACK_LINE, "error");
     }, Math.max(0, TURN_HARD_CAP_MS - elapsed()));
     sink.onClose(() => {
@@ -417,7 +422,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
           const problem = toolListProblem(m);
           if (problem) {
             notes.push(`tool-list guard: ${problem}`);
-            if (spokenParts.length) finish("error");
+            if (spokeContent()) finish("error");
             else release(FALLBACK_LINE, "error");
             stop("tool-list guard");
             break;
@@ -434,6 +439,14 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
           } else if (!gate) {
             continue;
           } else if (e.type === "content_block_start" && e.content_block.type === "tool_use") {
+            // Filler: a lookup is starting and the caller has heard nothing yet this turn. A fixed
+            // backend line, at most once per turn; never model text.
+            const toolName = e.content_block.name.replace(MCP_TOOL_PREFIX, "");
+            if (!fillerSpoken && spokenParts.length === 0 && (LOOKUP_TOOL_NAMES as readonly string[]).includes(toolName)) {
+              fillerSpoken = true;
+              mark("filler");
+              speak(FILLER_LINE);
+            }
             const t = gate.toolUse();
             if (t.violation) {
               const sent = summarize(t.spokenBeforeToolUse.join(" "), 300);
@@ -467,7 +480,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
             } else {
               mark("final_message_stop");
               const note = `gate blocked: ${outcome.reason}; raw: ${summarize(outcome.raw, 300)}`;
-              if (spokenParts.length) finish("blocked", note);
+              if (spokeContent()) finish("blocked", note);
               else release(SAFE_DECLINE_LINE, "blocked", note);
             }
           }
@@ -600,7 +613,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
 
     if (!finished) {
       const why = `no speakable final reply${result ? ` (result ${(result as SDKResultMessage).subtype})` : ""}`;
-      if (spokenParts.length) finish("error", why);
+      if (spokeContent()) finish("error", why);
       else release(FALLBACK_LINE, "error", why);
     }
     const finalResult = result as SDKResultMessage | null;

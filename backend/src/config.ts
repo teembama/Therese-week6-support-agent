@@ -98,4 +98,10 @@ export const SAFE_DECLINE_LINE =
   "I'm sorry, I can't confirm that from our support information. I can connect you with a RelayPay support specialist if you'd like.";
 
 /** Spoken on timeout or internal failure. */
+/**
+ * Spoken by the BACKEND (never model text) when a lookup tool call starts and nothing has been
+ * said yet in the turn; at most once per turn (Batch 2C step 5).
+ */
+export const FILLER_LINE = "One moment while I check that.";
+
 export const FALLBACK_LINE = "Sorry, I'm having trouble checking that right now. Could you try again in a moment?";
