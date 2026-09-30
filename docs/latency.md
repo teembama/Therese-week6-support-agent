@@ -186,3 +186,20 @@ Sonnet was measured deployed by setting the service's `AGENT_MODEL=claude-sonnet
 **Also seen in the deployed runs (grounding, not latency):**
 - In 9 of the 10 KB runs, the runtime filter (D37) dropped Haiku's embellished second sentence, e.g. "…so you'll see **exactly** what applies to **your specific payment**". The caller heard only the grounded first sentence. The filter is doing its job, but the model still does this unprompted.
 - One answer was lost entirely: "International payouts usually take 2 to 5 business days, depending on the destination and **your** banking partners." That one invented word dropped the only sentence, and the caller got the safe decline. This is the precision cost of dropping whole sentences; kept as is for now, a Task 6 eval item.
+
+## Deployed voice baseline: first live end-to-end call (2026-09-30)
+
+Call `01a0f455…` from the deployed web page: Railway EU West, Haiku, Soniox STT RT v5. The numbers are Vapi's `artifact.performanceMetrics`, stored in `conversations.vapi_metrics` by the end-of-call webhook (D50). They cover the whole pipeline: speech end → transcriber → endpointing → our backend → TTS → audio.
+
+| Turn | Kind | Turn latency | Model latency | Voice latency | Transcriber | Endpointing |
+|---|---|---|---|---|---|---|
+| 0 | KB answer (fees) | 2070 ms | 1656 ms | 358 ms | 52 ms | 1 ms |
+| 1 | tool answer (`lookup_transaction`), with the filler line | 4076 ms | 1658 ms | 1963 ms | 428 ms | 3 ms |
+| 2 | social (model path, before the D56 fix) | 1818 ms | 1513 ms | 284 ms | 16 ms | 2 ms |
+| **Average** | | **2655 ms** | **1609 ms** | 868 ms | 165 ms | 2 ms |
+
+- **This is the deployed voice baseline.** Later changes are compared against these numbers.
+- "Model latency" is Vapi's time to our first streamed token, including the network hop to Railway. Our own `ms_first_token` for the same turns was 1386 / 1359 / 1206 ms, so there is about 0.25–0.3 s of network and Vapi overhead per turn.
+- Turn 1's voice latency (1963 ms) most likely includes the "One moment while I check that." filler being synthesised before the answer. This is an inference and has not been checked against Vapi's per-segment timings.
+- Turn 2 is now a fast-path social reply (D56: `declined_offer` / `goodbye` with no model call). Its model latency should drop to the network overhead alone. Re-measure on the next live call.
+- n = 3. This is one call, not a distribution.
