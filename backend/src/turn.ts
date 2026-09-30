@@ -32,7 +32,7 @@ import {
   SAFE_DECLINE_LINE,
   TURN_HARD_CAP_MS,
 } from "./config.js";
-import { sentences, socialLine, StreamingGate, type SocialIntent } from "./gate.js";
+import { sentences, socialLine, StreamingGate, type GateEvidence, type SocialIntent } from "./gate.js";
 import { matchSocial } from "./social-fast-path.js";
 import { beginTurnAttempt, finishTurnAttempt, type AnswerType, type AttemptFinalStatus, type AttemptMetrics } from "./persistence.js";
 import { retryOnce, withTimeout } from "./bounded.js";
@@ -237,6 +237,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     let clientGone = false;
     let cliChild: ChildProcess | null = null;
     let killedPids: number[] = [];
+    let filterStats = null as StreamingGate["filterStats"] | null; // set inside a closure
 
     const begin = (source: TurnResult["source"]) => {
       if (sinkBegun) return;
@@ -321,7 +322,18 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     }
 
     let retrievedIds: ReadonlySet<string> = new Set();
+    let evidence: GateEvidence | undefined;
     let gate: StreamingGate | null = null;
+    /** Logs sentences the runtime grounding filter dropped (D37); never spoken. */
+    const logFiltered = () => {
+      for (const { sentence, flags } of gate?.takeFiltered() ?? []) {
+        const checks = [...new Set(flags.map((x) => x.kind))];
+        notes.push(`grounding_filtered: ${flags.map((x) => `${x.kind}(${x.term})`).join(",")}: ${summarize(sentence, 200)}`);
+        // Log line: check names and a redacted excerpt only (digits masked, 80 chars).
+        const excerpt = summarize(sentence.replace(/\d/g, "#"), 80);
+        console.log(JSON.stringify({ event: "grounding_filtered", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: ctx.attemptId, checks, excerpt }));
+      }
+    };
     let stopReason: string | null = null;
     const discarded: string[] = [];
     const toolStarts = new Map<string, number>();
@@ -376,7 +388,8 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
           if (finished) continue;
           if (e.type === "message_start") {
             mark("first_model_message");
-            gate ??= new StreamingGate(retrievedIds); // retrievedIds is set before the prompt is yielded
+            gate ??= new StreamingGate(retrievedIds, undefined, evidence); // both are set before the prompt is yielded
+            filterStats = gate.filterStats;
             gate.start();
             stopReason = null;
           } else if (!gate) {
@@ -394,10 +407,12 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
               mark("first_spoken");
               speak(sentence);
             }
+            logFiltered();
           } else if (e.type === "message_delta") {
             stopReason = e.delta.stop_reason ?? stopReason;
           } else if (e.type === "message_stop") {
             const outcome = gate.end(stopReason);
+            logFiltered();
             if (outcome.kind === "discarded") {
               if (outcome.raw) discarded.push(outcome.raw);
             } else if (outcome.kind === "final") {
@@ -497,6 +512,8 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         registered = true;
         if (started.replacedAttemptIds.length) notes.push(`replaced attempt(s): ${started.replacedAttemptIds.join(",")}`);
         retrievedIds = new Set(chunks.map((c) => c.chunk_id));
+        const callerWords = [...input.history.filter((h) => h.role === "caller").map((h) => h.text), input.userText].join("\n");
+        evidence = { chunks: new Map(chunks.map((c) => [c.chunk_id, `${c.heading}\n${c.content}`])), callerText: callerWords };
         if (chunks.length === 0) notes.push("pre-turn retrieval: insufficient_knowledge");
         retrievalLogged = logRetrievalResult(db, ctx, rq.query.slice(0, 1000), chunks);
         providePrompt(buildTurnPrompt(input.history, input.userText, chunks));
@@ -611,6 +628,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       cost_usd_estimate: finalResult?.total_cost_usd ?? null,
       aborted: abort.signal.aborted,
       killed_pids: killedPids,
+      filter: filterStats && filterStats.sentences ? { sentences: filterStats.sentences, max_ms: Number(filterStats.maxMs.toFixed(3)) } : undefined,
       marks: { ...marks, released: msFirstToken },
     }));
   })();

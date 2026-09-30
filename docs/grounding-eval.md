@@ -131,3 +131,21 @@ Changes since the after-run:
 - The prompt change did **not** stop the pattern. The model copied the GOOD sentence and then added the "without … your banking setup" clause that the ALSO BAD example forbids.
 - The after-run's 0 flags would partly be explained by the old checker skipping disclaimers.
 - This is still one run per prompt. The Task 6 judge and repeated runs should decide whether a further prompt change (for example, an explicit rule to end the disclaimer sentence after the place name) is worth it. No further prompt change is made here.
+
+## Run 4 (2026-09-30): runtime sentence filter (D37) plus the "end the can't-confirm sentence at the place name" rule, `run-2026-09-30T08-27-52-820Z`
+
+| Q | Run 3 spoken / flags | Run 4 spoken / flags | Run 4 dropped by the filter |
+| --- | --- | --- | --- |
+| S1 fees | answer / none | answer / none | none |
+| S2–S6 | clarify / decline | clarify / decline (S4 decline → clarify) | not filtered (no cited chunk) |
+| S7 restricted | answer / none | answer / none | none |
+| S8 guarantee | answer / none | answer / none | none |
+| K1 Kenya | answer / `your banking setup` | answer / none: "International payouts usually take 2 to 5 business days, depending on destination and banking partners. I can't confirm a specific timeline for Kenya." | none |
+| T1 thanks | social (fast path) | social (fast path) | n/a |
+
+- Cost $0.0172 (estimate, cap $0.05). 0 server errors.
+- **Spoken vs filtered:**
+  - The filter dropped **0 sentences** in this run, because the model produced no flagged sentence this time.
+  - K1 came out clean from the prompt alone. That is one run, and runs 1–3 showed the prompt alone is not reliable. That's why the filter exists.
+  - The filter's blocking path is covered by unit tests on the live sentences (`backend/src/sentence-filter.test.ts`), not by this run.
+- **Not caught by either the checks or the filter:** S7 adds "right away" and "in most cases they're lifted", paraphrasing beyond the chunk. This is exactly the kind of claim the Task 6 judge (D32) must decide on.

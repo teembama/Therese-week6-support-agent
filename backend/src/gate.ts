@@ -17,7 +17,16 @@
 // a gate_violation with exactly what had been sent (the SDK delivers events in order, so
 // nothing after the tool_use start is ever written). With the current agent config there are
 // no tools, so this path cannot occur in production today (docs/decisions.md D23).
+//
+// Runtime sentence filter (D37): when the gate is given the turn's evidence, every sentence of a
+// type=answer message is checked against the cited chunks and the caller's words before it is
+// released (SentenceFilter: invented attribution, strengthening words, unsupported numbers). A
+// flagged sentence is dropped, not spoken; if a message's every sentence is dropped, the turn
+// is blocked and the caller hears SAFE_DECLINE_LINE. clarify/decline cite no chunk, so they are
+// not filtered (there is no evidence to compare against).
 
+import { performance } from "node:perf_hooks";
+import { SentenceFilter, type GroundingFlag } from "@relaypay/shared";
 import { HEADER_WINDOW_CHARS, SOCIAL_LINES } from "./config.js";
 
 export type ReplyType = "answer" | "clarify" | "decline" | "social";
@@ -116,6 +125,17 @@ export function sentences(text: string): string[] {
   return text.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
 }
 
+/** What the runtime sentence filter needs: chunk text by id ("heading\ncontent") and all the caller's words. */
+export interface GateEvidence {
+  chunks: ReadonlyMap<string, string>;
+  callerText: string;
+}
+
+export interface FilteredSentence {
+  sentence: string;
+  flags: GroundingFlag[];
+}
+
 export type MessageOutcome =
   | { kind: "final"; type: ReplyType; validKbIds: string[]; unknownKbIds: string[]; speak: string[] }
   | { kind: "blocked"; reason: string; raw: string }
@@ -135,8 +155,24 @@ export class StreamingGate {
   private stoppedByTool = false;
   private verdict: Extract<HeaderVerdict, { ok: true }> | null = null;
   private socialIntent: SocialIntent | null = null;
+  private filter: SentenceFilter | null = null;
+  private filteredInMessage = 0;
+  private filtered: FilteredSentence[] = [];
+  /** Filter cost, for the latency budget (under 5ms per sentence). */
+  readonly filterStats = { sentences: 0, totalMs: 0, maxMs: 0 };
 
-  constructor(private readonly retrievedIds: ReadonlySet<string>, private readonly windowChars: number = HEADER_WINDOW_CHARS) {}
+  constructor(
+    private readonly retrievedIds: ReadonlySet<string>,
+    private readonly windowChars: number = HEADER_WINDOW_CHARS,
+    private readonly evidence?: GateEvidence,
+  ) {}
+
+  /** Sentences dropped by the filter since the last call (for logging). */
+  takeFiltered(): FilteredSentence[] {
+    const out = this.filtered;
+    this.filtered = [];
+    return out;
+  }
 
   start(): void {
     this.raw = "";
@@ -147,6 +183,8 @@ export class StreamingGate {
     this.stoppedByTool = false;
     this.verdict = null;
     this.socialIntent = null;
+    this.filter = null;
+    this.filteredInMessage = 0;
   }
 
   /** Sentences that became speakable with this delta (header already validated). */
@@ -176,6 +214,10 @@ export class StreamingGate {
         this.spokenInMessage.push(line);
         return [line];
       }
+      if (header.type === "answer" && this.evidence) {
+        const cited = verdict.validKbIds.map((id) => this.evidence!.chunks.get(id) ?? "");
+        this.filter = new SentenceFilter(cited, this.evidence.callerText);
+      }
       this.body = header.rest;
     } else {
       this.body += delta;
@@ -202,7 +244,10 @@ export class StreamingGate {
       return { kind: "blocked", reason: this.invalidReason || "missing, malformed or late header", raw: this.raw.trim() };
     }
     const speak = this.socialIntent ? [] : this.drain(true);
-    if (this.spokenInMessage.length === 0) return { kind: "blocked", reason: "empty reply after header", raw: this.raw.trim() };
+    if (this.spokenInMessage.length === 0) {
+      const reason = this.filteredInMessage ? `every sentence dropped by the grounding filter (${this.filteredInMessage})` : "empty reply after header";
+      return { kind: "blocked", reason, raw: this.raw.trim() };
+    }
     return { kind: "final", type: this.verdict.type, validKbIds: this.verdict.validKbIds, unknownKbIds: this.verdict.unknownKbIds, speak };
   }
 
@@ -210,6 +255,20 @@ export class StreamingGate {
     this.headerState = "invalid";
     this.invalidReason = reason;
     return [];
+  }
+
+  private allowed(sentence: string): boolean {
+    if (!this.filter) return true;
+    const t0 = performance.now();
+    const flags = this.filter.check(sentence);
+    const ms = performance.now() - t0;
+    this.filterStats.sentences++;
+    this.filterStats.totalMs += ms;
+    this.filterStats.maxMs = Math.max(this.filterStats.maxMs, ms);
+    if (!flags.length) return true;
+    this.filtered.push({ sentence, flags });
+    this.filteredInMessage++;
+    return false;
   }
 
   /** Emits complete sentences from the body (all of it when the message has ended). */
@@ -221,12 +280,12 @@ export class StreamingGate {
       const cut = m.index + m[0].length;
       const sentence = stripForSpeech(this.body.slice(0, cut));
       this.body = this.body.slice(cut);
-      if (sentence) out.push(sentence);
+      if (sentence && this.allowed(sentence)) out.push(sentence);
     }
     if (final) {
       const rest = stripForSpeech(this.body);
       this.body = "";
-      if (rest) out.push(rest);
+      if (rest && this.allowed(rest)) out.push(rest);
     }
     this.spokenInMessage.push(...out);
     return out;

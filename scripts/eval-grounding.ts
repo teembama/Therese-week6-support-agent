@@ -40,6 +40,8 @@ interface Row {
   cited: string[];
   flags: GroundingFlag[];
   checked: boolean;
+  /** Sentences the runtime filter dropped (D37), from the turn's confidence_note. */
+  filtered: string[];
   costUsd: number;
   msFirstToken: number | null;
 }
@@ -86,7 +88,8 @@ async function main(): Promise<void> {
         const evidence = ((chunks ?? []) as Array<{ heading: string; content: string }>).map((c) => `${c.heading}\n${c.content}`);
         flags = checkGrounding(spoken, evidence, q.text);
       }
-      rows.push({ id: q.id, question: q.text, answerType, spoken, cited, flags, checked, costUsd: Number(conv?.["total_cost_usd"] ?? 0), msFirstToken: (turn?.["ms_first_token"] as number | null) ?? null });
+      const filtered = [...String(turn?.["confidence_note"] ?? "").matchAll(/grounding_filtered: ([^;]*)/g)].map((m) => m[1]!);
+      rows.push({ id: q.id, question: q.text, answerType, spoken, cited, flags, checked, filtered, costUsd: Number(conv?.["total_cost_usd"] ?? 0), msFirstToken: (turn?.["ms_first_token"] as number | null) ?? null });
     }
   } finally {
     proc.kill();
@@ -96,12 +99,14 @@ async function main(): Promise<void> {
   const flagged = rows.filter((r) => r.flags.length).length;
   const social = rows.find((r) => r.id === "T1");
   console.log(`## Run: ${label} (${run})\n`);
-  console.log("| Q | Answer type | Flags | Spoken |");
-  console.log("| --- | --- | --- | --- |");
+  console.log("| Q | Answer type | Flags (spoken text) | Spoken | Filtered (not spoken) |");
+  console.log("| --- | --- | --- | --- | --- |");
   for (const r of rows) {
     const f = !r.checked ? "not checked (no cited chunk)" : r.flags.length ? r.flags.map((x) => `${x.kind}: \`${x.term}\``).join("<br>") : "none";
-    console.log(`| ${r.id} | ${r.answerType} | ${f} | ${r.spoken.replace(/\|/g, "\\|")} |`);
+    const dropped = r.filtered.length ? r.filtered.join("<br>").replace(/\|/g, "\\|") : "none";
+    console.log(`| ${r.id} | ${r.answerType} | ${f} | ${r.spoken.replace(/\|/g, "\\|")} | ${dropped} |`);
   }
+  console.log(`\n- Sentences dropped by the runtime filter: ${rows.reduce((t, r) => t + r.filtered.length, 0)}`);
   console.log(`\n- Answers checked: ${rows.filter((r) => r.checked).length}; answers with at least one flag: ${flagged}; total flags: ${rows.reduce((t, r) => t + r.flags.length, 0)}`);
   console.log(`- "Thank you" (T1): answer_type=${social?.answerType}, fixed line spoken: ${social?.spoken === THANKS_LINE}`);
   console.log(`- Cost (estimate, turns + attempts): $${total.toFixed(4)} (cap $${COST_CAP_USD}) ${total <= COST_CAP_USD ? "OK" : "OVER CAP"}`);

@@ -529,6 +529,43 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - Record the result here.
 - We don't add a bare "Goodbye" phrase: if matching is substring-based, any model answer containing "goodbye" would hang up. The fixed line is the only thing that should end a call.
 
+### D37. Evidence integrity moved from instruction to enforcement: runtime sentence filter
+
+- **Why:**
+  - The Kenya pattern (a general policy applied to a specific place, plus something invented about the caller) survived three prompt fixes: `ec44e7d`, the exact GOOD example with the ALSO BAD case, and the live answer "…without more details about your banking setup there".
+  - This is the Week 5 feedback pattern (D30): instructions reduce unsupported claims but do not guarantee their absence. So the guarantee moves into code.
+- **What:**
+  - Every sentence of a `type=answer` message is checked before it is spoken, against the cited chunks (heading plus content) and everything the caller said in the call (`SentenceFilter` in `shared/src/grounding-check.ts`, used by `StreamingGate`).
+  - Blocking checks, all high precision:
+    - `invented_attribution`: "your X" when no cited chunk says "your" and the caller never said "my/our X";
+    - `strengthening_word`: an intensifier absent from the chunks, unless negated;
+    - `unsupported_specific`: a number, duration or percentage absent from both the chunks and the caller's words. Unlike the eval check, this applies inside "can't confirm" sentences too.
+  - A flagged sentence is **not spoken**. The backend logs a `grounding_filtered` event with the check names and a redacted excerpt (digits masked, 80 characters). The turn's `confidence_note` records the check, the term and the sentence.
+  - If every sentence of the answer is dropped, the turn is `blocked` and the caller hears `SAFE_DECLINE_LINE`.
+  - Because we stream sentence by sentence, earlier clean sentences may already have been spoken. Only the flagged ones are dropped.
+- **Eval-only (not blocking):**
+  - `dropped_hedge` and places (`unsupported_specific` for place names). These are lower precision and would silence good sentences, such as "I can't confirm a specific timeline for Kenya."
+  - `clarify` and `decline` messages cite no chunk, so there's nothing to compare against, and they are not filtered.
+- **Prompt, kept as the first line of defence:** a "can't confirm" sentence ends at the place or case name, with no reason or "without knowing" clause after it.
+- **Cost:**
+  - About 0.1ms per sentence on average, with p99 ≤1.1ms (unit test, 500 samples, three runs).
+  - The worst single sample was 9.3ms, once, under parallel test load (GC or scheduler), not steady-state cost.
+  - The turn log records `filter.max_ms` per turn.
+- **Known limits:**
+  - Paraphrase that adds meaning without these markers (for example "in most cases they're lifted", S7 in run 4) passes the filter. That stays the judge's job (D32).
+  - Durations written without digits or number words ("overnight", "a week") are not caught.
+  - A sentence dropped mid-answer can leave the remaining answer less complete; the caller can ask again. We accept that: an omission is safer than an unsupported claim.
+- **Tests:** `backend/src/sentence-filter.test.ts`, 9 cases:
+  - live Kenya sentence dropped, range sentence spoken;
+  - fees "exact … up front" dropped;
+  - clean answer untouched;
+  - all dropped → blocked;
+  - a sentence split across deltas;
+  - caller-said numbers, negations and echoed attributions allowed;
+  - clarify and decline unfiltered;
+  - no evidence → no filter;
+  - cost.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
