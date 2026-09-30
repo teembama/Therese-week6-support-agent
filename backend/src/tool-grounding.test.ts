@@ -140,6 +140,16 @@ describe("outcome and timeline promises (every spoken type)", () => {
     // Noting the caller's preferred time, in its own clause, is not a promise (the tool's own wording).
     assert.deepEqual(kinds("A RelayPay support specialist will follow up with you at efua@accrastack.example, and your preferred time, tomorrow morning, has been noted."), []);
   });
+  it("a preferred time is spoken as noted, never as a commitment, even in the caller's own words", () => {
+    const escalation = JSON.stringify({ status: "success", escalation_id: "ESC-1", ticket_id: "TKT-1", escalation_status: "open", call_booked: true, duplicate: false, follow_up_summary: 'A RelayPay support specialist will follow up with you at efua@accrastack.example, and your preferred time, "tomorrow morning", has been noted.' });
+    const r = run([
+      "[[type=escalate; kb=none; tool=create_escalation]] I've noted tomorrow morning as your preferred callback time. ",
+      "A representative will call you tomorrow morning. ",
+      "A representative will follow up.",
+    ], observed([["create_escalation", "success", escalation]]), "Yes, that's correct. Tomorrow morning would be good for a callback.");
+    assert.deepEqual(r.spoken, ["I've noted tomorrow morning as your preferred callback time.", "A representative will follow up."]);
+    assert.deepEqual(r.filtered.map((f) => f.flags.map((x) => x.kind)), [["timeline_promise"]]);
+  });
   it("never speaks 'compliance' unless the caller said it first (every type)", () => {
     const r = run(["[[type=clarify; kb=none; tool=none]] That transaction is under compliance review. ", "Would you like me to connect you with a specialist?"]);
     assert.deepEqual(r.spoken, ["Would you like me to connect you with a specialist?"]);

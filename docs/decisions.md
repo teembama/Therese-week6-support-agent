@@ -797,6 +797,13 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `test:tools`: unverified TXN-9003 → "under review" with the summary replaced, and no "compliance" in any spoken field; the same for PAY-7002.
   - Unit tests: the filter drops the word, and allows the caller's echo.
 
+### D46. A preferred callback time is a preference, not a promise (2026-09-30)
+
+- The escalation flow collects an optional preferred time (`preferred_time_text`, verbatim, D1/D39). It records what the caller would like, not something RelayPay has scheduled.
+- **Prompt:** step 5 of the escalation flow says the time is noted ("I've noted tomorrow morning as your preferred callback time. A representative will follow up.") and never states it as a commitment ("they will call you tomorrow morning", "someone will be in touch soon").
+- **Filter:** "will … tomorrow" / "will … soon" in the same clause is filtered even when "tomorrow morning" is the caller's own words. Promise phrases are exempt only when the cited evidence contains them, and the caller's words are not evidence for promises (D41). The "noted as your preferred callback time" framing has no promise construction and is spoken.
+- **Unit test:** the live S7 shape. With the caller's "tomorrow morning" and a `create_escalation` record in evidence, "A representative will call you tomorrow morning." is filtered, while "I've noted tomorrow morning as your preferred callback time." and "A representative will follow up." are spoken.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
