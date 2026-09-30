@@ -1,7 +1,7 @@
 import { guardedRpc, normaliseEmail } from "@relaypay/shared";
 import * as z from "zod";
 import { withWriteToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, logEvent, parseArgs, verifiedCustomerId } from "./common.js";
+import { invalid, logEvent, parseArgs, serialised, verifiedCustomerId, writeLimitOutcome, writeLimitReached } from "./common.js";
 
 export const name = "create_escalation";
 
@@ -37,15 +37,18 @@ export function followUpSummary(email: string, preferredTime: string | undefined
     : `A RelayPay support specialist will follow up with you by email at ${email}.`;
 }
 
-export const handler = withWriteToolLogging(name, "Create (or return the existing) escalation with its ticket", async (args, { db, ctx }): Promise<ToolOutcome> => {
+export const handler = withWriteToolLogging(name, "Create (or return the existing) escalation with its ticket", (args, { db, ctx }) => serialised(async (): Promise<ToolOutcome> => {
   const parsed = parseArgs(inputSchema, args, `user_name, user_email, reason are required; category must be one of ${ESCALATION_CATEGORIES.join(", ")}.`);
   if (!parsed.ok) return parsed.outcome;
   const input = parsed.data;
   const email = normaliseEmail(input.user_email);
   if (!email) return invalid("user_email is not a valid email address. Ask the caller to spell it again. Nothing was written.");
 
-  const customerId = await verifiedCustomerId(db, ctx.conversationId);
   const keys = escalationKeys(ctx.conversationId, input.category);
+  const cap = await writeLimitReached(db, ctx.conversationId, "escalation", keys.escalation);
+  if (cap.reached) return writeLimitOutcome("escalation", cap.existing);
+
+  const customerId = await verifiedCustomerId(db, ctx.conversationId);
   const callBooked = Boolean(input.preferred_time_text);
   const rows = await guardedRpc<EscalationRow[]>(db, "create_escalation_with_ticket", {
     p_conversation_id: ctx.conversationId,
@@ -79,4 +82,4 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
     },
     resultSummary: `${e.created ? "created" : "existing"} ${e.escalation_id}/${e.ticket_id} ${input.category}; call_booked=${callBooked}; customer=${customerId ?? "unverified"}`,
   };
-});
+}));

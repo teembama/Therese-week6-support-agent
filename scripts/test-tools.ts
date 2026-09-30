@@ -150,15 +150,17 @@ async function main(): Promise<number> {
     const { data: old } = await db.from("turn_attempts").select("status").eq("attempt_id", attemptId).single();
     check((old as Structured | null)?.["status"] === "replaced", "setup: the tools' attempt is now replaced");
     const before = { tickets: await count("support_tickets"), escalations: await count("escalations"), events: await count("conversation_events") };
+    // Already-used keys: they are never write-capped (decision 2), so these calls reach the
+    // database guard and prove it, even for a duplicate.
     const deniedCalls: Array<[string, Structured]> = [
-      ["create_support_ticket", { category: "other", summary: "Written after the attempt was replaced" }],
-      ["create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "account", reason: "Written after replacement" }],
+      ["create_support_ticket", { category: "payout", summary: "Written after the attempt was replaced", payout_id: "PAY-7002" }],
+      ["create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Written after replacement" }],
       ["log_conversation_event", { event_type: "other", summary: "Written after replacement" }],
       ["lookup_customer", { contact_name: "Amara", company_name: "Lagos Ledger" }],
     ];
     for (const [tool, args] of deniedCalls) {
       const r = await call(tool, args, "denied");
-      check(r["status"] === "denied", `${tool} after replacement -> denied`);
+      check(r["status"] === "denied" && (r["error"] as Structured | undefined)?.["code"] === "attempt_not_active", `${tool} after replacement -> denied by the guard (attempt_not_active)`);
     }
     const after = { tickets: await count("support_tickets"), escalations: await count("escalations"), events: await count("conversation_events") };
     check(JSON.stringify(after) === JSON.stringify(before), "denied calls wrote nothing (tickets, escalations, events)", `${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
@@ -179,6 +181,56 @@ async function main(): Promise<number> {
   check(rows.length === expectedStatuses.length, `one tool_calls row per call (${expectedStatuses.length})`, String(rows.length));
   check(rows.every((c) => c["attempt_id"] === attemptId), "every row carries the spawning attempt_id");
   check(rows.map((c) => c["status"]).join(",") === expectedStatuses.join(","), "every row has the expected status", rows.map((c) => c["status"]).join(","));
+
+  console.log("\n== Per-conversation write cap (decision 2): 2 tickets, 1 escalation, counted from the database");
+  const capConversation = `${conversationId}-cap`;
+  const capAttempt = newAttemptId();
+  await db.rpc("begin_turn_attempt", {
+    p_conversation_id: capConversation, p_channel: "test", p_caller: "scripts/test-tools.ts", p_turn_index: 0,
+    p_attempt_id: capAttempt, p_transcript_hash: transcriptHash("write cap"), p_user_transcript: "write cap",
+  });
+  const capClient = new Client({ name: "relaypay-test-tools-cap", version: "0.1.0" });
+  await capClient.connect(new StdioClientTransport({
+    command: process.execPath,
+    args: [SERVER],
+    env: {
+      ...getDefaultEnvironment(),
+      SUPABASE_URL: process.env["SUPABASE_URL"]!,
+      SUPABASE_SERVICE_ROLE_KEY: process.env["SUPABASE_SERVICE_ROLE_KEY"]!,
+      CONVERSATION_ID: capConversation,
+      TURN_INDEX: "0",
+      ATTEMPT_ID: capAttempt,
+    },
+    stderr: "pipe",
+  }));
+  const capCall = async (tool: string, args: Structured): Promise<Structured> => {
+    const s = ((await capClient.callTool({ name: tool, arguments: args })).structuredContent ?? {}) as Structured;
+    console.log(`  ${tool}(${JSON.stringify(args)})\n    -> ${JSON.stringify(s)}`);
+    return s;
+  };
+  try {
+    const a = await capCall("create_support_ticket", { category: "other", summary: "Write cap test: first ticket" });
+    const b = await capCall("create_support_ticket", { category: "payment", summary: "Write cap test: second ticket", transaction_id: "TXN-9001" });
+    check(a["status"] === "success" && b["status"] === "success" && a["ticket_id"] !== b["ticket_id"], "tickets 1 and 2 created");
+    const c = await capCall("create_support_ticket", { category: "payout", summary: "Write cap test: third ticket", payout_id: "PAY-7003" });
+    check(c["status"] === "denied" && c["reason"] === "conversation_write_limit", "third ticket -> denied, conversation_write_limit");
+    const aAgain = await capCall("create_support_ticket", { category: "other", summary: "Write cap test: first ticket, asked again" });
+    check(aAgain["status"] === "success" && aAgain["ticket_id"] === a["ticket_id"] && aAgain["duplicate"] === true, "a repeat of an existing ticket is not capped (returns it)");
+    const e1 = await capCall("create_escalation", { user_name: "Amara Okafor", user_email: "amara@lagosledger.example", category: "payment", reason: "Write cap test: first escalation" });
+    check(e1["status"] === "success" && e1["duplicate"] === false, "escalation 1 created (its own ticket doesn't count toward the 2)");
+    const e2 = await capCall("create_escalation", { user_name: "Amara Okafor", user_email: "amara@lagosledger.example", category: "account", reason: "Write cap test: second escalation" });
+    check(e2["status"] === "denied" && e2["reason"] === "conversation_write_limit", "second escalation in a different category -> denied, conversation_write_limit");
+    const { data: capTickets } = await db.from("support_tickets").select("idempotency_key").eq("conversation_id", capConversation);
+    const { data: capEscalations } = await db.from("escalations").select("escalation_id").eq("conversation_id", capConversation);
+    const plain = ((capTickets ?? []) as Structured[]).filter((t) => String(t["idempotency_key"]).startsWith("ticket:")).length;
+    check(plain === 2 && (capEscalations ?? []).length === 1 && (capTickets ?? []).length === 3, `rows: 2 plain tickets + 1 escalation with its ticket (got ${plain} plain, ${(capTickets ?? []).length} total, ${(capEscalations ?? []).length} escalations)`);
+    const { data: capCalls } = await db.from("tool_calls").select("status").eq("conversation_id", capConversation).order("id");
+    check(((capCalls ?? []) as Structured[]).map((r) => r["status"]).join(",") === "success,success,denied,success,success,denied", "cap tool_calls statuses: success,success,denied,success,success,denied");
+  } finally {
+    await capClient.close();
+  }
+  await db.rpc("finish_turn_attempt", { p_attempt_id: capAttempt, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });
+  await db.from("conversations").update({ ended_at: new Date().toISOString(), final_status: "completed", summary: "Write cap test run" }).eq("conversation_id", capConversation);
 
   // Close whichever attempt is still active (the replacing one, if the guard test ran).
   await db.rpc("finish_turn_attempt", { p_attempt_id: newer ?? attemptId, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });

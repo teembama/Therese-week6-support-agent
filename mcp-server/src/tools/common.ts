@@ -47,6 +47,48 @@ export async function logEvent(db: Db, ctx: LogContext, eventType: EventType, su
   }, ctx.attemptId);
 }
 
+// ---- Per-conversation write cap (decision 2, D43): at most 2 plain tickets and 1 escalation per
+// conversation, counted from the database. An escalation's own linked ticket counts under the
+// escalation limit, not the ticket limit. A repeat of an existing idempotency key is never
+// capped: it creates nothing and returns the existing row.
+export const CONVERSATION_TICKET_LIMIT = 2;
+export const CONVERSATION_ESCALATION_LIMIT = 1;
+
+export type WriteKind = "ticket" | "escalation";
+
+/** True if creating a NEW row of this kind (key not yet used) would exceed the conversation's cap. */
+export async function writeLimitReached(db: Db, conversationId: string, kind: WriteKind, idempotencyKey: string): Promise<{ reached: boolean; existing: number }> {
+  const table = kind === "ticket" ? "support_tickets" : "escalations";
+  const { data, error } = await db.from(table).select("idempotency_key").eq("conversation_id", conversationId).limit(1000);
+  if (error) throw new Error(`${table} count failed (${error.code}): ${error.message}`);
+  const keys = ((data ?? []) as Array<{ idempotency_key: string }>).map((r) => r.idempotency_key);
+  if (keys.includes(idempotencyKey)) return { reached: false, existing: keys.length };
+  const counted = kind === "ticket" ? keys.filter((k) => k.startsWith("ticket:")) : keys;
+  const limit = kind === "ticket" ? CONVERSATION_TICKET_LIMIT : CONVERSATION_ESCALATION_LIMIT;
+  return { reached: counted.length >= limit, existing: counted.length };
+}
+
+export function writeLimitOutcome(kind: WriteKind, existing: number): ToolOutcome {
+  return {
+    status: "denied",
+    result: {
+      created: false,
+      reason: "conversation_write_limit",
+      message: "The support team already has the details for this call. Tell the caller that; do not try to create another one.",
+    },
+    resultSummary: `denied: conversation_write_limit (${existing} ${kind === "ticket" ? "ticket(s)" : "escalation(s)"} already)`,
+  };
+}
+
+// One MCP server serves one turn, and the model can issue parallel tool calls; running the write
+// tools one at a time means two parallel creates can't both pass the count above.
+let writeChain: Promise<unknown> = Promise.resolve();
+export function serialised<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn);
+  writeChain = run.catch(() => undefined);
+  return run;
+}
+
 /** Today's date (UTC) as YYYY-MM-DD, for comparisons with DATE columns. */
 export function todayUtc(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);

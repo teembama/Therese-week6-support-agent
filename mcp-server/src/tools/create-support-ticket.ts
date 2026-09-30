@@ -1,7 +1,7 @@
 import { guardedRpc, normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withWriteToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, logEvent, parseArgs, verifiedCustomerId } from "./common.js";
+import { invalid, logEvent, parseArgs, serialised, verifiedCustomerId, writeLimitOutcome, writeLimitReached } from "./common.js";
 
 export const name = "create_support_ticket";
 
@@ -38,7 +38,7 @@ async function exists(db: Parameters<typeof verifiedCustomerId>[0], table: "tran
   return data !== null;
 }
 
-export const handler = withWriteToolLogging(name, "Create (or return the existing) support ticket", async (args, { db, ctx }): Promise<ToolOutcome> => {
+export const handler = withWriteToolLogging(name, "Create (or return the existing) support ticket", (args, { db, ctx }) => serialised(async (): Promise<ToolOutcome> => {
   const parsed = parseArgs(inputSchema, args, `category must be one of ${TICKET_CATEGORIES.join(", ")}; summary 10-500 characters.`);
   if (!parsed.ok) return parsed.outcome;
   const input = parsed.data;
@@ -53,6 +53,10 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
     return { status: "not_found", result: { found: false, message: `No payout ${payoutId}; nothing was created.` }, resultSummary: `not_found ${payoutId}` };
   }
 
+  const key = ticketIdempotencyKey(ctx.conversationId, input.category, transactionId, payoutId);
+  const cap = await writeLimitReached(db, ctx.conversationId, "ticket", key);
+  if (cap.reached) return writeLimitOutcome("ticket", cap.existing);
+
   const customerId = await verifiedCustomerId(db, ctx.conversationId);
   const rows = await guardedRpc<TicketRow[]>(db, "create_support_ticket_guarded", {
     p_conversation_id: ctx.conversationId,
@@ -61,7 +65,7 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
     p_payout_id: payoutId,
     p_category: input.category,
     p_summary: input.summary,
-    p_idempotency_key: ticketIdempotencyKey(ctx.conversationId, input.category, transactionId, payoutId),
+    p_idempotency_key: key,
   }, ctx.attemptId);
   const t = rows[0];
   if (!t) throw new Error("create_support_ticket_guarded returned no row");
@@ -75,4 +79,4 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
     result: { ticket_id: t.ticket_id, ticket_status: t.status, priority: t.priority, duplicate: !t.created },
     resultSummary: `${t.created ? "created" : "existing"} ${t.ticket_id} ${input.category}/${t.priority}; customer=${customerId ?? "unverified"}`,
   };
-});
+}));

@@ -731,7 +731,7 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - `escalation-rules.md` requires the agent to confirm that a representative will follow up.
     - "to help get this resolved" states the team's intent, not an outcome: it doesn't say the issue **will be** resolved, or when.
     - The filter keeps blocking outcome constructions ("will be resolved", "will be lifted") and timelines.
-  - No per-turn ticket cap in the tool. Idempotency keys are per category, so a model making parallel calls in several categories could create several tickets. The five-tickets test passed only because the model refused.
+  - *(Resolved by D43: a per-conversation write cap of 2 tickets and 1 escalation.)* No per-turn ticket cap in the tool. Idempotency keys are per category, so a model making parallel calls in several categories could create several tickets. The five-tickets test passed only because the model refused.
 
 ### D42. Security decisions belong to code: the model passes details, the tool decides (2026-09-30)
 
@@ -743,6 +743,26 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - Only then does the model ask for another identifier, without saying which detail was wrong.
 - "Clarify before calling" stays only for a missing transaction or payout reference. Without it there is nothing to look up, and guessing one would be worse.
 - General principle for Phase 2: anything security- or policy-critical (identity, amounts, write limits, idempotency, supersession) is enforced in code or in SQL. The prompt only describes what to do with the tool's answer.
+
+### D43. Per-conversation write cap in the MCP tools: 2 tickets, 1 escalation (2026-09-30, decision 2)
+
+- **Rule:** at most **2 support tickets** and **1 escalation** per conversation, enforced in the tool code (no migration). The tool counts the conversation's rows in the database before the guarded write.
+- **Beyond the cap:** status `denied` with `reason: conversation_write_limit`, and nothing is written. The prompt tells the agent to say the support team already has the details, and not to try again.
+- **Counting:**
+  - Only plain tickets (idempotency key `ticket:…`) count toward the 2. An escalation's own linked ticket counts under the 1-escalation limit.
+  - A repeat of an **existing** idempotency key is never capped: it creates nothing and returns the existing row (idempotency, D11). It still reaches the database guard (D29). `test:tools` uses exactly that to prove the guard after replacement.
+- **Race:**
+  - Count-then-write is not atomic across processes.
+  - Within one turn, the write tools run one at a time inside the MCP server process (`serialised`), so parallel tool calls in one message can't both pass the count.
+  - Across turns, requests for one call are sequential, and a replaced attempt can't write anyway (D29).
+  - A hard database guarantee would need a constraint or trigger (a migration); not done, as decided.
+- **Tests (`test:tools`, fresh conversation with its own active attempt):**
+  - tickets 1 and 2 are created;
+  - a third ticket is `denied` / `conversation_write_limit`;
+  - a repeat of ticket 1 returns it;
+  - escalation 1 is created;
+  - a second escalation in another category is `denied` / `conversation_write_limit`;
+  - the rows are 2 plain tickets plus 1 escalation with its ticket.
 
 ## Migration log
 
