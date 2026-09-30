@@ -7,7 +7,14 @@
 //      answer_type=error with a busy note;
 //   3. a social turn during A still gets its fixed line (fast path exempt);
 //   4. once A has finished, a new agent turn is admitted.
-// Model spend: two short KB turns (about $0.015).
+//
+// Graceful shutdown (D60; Windows can't deliver SIGTERM to a Node child, so the test sends the
+// server's IPC "shutdown" message, which runs the same handler as SIGTERM):
+//   5. with a turn in flight: new agent turns get BUSY_LINE, a social turn still answers, the
+//      in-flight turn finishes and is recorded, then the process exits 0;
+//   6. grace period exceeded (RELAYPAY_SHUTDOWN_GRACE_MS=500): the process exits after about
+//      the grace period, reporting the unfinished turn.
+// Model spend: four short KB turns (about $0.03).
 //
 // Usage: npm run test:capacity   (after npm run build; needs .env)
 
@@ -111,10 +118,51 @@ async function capTest(db: Db): Promise<void> {
   }
 }
 
+async function drainTest(db: Db): Promise<void> {
+  console.log("\n== Graceful shutdown (IPC 'shutdown' = the SIGTERM handler)");
+  const s = await startServer(8791, {}, true);
+  const a = `test-drain-a-${RUN}`, b = `test-drain-b-${RUN}`, c = `test-drain-c-${RUN}`;
+  const pa = post(8791, a, "What fees does RelayPay charge for international payments?");
+  await new Promise((r) => setTimeout(r, 400));
+  const tSignal = performance.now();
+  s.proc.send({ type: "shutdown" });
+  await new Promise((r) => setTimeout(r, 100));
+  const [rb, rc] = await Promise.all([post(8791, b, "How long do payouts to Kenya take?"), post(8791, c, "Thank you.")]);
+  check(rb.text === BUSY, "during shutdown: a new agent turn -> BUSY_LINE", rb.text);
+  check(rc.text === THANKS_LINE, "during shutdown: a social turn still gets its fixed line", rc.text);
+  const ra = await pa;
+  check(ra.status === 200 && ra.text.length > 0 && ra.text !== BUSY && !ra.text.startsWith("Sorry, I'm having trouble"), "the in-flight turn finished normally", ra.text.slice(0, 80));
+  const code = await Promise.race([s.exited, new Promise<string>((r) => setTimeout(() => r("still running"), 15_000))]);
+  const exitMs = Math.round(performance.now() - tSignal);
+  check(code === 0, `process exited 0 after the in-flight turn (${exitMs} ms after the signal)`, String(code));
+  const started = s.logs.find((l) => l.includes('"event":"shutdown_started"')) ?? "";
+  const complete = s.logs.find((l) => l.includes('"event":"shutdown_complete"')) ?? "";
+  check(/"turns_in_flight":[1-9]/.test(started), "shutdown_started logged with the turn in flight", started);
+  check(complete.includes('"turns_unfinished":0'), "shutdown_complete: nothing left unfinished", complete);
+  const rowA = await turnRow(db, a);
+  check(rowA?.["answer_type"] === "answer", "the in-flight turn's row was recorded before exit", JSON.stringify(rowA?.["answer_type"]));
+  const { data: activeA } = await db.from("turn_attempts").select("status").eq("conversation_id", a).eq("status", "active");
+  check((activeA ?? []).length === 0, "no attempt left active");
+
+  console.log("\n== Grace period exceeded (RELAYPAY_SHUTDOWN_GRACE_MS=500)");
+  const g = await startServer(8792, { RELAYPAY_SHUTDOWN_GRACE_MS: "500" }, true);
+  const pg = post(8792, `test-drain-g-${RUN}`, "What fees does RelayPay charge for international payments?");
+  await new Promise((r) => setTimeout(r, 300));
+  const tg = performance.now();
+  g.proc.send({ type: "shutdown" });
+  const gcode = await Promise.race([g.exited, new Promise<string>((r) => setTimeout(() => r("still running"), 5_000))]);
+  const gms = Math.round(performance.now() - tg);
+  const gComplete = g.logs.find((l) => l.includes('"event":"shutdown_complete"')) ?? "";
+  check(gcode === 0 && gms < 2_000, `exited after the grace period, not the turn (${gms} ms)`, String(gcode));
+  check(/"turns_unfinished":[1-9]/.test(gComplete), "shutdown_complete reports the unfinished turn", gComplete);
+  await pg; // the connection drops with the process
+}
+
 async function main(): Promise<number> {
   process.loadEnvFile(resolve(REPO, ".env"));
   const db = createServiceClient();
   await capTest(db);
+  await drainTest(db);
   console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILED`}`);
   return failures ? 1 : 0;
 }

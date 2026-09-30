@@ -1078,6 +1078,32 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - the busy row, attempt and log line are as specified;
     - after the first turn finishes, a new one is admitted.
 
+### D60. Graceful shutdown on SIGTERM: drain for up to 10 s, then exit (audit M7, Batch 3A item 4, 2026-10-01)
+
+- **Gap:** there was no signal handling. Every deploy dropped in-flight turns and could leave attempts active.
+- **Now** (`server.ts main`):
+  - On SIGTERM (and SIGINT locally), `admission.drain()` runs and `shutdown_started` is logged with the in-flight count.
+  - **New agent turns get BUSY_LINE** (D59). The social fast path still answers: it spawns nothing and finishes in milliseconds.
+  - **Every started turn gets up to `SHUTDOWN_GRACE_MS`** (10 s; `RELAYPAY_SHUTDOWN_GRACE_MS` for tests) to finish, including its row and totals. That is tracked by a set of unfinished `done` promises, not the in-flight join map, which is released at `persisted`.
+  - Then `shutdown_complete` is logged with the unfinished count and time, the server is closed, and the process exits with `exit(0)`.
+  - The Dockerfile's exec-form `CMD ["node", "backend/dist/start.js"]` runs Node as PID 1 with the handler registered. `start.js` imports the server in the same process, so SIGTERM reaches it.
+- **Railway needed a config change as well:** "Once the new deployment is online, the old deployment is sent a SIGTERM signal. By default, it is given 0 seconds to gracefully shutdown before being forcefully stopped with a SIGKILL." (https://docs.railway.com/reference/deployments, "Singleton deploys").
+  - Config-as-code field `deploy.drainingSeconds`: "The time in seconds between when the previous deploy is sent a SIGTERM to the time it is sent a SIGKILL." (https://docs.railway.com/reference/config-as-code).
+  - `railway.json` now sets `drainingSeconds: 15`, which is the 10 s grace plus margin.
+  - Without it, the handler would never get to run on Railway.
+- **Local test** (`npm run test:capacity`, 11 of its 21 checks, all pass):
+  - Windows can't deliver SIGTERM to a Node child: `kill()` terminates it. So the test sends the server an IPC `{type: "shutdown"}` message, which calls the same `shutdown()`.
+    - The IPC listener only exists when a parent spawned the process with an IPC channel, which Railway never does.
+  - With a KB turn in flight:
+    - a new agent turn → busy line;
+    - a social turn → its line;
+    - the in-flight turn answered normally, and its row was written;
+    - no attempt was left active;
+    - the process exited 0 at 3.8 s;
+    - `turns_unfinished: 0`.
+  - With `RELAYPAY_SHUTDOWN_GRACE_MS=500` and a turn in flight: it exited at 581 ms, reporting `turns_unfinished: 1`. That turn's attempt stays active until the stale sweep closes it (D51).
+- **Real SIGTERM on Linux:** checked on the next redeploy, in the old deployment's logs (`shutdown_started` / `shutdown_complete`).
+
 
 ## Migration log
 

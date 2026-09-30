@@ -20,7 +20,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServiceClient, newAttemptId, summarize, transcriptHash, type Db, type LogContext } from "@relaypay/shared";
-import { EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, MAX_CONCURRENT_TURNS, STALE_SWEEP_INTERVAL_MS } from "./config.js";
+import { EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, MAX_CONCURRENT_TURNS, SHUTDOWN_GRACE_MS, STALE_SWEEP_INTERVAL_MS } from "./config.js";
 import { Admission } from "./admission.js";
 import { startStaleSweeper } from "./stale-sweep.js";
 import { debugDetails, shapeOf } from "./debug-shape.js";
@@ -103,6 +103,9 @@ const inflight = new Map<string, InflightEntry>();
 
 /** Agent-turn slots for this process (D59); drained on SIGTERM (D60). */
 const admission = new Admission(MAX_CONCURRENT_TURNS);
+
+/** Every turn started in this process that hasn't fully finished (row, totals): what a shutdown waits for. */
+const unfinished = new Set<Promise<void>>();
 
 /** An entry a genuine retry may join: same transcript, and not already ended silently. */
 function joinable(entry: InflightEntry | undefined, hash: string): boolean {
@@ -206,6 +209,9 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
       }),
     },
   );
+  const tracked = handle.done.catch(() => undefined);
+  unfinished.add(tracked);
+  void tracked.finally(() => unfinished.delete(tracked));
   const entry: InflightEntry = { hash, handle, outcome: null };
   inflight.set(key, entry);
   void handle.decided.then((o) => (entry.outcome = o));
@@ -328,6 +334,29 @@ function main(): void {
       });
     });
   });
+  // Graceful shutdown (D60): Railway sends SIGTERM before replacing or stopping the container.
+  // New agent turns get BUSY_LINE (the social fast path still answers), turns in flight get up
+  // to SHUTDOWN_GRACE_MS to finish and be recorded, then the process exits. The IPC message is
+  // a local-test hook only (Windows can't deliver SIGTERM to a Node child); it exists only when
+  // a parent spawned this process with an IPC channel, which Railway never does.
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    admission.drain();
+    const t0 = performance.now();
+    log({ event: "shutdown_started", signal, turns_in_flight: unfinished.size, grace_ms: SHUTDOWN_GRACE_MS });
+    while (unfinished.size > 0 && performance.now() - t0 < SHUTDOWN_GRACE_MS) await new Promise((r) => setTimeout(r, 50));
+    log({ event: "shutdown_complete", signal, turns_unfinished: unfinished.size, ms: Math.round(performance.now() - t0) });
+    server.close();
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  if (process.send) process.on("message", (m: unknown) => {
+    if ((m as { type?: string } | null)?.type === "shutdown") void shutdown("ipc");
+  });
+
   server.listen(port, () => {
     log({ event: "listening", port, node: process.version, max_concurrent_turns: MAX_CONCURRENT_TURNS });
     startStaleSweeper(db, STALE_SWEEP_INTERVAL_MS, log);
