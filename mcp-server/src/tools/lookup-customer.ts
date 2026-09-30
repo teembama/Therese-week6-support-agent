@@ -6,11 +6,12 @@ import { invalid, logEvent, parseArgs } from "./common.js";
 export const name = "lookup_customer";
 
 export const description =
-  "Verify the caller's identity and look up their RelayPay customer record. Needs at least TWO " +
-  "identifiers from the caller: customer ID, email, company name or contact name (for example " +
-  "contact name plus company name). With fewer, it refuses and you must ask for another one. " +
-  "Returns only safe account fields. If verified is false, do not discuss account details. If " +
-  "requires_escalation is true, offer to connect the caller with a specialist.";
+  "Look up the caller's RelayPay customer record. Call it with whatever identifying details the " +
+  "caller has given (their name, company name, email or customer ID), as soon as they ask about " +
+  "their account: this tool decides whether the details are enough, so do not ask for more " +
+  "first. If it returns needs_second_identifier, ambiguous or no_match, ask the caller for " +
+  "another identifier. Returns only safe account fields. If verified is false, do not discuss " +
+  "account details. If requires_escalation is true, offer to connect the caller with a specialist.";
 
 const optionalText = (max: number, what: string) => z.string().trim().max(max).optional().describe(what);
 
