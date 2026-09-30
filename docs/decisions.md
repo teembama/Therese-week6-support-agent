@@ -868,6 +868,14 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - unit (`vapi-events.test.ts`): status mapping, metrics projection with no PII, summary determinism, message classification;
   - `test:endpoint`: first delivery (200 in < 1 s, fields, metrics, summary, nothing sensitive stored); duplicate (identical row); unknown type (ignored, row unchanged); wrong token (404); a call with no turns and an error ending (row created, `failed`); no transcript or customer details in the logs.
 
+### D51. Stale cleanup every 5 minutes (Batch 2D step 2, 2026-09-30)
+
+- `abandon_stale_conversations()` (migration 005) runs once at startup and then every `STALE_SWEEP_INTERVAL_MS` (5 min). The test knob is `RELAYPAY_STALE_SWEEP_MS`.
+- A sweep never overlaps the previous one: a tick that finds one running is skipped and logged (`stale_sweep_skipped`).
+- Each run logs `stale_sweep` with the count and duration, or `stale_sweep_failed`. A failure doesn't stop later runs.
+- The timer is unref'd.
+- **Tests:** unit tests with a stub database (startup run, overlap guard, failure then recovery); `test:endpoint` checks the startup sweep's log line.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
