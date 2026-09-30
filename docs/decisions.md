@@ -946,7 +946,7 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - **Total ≈ $1.2–1.5/month**, well under the $5 included.
   - The 1 GB replica limit caps a runaway, and the account has a $10 hard limit with a $5 alert.
   - Estimate only: re-check against Railway's usage page after a week.
-- **Replica memory limit (the user sets it):** service → **Settings → Deploy → Replica Limits** (https://docs.railway.com/guides/optimize-usage). The limits are per replica, and "setting replica limits too low will cause your service to crash". 1 GB leaves about 3× headroom over one turn's measured peak (~300–350 MB with MCP).
+- **Replica memory limit: set to 1 GB by the user on 2026-09-30.** In the dashboard it is under the service's **Scale** settings, not under Settings → Deploy → Replica Limits as the docs say (https://docs.railway.com/guides/optimize-usage). Serverless (app sleeping) was confirmed OFF. The limits are per replica, and "setting replica limits too low will cause your service to crash". 1 GB leaves about 3× headroom over one turn's measured peak (~300–350 MB with MCP).
 
 ### D54. Vapi server messages: Vapi's default list if the dashboard has no selector (2026-09-30)
 
