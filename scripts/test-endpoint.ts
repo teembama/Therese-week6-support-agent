@@ -335,6 +335,58 @@ async function main(): Promise<number> {
     console.log(`conversation: ${JSON.stringify(conv)} | sum of turns cost=${sumCost.toFixed(6)}`);
     check(Math.abs(Number(conv?.["total_cost_usd"]) - sumCost) < 1e-6 && conv?.["channel"] === "test", "totals equal SUM over turns; channel=test for test- ids");
 
+    console.log("\n== Vapi end-of-call webhook (D50): POST /v/<token>/vapi/events");
+    const eventsPath = `/v/${secret}/vapi/events`;
+    // Recorded shape (ServerMessageEndOfCallReport, https://api.vapi.ai/api-json); values made up.
+    const report = (callId: string, endedReason: string) => ({
+      message: {
+        type: "end-of-call-report", timestamp: 1790000000000, endedReason,
+        startedAt: "2026-09-30T12:00:00.000Z", endedAt: "2026-09-30T12:01:30.000Z", cost: 0.12,
+        call: { id: callId, type: "webCall", assistantId: "asst-test" },
+        customer: { number: "+2348000000000" },
+        analysis: { summary: "VAPI-OWN-SUMMARY-MARKER" },
+        artifact: {
+          transcript: "AI: Hello. User: TRANSCRIPT-MARKER amara at lagos ledger dot example",
+          messages: [{ role: "bot", message: "Hello" }],
+          performanceMetrics: {
+            turnLatencies: [{ modelLatency: 620, voiceLatency: 210, transcriberLatency: 180, endpointingLatency: 300, turnLatency: 1310 }],
+            modelLatencyAverage: 620, voiceLatencyAverage: 210, transcriberLatencyAverage: 180, endpointingLatencyAverage: 300, turnLatencyAverage: 1310,
+          },
+        },
+      },
+    });
+    const recorded = async (id: string, n: number) => {
+      for (let i = 0; i < 60 && A.logs.filter((l) => l.includes('"event":"vapi_end_of_call"') && l.includes(`"conversation_id":"${id}"`)).length < n; i++) await new Promise((r) => setTimeout(r, 250));
+      const { data } = await db.from("conversations").select("ended_at, ended_reason, final_status, vapi_metrics, summary, total_cost_usd").eq("conversation_id", id).maybeSingle();
+      return data as Record<string, unknown> | null;
+    };
+    const firstEvent = await post(A.port, report(feesId, "customer-ended-call"), { path: eventsPath });
+    const row1 = await recorded(feesId, 1);
+    console.log(`first delivery: HTTP ${firstEvent.status} in ${firstEvent.ms}ms | ${JSON.stringify(row1).slice(0, 400)}`);
+    check(firstEvent.status === 200 && firstEvent.ms < 1_000, "end-of-call-report acknowledged with 200 fast (< 1 s; recorded afterwards)");
+    check(row1?.["ended_reason"] === "customer-ended-call" && row1?.["final_status"] === "completed" && row1?.["ended_at"] !== null, "ended_reason and ended_at set; customer-ended-call -> completed");
+    const pm = ((row1?.["vapi_metrics"] ?? {}) as Record<string, unknown>)["performance_metrics"] as Record<string, unknown> | undefined;
+    check(pm?.["turnLatencyAverage"] === 1310 && Array.isArray(pm?.["turnLatencies"]) && (pm?.["turnLatencies"] as unknown[]).length === 1, "vapi_metrics has turnLatencies and the averages");
+    const { data: feesTurns } = await db.from("conversation_turns").select("answer_type").eq("conversation_id", feesId);
+    const nTurns = (feesTurns ?? []).length;
+    const expectedSummary = `${nTurns} turn${nTurns === 1 ? "" : "s"} (answer ${nTurns}). Identity: not attempted. Tickets: 0. Escalations: 0. Ended: customer-ended-call.`;
+    check(row1?.["summary"] === expectedSummary && (feesTurns ?? []).every((t) => (t as { answer_type: string }).answer_type === "answer"), "deterministic summary from our own records", `${String(row1?.["summary"])} vs ${expectedSummary}`);
+    check(!/TRANSCRIPT-MARKER|VAPI-OWN-SUMMARY-MARKER|\+234|amara/i.test(JSON.stringify(row1)), "transcript, Vapi's summary and customer details are not stored");
+    const dup = await post(A.port, report(feesId, "customer-ended-call"), { path: eventsPath });
+    const row2 = await recorded(feesId, 2);
+    check(dup.status === 200 && JSON.stringify(row2) === JSON.stringify(row1), "duplicate delivery -> 200, identical row (idempotent)");
+    const unknownType = await post(A.port, { message: { type: "status-update", status: "in-progress", call: { id: feesId } } }, { path: eventsPath });
+    await new Promise((r) => setTimeout(r, 500));
+    const row3 = await recorded(feesId, 2);
+    check(unknownType.status === 200 && JSON.stringify(row3) === JSON.stringify(row1) && A.logs.some((l) => l.includes('"event":"vapi_event_ignored"') && l.includes('"type":"status-update"')), "unknown message type -> 200, ignored and logged, row unchanged");
+    check((await post(A.port, report(feesId, "customer-ended-call"), { path: `/v/${wrongToken}/vapi/events` })).status === 404, "wrong token on the events route -> 404");
+    const noTurnsId = `test-ep-${RUN}-webhook-no-turns`;
+    await post(A.port, report(noTurnsId, "pipeline-error-custom-llm-llm-failed"), { path: eventsPath });
+    const row4 = await recorded(noTurnsId, 1);
+    check(row4?.["final_status"] === "failed" && String(row4?.["summary"]).startsWith("0 turns. Identity: not attempted.") , "a call with no turns gets a row; error ending -> failed", JSON.stringify(row4).slice(0, 200));
+    check(!A.logs.some((l) => /TRANSCRIPT-MARKER|VAPI-OWN-SUMMARY-MARKER|\+2348000000000/.test(l)), "webhook logs carry no transcript, summary or customer details");
+    check(A.logs.some((l) => l.includes('"event":"stale_sweep"') && /"abandoned":\d+/.test(l)), "stale sweep ran at startup and logged its count (D51)");
+
     console.log("\n== Debug request-shape log (server E, RELAYPAY_DEBUG_REQUEST_SHAPE=1)");
     const E = await startServer(8795, { RELAYPAY_DEBUG_REQUEST_SHAPE: "1" });
     servers.push(E);

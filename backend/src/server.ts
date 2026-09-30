@@ -1,4 +1,5 @@
-// HTTP server: the single route POST /v/:token/chat/completions (Vapi Custom LLM, D4, D26).
+// HTTP server. Token routes: POST /v/:token/chat/completions (Vapi Custom LLM, D4, D26) and
+// POST /v/:token/vapi/events (Vapi server messages, D50).
 // Vapi's base URL is https://<host>/v/<token>; Vapi appends /chat/completions. A wrong or
 // missing token is a 404 like any unknown path, and logged paths are always redacted.
 //
@@ -19,13 +20,16 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServiceClient, newAttemptId, summarize, transcriptHash, type Db, type LogContext } from "@relaypay/shared";
-import { FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES } from "./config.js";
+import { EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, STALE_SWEEP_INTERVAL_MS } from "./config.js";
+import { startStaleSweeper } from "./stale-sweep.js";
 import { debugDetails, shapeOf } from "./debug-shape.js";
 import { sentences } from "./gate.js";
 import { SseStream } from "./sse.js";
 import { runTurn, type TurnHandle, type TurnResult } from "./turn.js";
 import { matchRoute, MIN_TOKEN_LENGTH, redactPath, sha256 } from "./routing.js";
 import { parseVapiBody } from "./vapi.js";
+import { classifyEvent, recordEndOfCall } from "./vapi-events.js";
+import { retryOnce } from "./bounded.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -75,12 +79,12 @@ function sendJson(res: ServerResponse, status: number, body: Record<string, unkn
   res.end(JSON.stringify(body));
 }
 
-async function readBody(req: IncomingMessage): Promise<string | null> {
+async function readBody(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<string | null> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) return null;
+    if (size > maxBytes) return null;
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
@@ -208,6 +212,35 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
   await handle.done.finally(release);
 }
 
+/**
+ * Vapi server messages (D50). Always 200 once the token matched, and fast: the report is
+ * acknowledged first and recorded afterwards (Vapi doesn't retry by default, and the call is
+ * already over, so nobody waits on the write). Logs carry the type, call id and outcome only:
+ * never the transcript, messages, customer details or the token.
+ */
+async function handleEvents(req: IncomingMessage, res: ServerResponse, db: Db, loggedPath: string): Promise<void> {
+  const raw = await readBody(req, EVENTS_MAX_BODY_BYTES);
+  let json: unknown = null;
+  try {
+    json = raw === null ? null : JSON.parse(raw);
+  } catch {
+    json = null;
+  }
+  const event = classifyEvent(json);
+  sendJson(res, 200, { ok: true });
+  if (event.kind === "ignored") {
+    log({ event: "vapi_event_ignored", type: raw === null ? "(body too large)" : event.type, path: loggedPath });
+    return;
+  }
+  const t0 = performance.now();
+  try {
+    const r = await retryOnce(() => recordEndOfCall(db, event.conversationId, event.message), 10_000, "record end-of-call-report");
+    log({ event: "vapi_end_of_call", conversation_id: event.conversationId, final_status: r.finalStatus, row_created: r.created, ms: Math.round(performance.now() - t0) });
+  } catch (err) {
+    log({ event: "vapi_end_of_call_failed", conversation_id: event.conversationId, ...errorDetails(err) });
+  }
+}
+
 function main(): void {
   const envFile = resolve(REPO, ".env");
   if (existsSync(envFile)) process.loadEnvFile(envFile);
@@ -259,6 +292,13 @@ function main(): void {
       req.resume();
       return sendJson(res, 404, { error: "not found" });
     }
+    if (route.kind === "events") {
+      handleEvents(req, res, db, loggedPath).catch((err: unknown) => {
+        log({ event: "request_error", stage: "events", path: loggedPath, ...errorDetails(err) });
+        if (!res.headersSent) sendJson(res, 200, { ok: true });
+      });
+      return;
+    }
     const context: RequestContext = { res, model: "relaypay-agent" };
     requestContext.run(context, () => {
       handleChat(req, res, db, tReceivedMs, loggedPath).catch((err: unknown) => {
@@ -267,7 +307,10 @@ function main(): void {
       });
     });
   });
-  server.listen(port, () => log({ event: "listening", port, node: process.version }));
+  server.listen(port, () => {
+    log({ event: "listening", port, node: process.version });
+    startStaleSweeper(db, STALE_SWEEP_INTERVAL_MS, log);
+  });
 }
 
 main();

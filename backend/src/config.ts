@@ -103,6 +103,12 @@ export const HEADER_WINDOW_CHARS = 200;
 
 export const MAX_BODY_BYTES = 1_000_000;
 
+/** abandon_stale_conversations() cadence (D51). Test knob RELAYPAY_STALE_SWEEP_MS; default 5 minutes. */
+export const STALE_SWEEP_INTERVAL_MS = envMs("RELAYPAY_STALE_SWEEP_MS", 5 * 60_000);
+
+/** Vapi server messages: an end-of-call report carries the whole transcript and messages. */
+export const EVENTS_MAX_BODY_BYTES = 10_000_000;
+
 /**
  * Social replies (D31): the model only picks the intent via [[type=social; intent=...]]; the
  * backend speaks one of these fixed lines and discards any model text, so no free text is ever

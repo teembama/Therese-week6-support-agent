@@ -8,7 +8,7 @@
     "typecheck": "tsc -b",
     "handshake": "node dist/dev/handshake.js",
     "start": "node dist/server.js",
-    "test:gate": "node --import ./dist/test-env.js --test dist/gate.test.js dist/turn-units.test.js dist/routing.test.js dist/supabase-retry.test.js dist/social-fast-path.test.js dist/sentence-filter.test.js dist/tool-grounding.test.js"
+    "test:gate": "node --import ./dist/test-env.js --test dist/gate.test.js dist/turn-units.test.js dist/routing.test.js dist/supabase-retry.test.js dist/social-fast-path.test.js dist/sentence-filter.test.js dist/tool-grounding.test.js dist/vapi-events.test.js dist/stale-sweep.test.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.284",

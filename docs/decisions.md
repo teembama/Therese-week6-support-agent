@@ -843,6 +843,31 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - an unknown primary with Haiku as fallback → the fees question is answered, the row has `model = claude-haiku-4-5`, and `model_fallback` shows `retried: true`;
   - an unknown primary with no fallback → 200 plus the fallback line, and `retried: false`.
 
+### D50. End-of-call webhook: POST /v/:token/vapi/events, with a deterministic summary (Batch 2D step 1, 2026-09-30)
+
+- **Route:** `POST /v/<VAPI_LLM_SECRET>/vapi/events`, with the same constant-time token check as the Custom LLM route. A wrong token, or any other method, gets the same 404.
+- **Messages:**
+  - Only `end-of-call-report` is handled. Every other type gets 200 and is ignored, and only the type is logged.
+  - Shape: `ServerMessageEndOfCallReport` in https://api.vapi.ai/api-json.
+  - Vapi doesn't retry by default (`server.backoffPlan` is undefined). The report is informational, and the default timeout is 20 s.
+- **200 first, then recording:** the call is over and nobody waits on the write, so acknowledging immediately avoids Vapi's timeout. It was measured at 4 ms locally. A failed recording is retried once with a timeout, then logged (`vapi_end_of_call_failed`).
+- **Idempotent by `call.id`** (our `conversation_id`): a repeated delivery writes the identical row, and `test:endpoint` checks it. A call that never reached the LLM gets its conversation row created (channel `voice`, `started_at` from the report).
+- **Fields:**
+  - `ended_at` comes from `endedAt`.
+  - `ended_reason` comes from `endedReason`.
+  - `final_status`: an explicit list of normal endings maps to `completed`. The list covers `customer-ended-call`, `assistant-ended-call*`, `assistant-said-end-call-phrase`, `assistant-forwarded-call`, `manually-canceled`, `voicemail` and `call-deleted`, plus the timeouts `silence-timed-out` and `exceeded-max-duration`.
+  - Everything else maps to `failed`. That includes errors, caller media problems such as a denied microphone, and **unknown reasons**: the enum has 600+ values and grows, and a real error is worse to miss than a normal ending mislabelled.
+- **`vapi_metrics`** holds only `artifact.performanceMetrics` (`turnLatencies[]` and the averages), `cost` and a duration computed from `endedAt − startedAt`.
+  - The transcript, messages, customer details and Vapi's own summary are never stored or logged.
+  - `performanceMetrics` may be missing; then it is stored as `null`.
+- **Summary:** deterministic, built from our own rows. For example: "4 turns (answer 1, escalate 2, social 1). Identity: verified. Tickets: 1 (payment). Escalations: 1 (account). Ended: customer-ended-call."
+  - Not Vapi's `analysis.summary`, and not an LLM: it can't hallucinate, it costs nothing, and the same facts always give the same text.
+  - No names, emails or transcript.
+- **Totals** are recomputed (`recompute_conversation_totals`) after each report.
+- **Tests:**
+  - unit (`vapi-events.test.ts`): status mapping, metrics projection with no PII, summary determinism, message classification;
+  - `test:endpoint`: first delivery (200 in < 1 s, fields, metrics, summary, nothing sensitive stored); duplicate (identical row); unknown type (ignored, row unchanged); wrong token (404); a call with no turns and an error ending (row created, `failed`); no transcript or customer details in the logs.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

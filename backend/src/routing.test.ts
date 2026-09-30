@@ -17,6 +17,12 @@ describe("matchRoute", () => {
     assert.equal(matchRoute("POST", "/v//chat/completions", DIGEST).kind, "not_found");
     assert.equal(matchRoute("POST", "/chat/completions", DIGEST).kind, "not_found");
   });
+  it("accepts POST /v/<token>/vapi/events with the right token; wrong token or GET -> 404 (D50)", () => {
+    assert.deepEqual(matchRoute("POST", `/v/${SECRET}/vapi/events`, DIGEST), { kind: "events" });
+    assert.equal(matchRoute("POST", `/v/${SECRET}x/vapi/events`, DIGEST).kind, "not_found");
+    assert.equal(matchRoute("GET", `/v/${SECRET}/vapi/events`, DIGEST).kind, "not_found");
+    assert.equal(matchRoute("POST", "/vapi/events", DIGEST).kind, "not_found");
+  });
   it("404s other methods and other paths, even with the right token", () => {
     assert.equal(matchRoute("GET", `/v/${SECRET}/chat/completions`, DIGEST).kind, "not_found");
     assert.equal(matchRoute("POST", `/v/${SECRET}/chat/completions/chat/completions`, DIGEST).kind, "not_found");
