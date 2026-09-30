@@ -916,6 +916,49 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `test:endpoint` checks the routes, headers, `/config` (exactly the two env values), `/health`, and the 404s.
 - **Also fixed:** the backend entry is now `dist/start.js`, which loads `.env` before anything reads it (see the commit). `npm start` had failed because the model is required from the environment (D49).
 
+### D53. Deployed to Railway: project therese-relaypay-week6, EU West (Amsterdam) (Batch 2D step 4, Part A, 2026-09-30)
+
+- **Project and service:**
+  - A new project, `therese-relaypay-week6`, created with `railway init`. The repo wasn't linked to any project before, and the Week 5 project was not touched.
+  - Service `relaypay-backend`, environment `production`.
+  - Domain: `relaypay-backend-production-aa34.up.railway.app`.
+- **Image** (`Dockerfile`):
+  - `node:22-bookworm-slim`, two stages. `npm ci --include=optional` keeps the Claude CLI's `linux-x64` binary and esbuild. Then `npm run build` (tsc + MCP bundle) and a prune of dev dependencies.
+  - The runtime stage copies only `dist`, `public` and `node_modules`, adds `ca-certificates` for the CLI's TLS, and runs as the non-root `node` user with `HOME=/home/node`, `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. The CLI child's environment sets the last two as well.
+  - CMD: `node backend/dist/start.js`.
+- **Config:**
+  - `railway.json` sets: DOCKERFILE builder; healthcheck `/health` (60 s); restart on failure (max 10); `sleepApplication: false`; `multiRegionConfig` `europe-west4-drams3a` ×1.
+  - **The first deploy still ran in `us-west2`:** the service manifest showed it, although the file named `europe-west4-drams3a`.
+  - Fixed with `railway scale eu-west=1 us-west=0`, and the manifest now shows `europe-west4-drams3a: 1 replica`.
+  - Railway warns that config-as-code files are deprecated in favour of `.railway/railway.ts`, and keep working until 2026-12-01. Migrating is a later task.
+- **Secrets:**
+  - 8 variables were set with `railway variable set KEY --stdin --skip-deploys`, so values went through stdin and never onto a command line or into output: `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VAPI_LLM_SECRET`, `AGENT_MODEL`, `AGENT_MODEL_FALLBACK`, `VAPI_PUBLIC_KEY`, `VAPI_ASSISTANT_ID`.
+  - They were verified equal to `.env` by a script that prints only "match".
+  - `PORT` is Railway's (8080).
+- **Checked after deploy:**
+  - `/health` → `{"status":"ok"}`; `/`, `/app.js` and `/config` (the two public keys only) → 200; unknown path and wrong token → 404.
+  - The deploy log shows `listening` and a startup `stale_sweep` (0 abandoned, 160 ms).
+  - The deploy log (7 lines) and build log (235 lines) contain no secret value and no secret-shaped string (scanned locally, only counts printed).
+- **Expected monthly cost, against the $5 of included Hobby usage:**
+  - Prices (https://railway.com/pricing, 2026-09-30): memory $0.00000386/GB·s (≈ $10/GB-month), CPU $0.00000772/vCPU·s (≈ $20/vCPU-month), egress $0.05/GB. Billing is per second of actual use.
+  - Idle: about 0.1 GB (the backend measured about 90 MB on the laptop) ≈ **$1.00/month**, plus idle CPU of a few thousandths of a vCPU ≈ **$0.10–0.20**.
+  - Per turn: about 0.3 GB and about 1 vCPU for about 8 s ≈ $0.00007. So 500 turns a month ≈ **$0.04**, with egress under 1 GB ≈ **$0.05**.
+  - **Total ≈ $1.2–1.5/month**, well under the $5 included.
+  - The 1 GB replica limit caps a runaway, and the account has a $10 hard limit with a $5 alert.
+  - Estimate only: re-check against Railway's usage page after a week.
+- **Replica memory limit (the user sets it):** service → **Settings → Deploy → Replica Limits** (https://docs.railway.com/guides/optimize-usage). The limits are per replica, and "setting replica limits too low will cause your service to crash". 1 GB leaves about 3× headroom over one turn's measured peak (~300–350 MB with MCP).
+
+### D54. Vapi server messages: Vapi's default list if the dashboard has no selector (2026-09-30)
+
+- The assistant's `serverMessages` field can't be set by us without a private API key, and the user won't provide one (decided). If the dashboard shows no "Server Messages" selector, the assistant keeps **Vapi's default list**:
+  - `conversation-update, end-of-call-report, function-call, hang, speech-update, status-update, tool-calls, transfer-destination-request, handoff-destination-request, user-interrupted, assistant.started` (https://docs.vapi.ai/api-reference/assistants/create).
+- **Trade-off, accepted:**
+  - Every call then POSTs several extra messages to `/v/<token>/vapi/events`, mainly `speech-update`, `status-update` and `conversation-update` several times per turn.
+  - The webhook answers each one with a fast 200 (measured 4 ms locally), logs only its type, and writes nothing (D50). The cost is a little CPU, egress and log volume.
+  - `conversation-update` bodies carry the transcript. They are parsed in memory and discarded, never logged or stored.
+- **Risk:** if Vapi ever waited on one of these messages (e.g. `transfer-destination-request`, `tool-calls`), our 200 without a body would be the answer. We use neither transfers nor Vapi tools (D8), so no call path depends on them.
+- **To revisit:** if a private key is ever available, set `serverMessages: ["end-of-call-report"]`.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
