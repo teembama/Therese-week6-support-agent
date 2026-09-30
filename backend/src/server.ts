@@ -20,7 +20,8 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServiceClient, newAttemptId, summarize, transcriptHash, type Db, type LogContext } from "@relaypay/shared";
-import { EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, STALE_SWEEP_INTERVAL_MS } from "./config.js";
+import { EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, MAX_CONCURRENT_TURNS, STALE_SWEEP_INTERVAL_MS } from "./config.js";
+import { Admission } from "./admission.js";
 import { startStaleSweeper } from "./stale-sweep.js";
 import { debugDetails, shapeOf } from "./debug-shape.js";
 import { sentences } from "./gate.js";
@@ -99,6 +100,9 @@ interface InflightEntry {
 }
 
 const inflight = new Map<string, InflightEntry>();
+
+/** Agent-turn slots for this process (D59); drained on SIGTERM (D60). */
+const admission = new Admission(MAX_CONCURRENT_TURNS);
 
 /** An entry a genuine retry may join: same transcript, and not already ended silently. */
 function joinable(entry: InflightEntry | undefined, hash: string): boolean {
@@ -190,6 +194,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
       tReceivedIso,
       transcriptHash: hash,
       ...(afterPrevious ? { afterPrevious } : {}),
+      admit: () => admission.tryAcquire(key),
     },
     {
       // Reuse a stream already opened by a join that fell through.
@@ -324,7 +329,7 @@ function main(): void {
     });
   });
   server.listen(port, () => {
-    log({ event: "listening", port, node: process.version });
+    log({ event: "listening", port, node: process.version, max_concurrent_turns: MAX_CONCURRENT_TURNS });
     startStaleSweeper(db, STALE_SWEEP_INTERVAL_MS, log);
   });
 }

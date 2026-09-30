@@ -76,6 +76,13 @@ function envMs(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function envCount(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const n = raw === undefined || raw === "" ? fallback : Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`${name} must be a positive integer (got "${raw}")`);
+  return n;
+}
+
 /** No spoken text within this long of receiving the request: speak FALLBACK_LINE. */
 export const FIRST_TOKEN_TIMEOUT_MS = envMs("RELAYPAY_FIRST_TOKEN_TIMEOUT_MS", 8_000);
 
@@ -137,5 +144,19 @@ export const FILLER_LINE = "One moment while I check that.";
 
 /** Tools whose start triggers the filler line (not log_conversation_event, which is instant). */
 export const FILLER_TOOL_NAMES: readonly string[] = ["lookup_customer", "lookup_transaction", "lookup_payout", "create_support_ticket", "create_escalation"];
+
+/**
+ * At most this many agent turns (a Claude CLI + MCP server each) run at once in this process
+ * (audit H4, D59). Beyond it the backend speaks BUSY_LINE without spawning anything. Turns are
+ * counted per conversation turn, so a speculative replacement of the same turn reuses its slot.
+ * The social fast path is exempt.
+ */
+export const MAX_CONCURRENT_TURNS = envCount("RELAYPAY_MAX_CONCURRENT_TURNS", 3);
+
+/** Spoken when the concurrency cap is reached, or while the process shuts down (D59, D60). */
+export const BUSY_LINE = "We're getting a lot of calls right now. Please try again in a moment.";
+
+/** SIGTERM: how long in-flight turns may take to finish before the process exits (D60). */
+export const SHUTDOWN_GRACE_MS = envMs("RELAYPAY_SHUTDOWN_GRACE_MS", 10_000);
 
 export const FALLBACK_LINE = "Sorry, I'm having trouble checking that right now. Could you try again in a moment?";

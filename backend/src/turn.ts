@@ -17,6 +17,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { logRetrievalResult, newAttemptId, rankKnowledge, summarize, type Db, type KbChunk, type LogContext } from "@relaypay/shared";
+import type { Refusal, Slot } from "./admission.js";
 import { cliEnv, mcpEnv } from "./child-env.js";
 import { pickMcpEntry } from "./mcp-entry.js";
 import {
@@ -26,6 +27,8 @@ import {
   MCP_TOOL_PREFIX,
   AGENT_MODEL,
   AGENT_MODEL_FALLBACK,
+  BUSY_LINE,
+  MAX_CONCURRENT_TURNS,
   MODEL_FALLBACK_MIN_REMAINING_MS,
   DB_CALL_TIMEOUT_MS,
   FALLBACK_LINE,
@@ -86,6 +89,11 @@ export interface TurnInput {
    * database, so this attempt's begin_turn_attempt always runs after it and marks it replaced.
    */
   afterPrevious?: Promise<void>;
+  /**
+   * Asks for an agent-turn slot (D59/D60). Called only when the turn needs the agent (after the
+   * social fast path). A refusal speaks BUSY_LINE with no CLI or MCP spawned. Absent = admitted.
+   */
+  admit?: () => Slot | Refusal;
 }
 
 export interface TurnSink {
@@ -154,21 +162,32 @@ function previousAgentLine(history: HistoryEntry[]): string | null {
   return null;
 }
 
+interface FixedLine {
+  line: string;
+  answerType: AnswerType;
+  /** turn_attempts.status_reason */
+  statusReason: string;
+  /** conversation_turns.confidence_note */
+  note: string;
+  /** Extra fields for the turn log line. */
+  logFields: Record<string, unknown>;
+}
+
 /**
- * Social fast path (D35): speak the fixed line immediately (no model call, no database wait),
- * then record the attempt and the turn in the background, bounded: each database call has a
- * timeout, registration gets one retry under a fresh attempt id (a timed-out first try may
- * still have committed; the retry marks it replaced), and failures only reach stderr. Social
- * replies have no side effects, so recording late is safe.
+ * A backend line with no model call (D35 social fast path; D59 busy): speak it immediately
+ * (no database wait), then record the attempt and the turn in the background, bounded: each
+ * database call has a timeout, registration gets one retry under a fresh attempt id (a
+ * timed-out first try may still have committed; the retry marks it replaced), and failures only
+ * reach stderr. These lines have no side effects, so recording late is safe.
  */
-function runSocialFastPath(input: TurnInput, sink: TurnSink, intent: SocialIntent): TurnHandle {
+function runFixedLine(input: TurnInput, sink: TurnSink, spec: FixedLine): TurnHandle {
   const { db, ctx } = input;
-  const line = socialLine(intent);
+  const line = spec.line;
   sink.begin("agent");
   for (const s of sentences(line)) sink.speak(s);
   sink.end();
   const msSpoken = Math.round(performance.now() - input.tReceivedMs);
-  const result: TurnResult = { spoken: line, answerType: "social", source: "agent" };
+  const result: TurnResult = { spoken: line, answerType: spec.answerType, source: "agent" };
 
   let resolveBegun!: () => void;
   const begun = new Promise<void>((r) => (resolveBegun = r));
@@ -197,13 +216,13 @@ function runSocialFastPath(input: TurnInput, sink: TurnSink, intent: SocialInten
       const metrics: AttemptMetrics = { ...EMPTY_METRICS, ms_first_token: msSpoken, ms_total: msSpoken };
       status = await retryOnce(
         () =>
-          finishTurnAttempt(db, attemptId, "completed", "social (fast_path)", metrics, {
+          finishTurnAttempt(db, attemptId, "completed", spec.statusReason, metrics, {
             ...metrics,
             transcript_hash: input.transcriptHash,
             user_transcript: input.userText,
             assistant_response: line,
-            answer_type: "social",
-            confidence_note: `fast_path; intent=${intent}`,
+            answer_type: spec.answerType,
+            confidence_note: spec.note,
             kb_chunk_ids: [],
             t_received: input.tReceivedIso,
             ms_tools: null,
@@ -215,7 +234,7 @@ function runSocialFastPath(input: TurnInput, sink: TurnSink, intent: SocialInten
       console.error(`[relaypay] fast-path turn ${ctx.conversationId}#${ctx.turnIndex} (${attemptId}) not recorded: ${summarize(err instanceof Error ? err.message : String(err), 200)}`);
     } finally {
       resolveBegun();
-      console.log(JSON.stringify({ event: "turn", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: attemptId, attempt_status: status, answer_type: "social", fast_path: true, intent, ms_first_token: msSpoken, ms_total: msSpoken, cost_usd_estimate: 0 }));
+      console.log(JSON.stringify({ event: "turn", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: attemptId, attempt_status: status, answer_type: spec.answerType, ...spec.logFields, ms_first_token: msSpoken, ms_total: msSpoken, cost_usd_estimate: 0 }));
     }
   })();
   return { decided: Promise.resolve(result), persisted, done: persisted, begun, replace: () => {}, attemptId: ctx.attemptId };
@@ -223,7 +242,17 @@ function runSocialFastPath(input: TurnInput, sink: TurnSink, intent: SocialInten
 
 export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
   const socialIntent = matchSocial(input.userText, previousAgentLine(input.history));
-  if (socialIntent) return runSocialFastPath(input, sink, socialIntent);
+  if (socialIntent) {
+    return runFixedLine(input, sink, {
+      line: socialLine(socialIntent), answerType: "social", statusReason: "social (fast_path)",
+      note: `fast_path; intent=${socialIntent}`, logFields: { fast_path: true, intent: socialIntent },
+    });
+  }
+  const slot = input.admit ? input.admit() : null;
+  if (slot === "busy" || slot === "shutting_down") {
+    const why = slot === "busy" ? `busy: concurrency cap ${MAX_CONCURRENT_TURNS} reached` : "busy: shutting down";
+    return runFixedLine(input, sink, { line: BUSY_LINE, answerType: "error", statusReason: "busy", note: why, logFields: { busy: slot } });
+  }
 
   let resolveDecided!: (r: TurnResult) => void;
   const decided = new Promise<TurnResult>((r) => (resolveDecided = r));
@@ -739,6 +768,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     }));
   })();
 
+  if (slot) void done.finally(() => slot.release());
   return {
     decided,
     persisted,

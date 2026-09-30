@@ -1056,6 +1056,28 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - The backend suite now has 165 tests, all passing.
 - **Still not caught (G1):** a number-free unsupported claim in an **answer** that cites a valid chunk. See `limitations.md`.
 
+### D59. At most 3 concurrent agent turns per process; beyond that, a fixed busy line (audit H4, Batch 3A item 3, 2026-10-01)
+
+- **Gap:** every non-social request spawned a Claude CLI and an MCP server, with no limit. A burst, or a leaked token, could exhaust the single 1 GB replica (about 300–350 MB per turn, D53) and run up spend.
+- **Rule:**
+  - `backend/src/admission.ts` admits at most `RELAYPAY_MAX_CONCURRENT_TURNS` agent turns at once (default 3; must be a positive integer, or startup fails).
+  - Beyond that, `runTurn` speaks `BUSY_LINE` ("We're getting a lot of calls right now. Please try again in a moment.") through the same no-model path as the social fast path. No CLI or MCP is spawned.
+  - The busy turn is recorded as `answer_type = error`, `confidence_note = "busy: concurrency cap N reached"`, attempt `completed` / `busy`. The turn log line carries `busy: "busy"`.
+- **What counts toward the cap:**
+  - Slots are counted **per conversation turn** (`callId#turnIndex`). A speculative replacement of the same turn reuses its predecessor's slot, so one caller's partial transcripts never lock out another caller.
+  - An in-flight duplicate joins the running turn and needs no slot.
+  - The social fast path is exempt: it spawns nothing.
+  - A slot is released when the turn's `done` settles.
+- **Why 3:** at about 350 MB per turn plus the ~100 MB idle backend, 3 turns fit in 1 GB with headroom. At one turn every few seconds per active call, that is several simultaneous calls, which is plenty for the demo and grading.
+- **Tests:**
+  - `admission.test.ts`, 4 tests: cap, same-turn slot reuse, idempotent release, drain.
+  - `npm run test:capacity`, 10 checks, run locally, all pass:
+    - with cap 1, a second conversation's agent turn gets the busy line in 15 ms, and nothing is spawned;
+    - a social turn in the same period gets its fixed line;
+    - the running turn answers normally;
+    - the busy row, attempt and log line are as specified;
+    - after the first turn finishes, a new one is admitted.
+
 
 ## Migration log
 

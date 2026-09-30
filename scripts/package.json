@@ -13,7 +13,8 @@
     "test-agent": "tsx test-agent.ts",
     "test-deployed": "tsx test-deployed.ts",
     "test-endpoint": "tsx test-endpoint.ts",
-    "eval-grounding": "tsx eval-grounding.ts"
+    "eval-grounding": "tsx eval-grounding.ts",
+    "test-capacity": "tsx test-capacity.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.2.0",
