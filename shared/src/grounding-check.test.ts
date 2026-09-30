@@ -81,3 +81,16 @@ describe("false positives from the first grounding-eval run (fixed)", () => {
     assert.deepEqual(terms(checkGrounding("It depends on your banking partners.", [TIMING_CHUNK], "How long do payouts to Kenya take?"), "invented_attribution"), ["your banking partners"]);
   });
 });
+
+describe("regression: second live Kenya answer (call 01a0ef57…)", () => {
+  const ANSWER = "International payouts usually take 2 to 5 business days, depending on destination and banking partners. I can't confirm the specific timeline for Kenya without knowing more about your banking setup there.";
+  it("flags the invented attribution even inside a 'can't confirm' sentence", () => {
+    const flags = checkGrounding(ANSWER, [TIMING_CHUNK], "So how long will it pay out to Kenya take?");
+    assert.deepEqual(terms(flags, "invented_attribution"), ["your banking setup"]);
+    assert.deepEqual(terms(flags, "unsupported_specific"), [], "Kenya inside the disclaimer is not a claim");
+  });
+  it("the prompt's GOOD example passes", () => {
+    const good = "International payouts usually take 2 to 5 business days, depending on destination and banking partners. I can't confirm a specific timeline for Kenya.";
+    assert.deepEqual(checkGrounding(good, [TIMING_CHUNK], "How long do payouts to Kenya take?"), []);
+  });
+});

@@ -107,3 +107,27 @@ It also includes two good-vs-bad examples taken from the live call (Kenya and fe
 - **One run per prompt.** LLM output varies between runs, so "0 flags after" is evidence, not proof. The Task 6 evals should repeat each question several times.
 - **The deterministic checks catch known patterns only.** The S1 "so you can see what they are" clause was not flagged, and a subtler unsupported claim would slip through too. The Sonnet judge with verified quotes (D32) is the real decider.
 - **The prompt now includes the Kenya and fees examples,** so K1 and S1 are partly tested on examples the model has seen. New questions of the same kind should be added to the Task 6 set to check that the rule generalises.
+
+## Run 3 (2026-09-30): after the Kenya-example and checker changes, `run-2026-09-30T07-47-16-743Z`
+
+Changes since the after-run:
+- The prompt's Kenya GOOD example is now exactly "International payouts usually take 2 to 5 business days, depending on destination and banking partners. I can't confirm a specific timeline for Kenya." The second live answer is added as ALSO BAD.
+- The checker now also flags `your X` attributions inside disclaimer sentences. The live Kenya sentence is a regression test.
+- "Thank you." now goes through the deterministic social fast path (D35), not the model.
+
+| Q | After-run (2026-09-29) | Run 3 (2026-09-30) |
+| --- | --- | --- |
+| S1 fees | answer / none | answer / none |
+| S2–S6 | clarify / decline (unchecked) | clarify / decline (unchecked), same types |
+| S7 restricted | answer / none | answer / none |
+| S8 9am guarantee | answer / none | answer / none |
+| K1 Kenya | answer / none ("I can't confirm the exact timeline for Kenya specifically.") | answer / **`invented_attribution: your banking setup`**: "…I can't confirm a specific timeline for Kenya without more details about your banking setup there." |
+| T1 thank you | social via the model (one 8s timeout, 3/3 on repeat) | social via the fast path, fixed line, no model call |
+
+**Totals:** after-run 0 of 4 answers flagged, 0 flags. Run 3: 1 of 4, 1 flag. Cost $0.0169 (estimate, cap $0.05). 0 server errors.
+
+**Reading:**
+- The checker change works: it flags the same pattern as the live call.
+- The prompt change did **not** stop the pattern. The model copied the GOOD sentence and then added the "without … your banking setup" clause that the ALSO BAD example forbids.
+- The after-run's 0 flags would partly be explained by the old checker skipping disclaimers.
+- This is still one run per prompt. The Task 6 judge and repeated runs should decide whether a further prompt change (for example, an explicit rule to end the disclaimer sentence after the place name) is worth it. No further prompt change is made here.

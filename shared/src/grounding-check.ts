@@ -9,7 +9,8 @@
 //                         answer makes a claim about it)
 //   invented_attribution  "your <thing>" when the cited chunks attribute nothing to the reader
 // A sentence that explicitly declines to confirm something ("I can't confirm ... for Kenya") is
-// not a claim, so specifics inside it are not flagged. A NEGATED intensifier ("can't guarantee")
+// not a claim, so SPECIFICS (numbers, places) inside it are not flagged; attributions and
+// strengthening words inside it still are. A NEGATED intensifier ("can't guarantee")
 // weakens rather than strengthens, and "your X" repeating the caller's own "my X" is not an
 // invented attribution (both were false positives in the first grounding-eval run). Chunk
 // headings count as evidence (callers pass "heading\ncontent").
@@ -89,7 +90,9 @@ export function checkGrounding(answer: string, citedChunks: string[], callerText
     for (const m of s.matchAll(/\byour\s+(?:own\s+|specific\s+|particular\s+)?([a-z]+)(?:\s+[a-z]+)?/g)) {
       const noun = m[1]!;
       const echoed = has(caller, `my ${noun}`) || has(caller, `our ${noun}`);
-      if (!has(source, "your") && !disclaimer && !echoed) add("invented_attribution", m[0], raw);
+      // Checked inside disclaimers too: "I can't confirm X without knowing more about your banking
+      // setup there" still invents something about the caller (live call 01a0ef57…).
+      if (!has(source, "your") && !echoed) add("invented_attribution", m[0], raw);
     }
 
     // Dropped hedge: the same numbers as a hedged chunk sentence, but no hedge in the answer.
