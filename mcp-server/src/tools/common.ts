@@ -107,6 +107,22 @@ export function notAvailable(ref: string, detail: string): ToolOutcome {
   };
 }
 
+/** Record status as it may be spoken (D45): "review required" -> "under review". */
+export function customerSafeStatus(status: string): string {
+  return status === "review required" ? "under review" : status;
+}
+
+/**
+ * A seed support_summary as it may be spoken (D45). Summaries that mention compliance or carry an
+ * internal instruction ("Escalate account-specific questions.") are replaced by a plain status
+ * sentence; the others pass through.
+ */
+export function customerSafeSummary(summary: string | null, kind: "transaction" | "payout", status: string): string | null {
+  if (!summary) return null;
+  if (!/compliance|escalate/i.test(summary)) return summary;
+  return status === "review required" ? `The ${kind} is under review.` : `The ${kind} needs a specialist to look at it.`;
+}
+
 /** Today's date (UTC) as YYYY-MM-DD, for comparisons with DATE columns. */
 export function todayUtc(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);

@@ -82,6 +82,10 @@ async function main(): Promise<number> {
     check(txnUnverified["found"] === true && noAmounts(txnUnverified), "TXN-9001 unverified -> amount and currency ABSENT");
     check(txnUnverified["status"] === "success" && txnUnverified["transaction_status"] === "processing", "tool status 'success' is not overwritten by the record's own status (transaction_status)");
 
+    const reviewTxn = await call("lookup_transaction", { transaction_id: "TXN-9003" }, "success");
+    const spokenFields = (x: Structured) => JSON.stringify([x["transaction_status"], x["payout_status"], x["support_summary"], x["failure_reason"]]);
+    check(reviewTxn["transaction_status"] === "under review" && reviewTxn["support_summary"] === "The transaction is under review.", "unverified TXN-9003 -> 'under review', seed compliance summary replaced");
+    check(!/compliance|escalate/i.test(spokenFields(reviewTxn)), "TXN-9003: no 'compliance' in any spoken field", spokenFields(reviewTxn));
     const malformed = await call("lookup_transaction", { transaction_id: "TXN-12" }, "invalid_input");
     check(malformed["status"] === "invalid_input", "malformed ID TXN-12 -> invalid_input");
     const unknown = await call("lookup_transaction", { transaction_id: "TXN-0000" }, "not_found");
@@ -91,6 +95,7 @@ async function main(): Promise<number> {
     const payout = await call("lookup_payout", { payout_id: "PAY-7002" }, "success");
     check(payout["status"] === "success" && payout["requires_escalation"] === true && payout["escalation_category"] === "compliance", "PAY-7002 -> requires_escalation, category compliance");
     check(noAmounts(payout), "PAY-7002 (5300 GBP) -> amount and currency ABSENT");
+    check(payout["payout_status"] === "under review" && !/compliance|escalate/i.test(spokenFields(payout)), "PAY-7002: 'under review', no 'compliance' in any spoken field", spokenFields(payout));
     check(payout["failure_reason"] === "The payout is under review." && !String(payout["support_summary"]).includes("undefined"), "PAY-7002 failure_reason is the customer-safe text");
     const byTxn = await call("lookup_payout", { transaction_id: "TXN-9004" }, "success");
     check(byTxn["payout_id"] === "PAY-7003" && byTxn["failure_reason"] === "The beneficiary details need review.", "lookup by transaction_id TXN-9004 -> PAY-7003");

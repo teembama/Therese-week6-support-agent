@@ -107,7 +107,8 @@ describe("outcome and timeline promises (every spoken type)", () => {
       "Please contact RelayPay support through official support channels right away, and they'll help you.",
     ], observed([]), "My account was restricted and nobody is helping me.");
     assert.deepEqual(r.spoken, ["I'm sorry to hear your account is restricted."]);
-    assert.deepEqual(r.filtered.map((f) => f.flags.map((x) => x.kind)).flat(), ["outcome_promise", "timeline_promise"]);
+    // The first also says "compliance reviews are ongoing", so it carries internal_term too (D45).
+    assert.deepEqual(r.filtered.map((f) => f.flags.map((x) => x.kind).sort()), [["internal_term", "outcome_promise"], ["timeline_promise"]]);
   });
   it("speaks the hedged range when its chunk is cited", () => {
     const r = run([`[[type=answer; kb=${PAYOUTS}]] International payouts usually take 2 to 5 business days, depending on destination and banking partners.`]);
@@ -138,6 +139,13 @@ describe("outcome and timeline promises (every spoken type)", () => {
     assert.deepEqual(kinds("They'll look into your restricted account and be in touch soon."), ["timeline_promise"]);
     // Noting the caller's preferred time, in its own clause, is not a promise (the tool's own wording).
     assert.deepEqual(kinds("A RelayPay support specialist will follow up with you at efua@accrastack.example, and your preferred time, tomorrow morning, has been noted."), []);
+  });
+  it("never speaks 'compliance' unless the caller said it first (every type)", () => {
+    const r = run(["[[type=clarify; kb=none; tool=none]] That transaction is under compliance review. ", "Would you like me to connect you with a specialist?"]);
+    assert.deepEqual(r.spoken, ["Would you like me to connect you with a specialist?"]);
+    assert.equal(r.filtered[0]!.flags[0]!.kind, "internal_term");
+    const echo = run(["[[type=escalate; kb=none; tool=none]] I understand you're worried about the compliance review. ", "A specialist needs to look at this."], observed([]), "Is my account stuck in compliance?");
+    assert.equal(echo.filtered.length, 0, JSON.stringify(echo.filtered));
   });
   it("a clause break ends a denial: 'I can't confirm it, but it will be lifted right away' is a promise", () => {
     const f = new SentenceFilter([], "", { mode: "promises" });

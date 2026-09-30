@@ -22,7 +22,7 @@
 
 export type GroundingFlagKind =
   | "strengthening_word" | "dropped_hedge" | "unsupported_specific" | "invented_attribution"
-  | "outcome_promise" | "timeline_promise" | "unsupported_status";
+  | "outcome_promise" | "timeline_promise" | "unsupported_status" | "internal_term";
 
 export interface GroundingFlag {
   kind: GroundingFlagKind;
@@ -172,6 +172,9 @@ function monthsIn(s: string, source: string, caller: string): string[] {
     .map(([name]) => name);
 }
 
+/** Words never spoken unless the caller used them first (D45). */
+const INTERNAL_TERMS = ["compliance"];
+
 export type FilterMode = "full" | "promises";
 
 export interface SentenceFilterOptions {
@@ -212,6 +215,9 @@ export class SentenceFilter {
     const s = normalise(sentence);
     const flags: GroundingFlag[] = [];
     for (const p of promisesIn(s, this.source)) flags.push({ kind: p.kind, term: p.term, sentence });
+    // D45: every spoken type. Compliance matters are for specialists; the word itself invites
+    // "explaining compliance decisions" (escalation-rules.md). Allowed only as an echo.
+    for (const t of INTERNAL_TERMS) if (has(s, t) && !has(this.caller, t)) flags.push({ kind: "internal_term", term: t, sentence });
     if (this.mode === "promises") return flags;
     for (const w of strengtheningIn(s, this.source)) {
       if (!flags.some((f) => f.term.includes(w))) flags.push({ kind: "strengthening_word", term: w, sentence });

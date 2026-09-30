@@ -1,7 +1,7 @@
 import { normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, notAvailable, parseArgs, verifiedCustomerId } from "./common.js";
+import { customerSafeStatus, customerSafeSummary, invalid, notAvailable, parseArgs, verifiedCustomerId } from "./common.js";
 
 export const name = "lookup_payout";
 
@@ -50,7 +50,10 @@ const STATUS_SENTENCE: Record<string, string> = {
 /** Derived in code from the payout status plus the linked transaction's support_summary (Task 1 decision). */
 export function payoutSupportSummary(status: string, transactionSummary: string | null): string {
   const base = STATUS_SENTENCE[status] ?? "The payout status is not available.";
-  return transactionSummary ? `${base} ${transactionSummary}` : base;
+  // The linked transaction's summary goes through the same customer-safe mapping (D45); a
+  // replacement that only repeats the status sentence is dropped.
+  const safe = customerSafeSummary(transactionSummary, "payout", status);
+  return safe && safe !== base ? `${base} ${safe}` : base;
 }
 
 export const handler = withToolLogging(name, "Look up a payout by payout or transaction reference", async (args, { db, ctx }): Promise<ToolOutcome> => {
@@ -84,7 +87,7 @@ export const handler = withToolLogging(name, "Look up a payout by payout or tran
       found: true,
       payout_id: p.payout_id,
       transaction_id: p.transaction_id,
-      payout_status: p.status,
+      payout_status: customerSafeStatus(p.status),
       scheduled_for: p.scheduled_for,
       failure_reason: safeFailureReason(p.failure_reason),
       support_summary: payoutSupportSummary(p.status, p.transactions?.support_summary ?? null),

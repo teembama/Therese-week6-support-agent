@@ -784,6 +784,19 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - verified CUS-1001: own TXN-9001 → success; TXN-9003 → denied with no status or summary; unknown TXN-0000 → the identical denial;
   - PAY-7002, and PAY-7003 via TXN-9004 → denied; own PAY-7001 → success.
 
+### D45. "Compliance" is never spoken (2026-09-30)
+
+- **Tools:**
+  - `lookup_transaction` and `lookup_payout` return the record status through the same customer-safe mapping ("review required" → "under review").
+  - A seed `support_summary` that mentions compliance, or carries an internal instruction ("Escalate account-specific questions."), is replaced by a plain status sentence ("The transaction is under review."). This includes the linked transaction summary that `lookup_payout` appends, which changes D39's "status sentence + transaction summary" for those records only.
+  - `escalation_category: "compliance"` is still returned, because it is the value the model passes to `create_escalation`. It is a field, not text to speak.
+- **Runtime filter (every spoken type):** a sentence containing "compliance" is dropped unless the caller used the word first (`internal_term`).
+  - Why: `escalation-rules.md` forbids explaining compliance decisions, and naming them invites it. "Under review" plus an offer of a specialist says everything the caller needs.
+  - Side effect, accepted: a general KB answer that quotes "compliance reviews" is also filtered. The restrictions FAQ now yields its other sentences, or the safe decline if nothing is left.
+- **Tests:**
+  - `test:tools`: unverified TXN-9003 → "under review" with the summary replaced, and no "compliance" in any spoken field; the same for PAY-7002.
+  - Unit tests: the filter drops the word, and allows the caller's echo.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

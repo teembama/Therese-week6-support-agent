@@ -1,7 +1,7 @@
 import { normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, notAvailable, parseArgs, todayUtc, verifiedCustomerId } from "./common.js";
+import { customerSafeStatus, customerSafeSummary, invalid, notAvailable, parseArgs, todayUtc, verifiedCustomerId } from "./common.js";
 
 export const name = "lookup_transaction";
 
@@ -61,8 +61,8 @@ export const handler = withToolLogging(name, "Look up a transaction's customer-s
       found: true,
       transaction_id: t.transaction_id,
       type: t.transaction_type,
-      transaction_status: t.status,
-      support_summary: t.support_summary,
+      transaction_status: customerSafeStatus(t.status),
+      support_summary: customerSafeSummary(t.support_summary, "transaction", t.status),
       estimated_arrival: t.estimated_arrival,
       past_estimated_arrival: pastEstimatedArrival(t.status, t.estimated_arrival),
       ...transactionEscalation(t.status),

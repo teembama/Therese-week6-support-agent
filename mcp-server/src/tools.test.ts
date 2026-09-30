@@ -6,6 +6,7 @@ import { escalationKeys, followUpSummary, inputSchema as escalationInput } from 
 import { inputSchema as ticketInput, ticketIdempotencyKey } from "./tools/create-support-ticket.js";
 import { inputSchema as eventInput } from "./tools/log-conversation-event.js";
 import { accountEscalation } from "./tools/lookup-customer.js";
+import { customerSafeStatus, customerSafeSummary } from "./tools/common.js";
 import { payoutSupportSummary, safeFailureReason } from "./tools/lookup-payout.js";
 import { pastEstimatedArrival, transactionEscalation } from "./tools/lookup-transaction.js";
 
@@ -41,6 +42,20 @@ describe("lookup_payout", () => {
   it("support summary = status sentence + the transaction's summary", () => {
     assert.equal(payoutSupportSummary("processing", "Payout is processing within the normal expected window."), "The payout is processing. Payout is processing within the normal expected window.");
     assert.equal(payoutSupportSummary("review required", null), "The payout is under review.");
+  });
+});
+
+describe("customer-safe status and summary (D45)", () => {
+  it("review required is spoken as under review; seed summaries with compliance are replaced", () => {
+    assert.equal(customerSafeStatus("review required"), "under review");
+    assert.equal(customerSafeStatus("processing"), "processing");
+    assert.equal(customerSafeSummary("Transaction requires compliance review. Escalate account-specific questions.", "transaction", "review required"), "The transaction is under review.");
+    assert.equal(customerSafeSummary("Payout is processing within the normal expected window.", "transaction", "processing"), "Payout is processing within the normal expected window.");
+  });
+  it("a payout's embedded transaction summary is mapped too (PAY-7002 via TXN-9003)", () => {
+    const s = payoutSupportSummary("review required", "Transaction requires compliance review. Escalate account-specific questions.");
+    assert.equal(s, "The payout is under review.");
+    assert.doesNotMatch(s, /compliance|escalate/i);
   });
 });
 
