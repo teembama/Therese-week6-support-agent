@@ -7,7 +7,7 @@
     "build": "tsc -b",
     "typecheck": "tsc -b",
     "start": "node dist/main.js",
-    "test": "node --test dist/tool-logging.test.js"
+    "test": "node --test dist/tool-logging.test.js dist/tools.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.2.0",

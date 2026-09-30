@@ -74,7 +74,9 @@ async function main(): Promise<number> {
     console.log("\n== 2. tools/list");
     const { tools } = await client.listTools();
     for (const t of tools) console.log(`${t.name}: inputSchema=${JSON.stringify(t.inputSchema)}`);
-    check(tools.length === 1 && tools[0]?.name === "search_knowledge_base", "exactly one tool: search_knowledge_base");
+    // Batch 2B added the six support tools (the agent's allowlist is unchanged until 2C).
+    const expected = ["create_escalation", "create_support_ticket", "log_conversation_event", "lookup_customer", "lookup_payout", "lookup_transaction", "search_knowledge_base"];
+    check(JSON.stringify(tools.map((t) => t.name).sort()) === JSON.stringify(expected), `exactly the 7 tools: ${expected.join(", ")}`);
 
     const call = async (label: string, args: Record<string, unknown>) => {
       console.log(`\n== ${label}\narguments: ${JSON.stringify(args)}`);

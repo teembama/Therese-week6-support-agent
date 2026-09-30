@@ -11,6 +11,12 @@ import { createServiceClient, logToolCall } from "@relaypay/shared";
 import * as z from "zod";
 import { loadServerEnv, StartupError } from "./env.js";
 import { toToolResult, type LoggedTool, type ToolDeps } from "./tool-logging.js";
+import * as createEscalation from "./tools/create-escalation.js";
+import * as createSupportTicket from "./tools/create-support-ticket.js";
+import * as logConversationEvent from "./tools/log-conversation-event.js";
+import * as lookupCustomer from "./tools/lookup-customer.js";
+import * as lookupPayout from "./tools/lookup-payout.js";
+import * as lookupTransaction from "./tools/lookup-transaction.js";
 import * as searchKnowledgeBase from "./tools/search-knowledge-base.js";
 
 interface ToolDefinition {
@@ -20,7 +26,15 @@ interface ToolDefinition {
   handler: LoggedTool;
 }
 
-const TOOLS: readonly ToolDefinition[] = [searchKnowledgeBase];
+const TOOLS: readonly ToolDefinition[] = [
+  searchKnowledgeBase,
+  lookupCustomer,
+  lookupTransaction,
+  lookupPayout,
+  createSupportTicket,
+  createEscalation,
+  logConversationEvent,
+];
 
 function jsonSchemaFor(schema: z.ZodType): { type: "object"; [key: string]: unknown } {
   const { $schema: _ignored, ...json } = z.toJSONSchema(schema, { io: "input" }) as Record<string, unknown>;
