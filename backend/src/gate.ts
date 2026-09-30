@@ -217,6 +217,13 @@ export interface FilteredSentence {
   flags: GroundingFlag[];
 }
 
+/** A sentence spoken in repaired form (D62): the model's text, what was spoken, and why. */
+export interface RepairedSentence {
+  sentence: string;
+  repaired: string;
+  flags: GroundingFlag[];
+}
+
 export type MessageOutcome =
   | { kind: "final"; type: ReplyType; validKbIds: string[]; unknownKbIds: string[]; tool: string | null; speak: string[] }
   | { kind: "blocked"; reason: string; raw: string }
@@ -239,6 +246,7 @@ export class StreamingGate {
   private filter: SentenceFilter | null = null;
   private filteredInMessage = 0;
   private filtered: FilteredSentence[] = [];
+  private repaired: RepairedSentence[] = [];
   /** Filter cost, for the latency budget (under 5ms per sentence). */
   readonly filterStats = { sentences: 0, totalMs: 0, maxMs: 0 };
 
@@ -247,6 +255,13 @@ export class StreamingGate {
     private readonly windowChars: number = HEADER_WINDOW_CHARS,
     private readonly evidence?: GateEvidence,
   ) {}
+
+  /** Sentences spoken in repaired form since the last call (for logging). */
+  takeRepaired(): RepairedSentence[] {
+    const out = this.repaired;
+    this.repaired = [];
+    return out;
+  }
 
   /** Sentences dropped by the filter since the last call (for logging). */
   takeFiltered(): FilteredSentence[] {
@@ -342,18 +357,24 @@ export class StreamingGate {
     return [];
   }
 
-  private allowed(sentence: string): boolean {
-    if (!this.filter) return true;
+  /** The sentence to speak (as is, or repaired, D62), or null if the filter drops it. */
+  private allowed(sentence: string): string | null {
+    if (!this.filter) return sentence;
     const t0 = performance.now();
     const flags = this.filter.check(sentence);
     const ms = performance.now() - t0;
     this.filterStats.sentences++;
     this.filterStats.totalMs += ms;
     this.filterStats.maxMs = Math.max(this.filterStats.maxMs, ms);
-    if (!flags.length) return true;
+    if (!flags.length) return sentence;
+    const repaired = this.filter.repairAttribution(sentence, flags);
+    if (repaired) {
+      this.repaired.push({ sentence, repaired, flags });
+      return repaired;
+    }
     this.filtered.push({ sentence, flags });
     this.filteredInMessage++;
-    return false;
+    return null;
   }
 
   /** Emits complete sentences from the body (all of it when the message has ended). */
@@ -365,12 +386,14 @@ export class StreamingGate {
       const cut = m.index + m[0].length;
       const sentence = stripForSpeech(this.body.slice(0, cut));
       this.body = this.body.slice(cut);
-      if (sentence && this.allowed(sentence)) out.push(sentence);
+      const spoken = sentence ? this.allowed(sentence) : null;
+      if (spoken) out.push(spoken);
     }
     if (final) {
       const rest = stripForSpeech(this.body);
       this.body = "";
-      if (rest && this.allowed(rest)) out.push(rest);
+      const spoken = rest ? this.allowed(rest) : null;
+      if (spoken) out.push(spoken);
     }
     this.spokenInMessage.push(...out);
     return out;

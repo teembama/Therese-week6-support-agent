@@ -398,6 +398,11 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         const excerpt = summarize(sentence.replace(/\d/g, "#"), 80);
         console.log(JSON.stringify({ event: "grounding_filtered", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: ctx.attemptId, checks, excerpt }));
       }
+      // D62: spoken in repaired form ("your" removed); the note keeps both versions.
+      for (const { sentence, repaired, flags } of gate?.takeRepaired() ?? []) {
+        notes.push(`grounding_repaired: ${flags.map((x) => `${x.kind}(${x.term})`).join(",")}: ${summarize(sentence, 200)} -> ${summarize(repaired, 200)}`);
+        console.log(JSON.stringify({ event: "grounding_repaired", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: ctx.attemptId, terms: flags.map((x) => x.term), excerpt: summarize(repaired.replace(/\d/g, "#"), 80) }));
+      }
     };
     /** Records one tool result: its status from the tool's own JSON (withToolLogging's shape). */
     const observeToolResult = (block: ToolResultLike) => {

@@ -281,6 +281,28 @@ export class SentenceFilter {
     }
     return flags;
   }
+
+  /**
+   * Attribution repair (D62): when a sentence's ONLY flags are invented attributions and, for
+   * each, the phrase after "your" appears verbatim in the evidence, drop that "your" and return
+   * the repaired sentence, provided it then passes every check. Otherwise null (the sentence is
+   * dropped as before). Live case: "...depending on the destination and your banking partners."
+   * -> "...depending on the destination and banking partners." (the chunk: "banking partners").
+   */
+  repairAttribution(sentence: string, flags: readonly GroundingFlag[]): string | null {
+    if (!flags.length || !flags.every((f) => f.kind === "invented_attribution")) return null;
+    let out = sentence;
+    for (const f of flags) {
+      const phrase = f.term.replace(/^your\s+/, "");
+      if (!has(this.source, phrase)) return null; // "your own X", "your specific X" never match: kept strict
+      const first = phrase.split(" ")[0]!; // letters only (attributionsIn captures [a-z]+)
+      const re = new RegExp(`\\byour\\s+(?=${first}\\b)`, "i");
+      if (!re.test(out)) return null;
+      out = out.replace(re, "");
+    }
+    out = out.charAt(0).toUpperCase() + out.slice(1);
+    return this.check(out).length ? null : out;
+  }
 }
 
 export function checkGrounding(answer: string, citedChunks: string[], callerText = ""): GroundingFlag[] {

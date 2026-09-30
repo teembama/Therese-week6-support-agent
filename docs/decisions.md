@@ -1123,6 +1123,25 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - All 6 summaries would gain the no-interaction sentence.
   - **Not yet applied:** waiting for the user's go-ahead.
 
+### D62. Attribution repair: drop an invented "your" when the rest is verbatim evidence (Batch 3A item 6, 2026-10-01)
+
+- **Why:** in the deployed runs (latency.md, Batch 2D Part B), "International payouts usually take 2 to 5 business days, depending on the destination and **your** banking partners." was dropped by `invented_attribution`. It was the only sentence, so the caller got the safe decline instead of a correct answer. Dropping the whole sentence cost precision over one word.
+- **Rule** (`SentenceFilter.repairAttribution`, used by the gate):
+  - A flagged sentence is repaired only if **every** flag is `invented_attribution`.
+  - For each flag, the phrase after "your" (e.g. "banking partners") must appear **verbatim** in the cited evidence.
+  - Then that "your" is removed (a sentence-initial "Your" moves its capital on).
+  - The repaired sentence must pass **every** check again.
+  - Otherwise the sentence is dropped exactly as before.
+  - "your own / specific / particular X" is never repaired, because the remainder isn't verbatim evidence.
+- **Logging:** `conversation_turns.confidence_note` gets `grounding_repaired: <flags>: <model sentence> -> <spoken sentence>`, and the log line is `event: grounding_repaired` with terms and a digit-masked excerpt.
+- **Tests** (`sentence-filter.test.ts`, 5):
+  - the live sentence → spoken as "...depending on the destination and banking partners.", nothing filtered, one repair logged;
+  - "your banking setup there" (not verbatim) → still dropped;
+  - an extra unsupported number or strengthening word → not repaired;
+  - "your specific banking partners" → not repaired;
+  - a sentence-initial "Your" → capitalised correctly.
+  - The backend suite has 176 tests, all passing.
+
 
 ## Migration log
 

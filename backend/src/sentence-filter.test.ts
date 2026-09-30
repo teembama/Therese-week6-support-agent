@@ -113,3 +113,44 @@ describe("runtime sentence filter", () => {
     assert.ok(avg < 5 && p99 < 5, `avg ${avg}ms p99 ${p99}ms`);
   });
 });
+
+describe("attribution repair (D62)", () => {
+  const LIVE = "International payouts usually take 2 to 5 business days, depending on the destination and your banking partners.";
+  it("the live 'your banking partners' sentence is repaired and spoken, not lost", () => {
+    const evidence: GateEvidence = { chunks: CHUNKS, callerText: "How long do payouts to Kenya take?" };
+    const g = new StreamingGate(RETRIEVED, undefined, evidence);
+    g.start();
+    const spoken = g.text(`[[type=answer; kb=${PAYOUTS}]] ${LIVE} `);
+    const outcome = g.end("end_turn");
+    if (outcome.kind === "final") spoken.push(...outcome.speak);
+    assert.deepEqual(spoken, ["International payouts usually take 2 to 5 business days, depending on the destination and banking partners."]);
+    assert.equal(outcome.kind, "final");
+    assert.deepEqual(g.takeFiltered(), []);
+    const repaired = g.takeRepaired();
+    assert.equal(repaired.length, 1);
+    assert.equal(repaired[0]!.sentence, LIVE);
+    assert.deepEqual(repaired[0]!.flags.map((f) => f.term), ["your banking partners"]);
+  });
+  it("not repaired when the phrase after 'your' is not verbatim in the evidence (dropped as before)", () => {
+    const r = run([`[[type=answer; kb=${PAYOUTS}]] Payouts take 2 to 5 business days. `, "It depends on your banking setup there."]);
+    assert.deepEqual(r.spoken, ["Payouts take 2 to 5 business days."]);
+    assert.equal(r.filtered.length, 1);
+  });
+  it("not repaired when any other flag is present (an extra number or strengthening word)", () => {
+    const f = new SentenceFilter([CHUNKS.get(PAYOUTS)!], "");
+    const withNumber = "Payouts take 7 days, depending on your banking partners.";
+    assert.equal(f.repairAttribution(withNumber, f.check(withNumber)), null);
+    const strengthened = "It always depends on your banking partners.";
+    assert.equal(f.repairAttribution(strengthened, f.check(strengthened)), null);
+  });
+  it("'your own X' / 'your specific X' is not repaired (the remainder isn't verbatim evidence)", () => {
+    const f = new SentenceFilter([CHUNKS.get(PAYOUTS)!], "");
+    const s = "It depends on your specific banking partners.";
+    assert.equal(f.repairAttribution(s, f.check(s)), null);
+  });
+  it("a sentence-initial 'Your' is repaired with the capital moved on", () => {
+    const f = new SentenceFilter([CHUNKS.get(PAYOUTS)!], "");
+    const s = "Your banking partners affect international timing.";
+    assert.equal(f.repairAttribution(s, f.check(s)), "Banking partners affect international timing.");
+  });
+});
