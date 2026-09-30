@@ -46,6 +46,22 @@ export const FIRST_TOKEN_TIMEOUT_MS = envMs("RELAYPAY_FIRST_TOKEN_TIMEOUT_MS", 8
 /** Absolute cap on one turn, from request receipt. The agent run is aborted at this point. */
 export const TURN_HARD_CAP_MS = envMs("RELAYPAY_TURN_HARD_CAP_MS", 20_000);
 
+/**
+ * Budget for the pre-turn database work (register the attempt + rank retrieval, in parallel),
+ * including the Supabase client's one pre-connect retry (fix 6). If it is exceeded the caller
+ * hears the fallback line and the attempt ends as 'failed' (D34). Keeps first audio within ~4s.
+ */
+export const PRETURN_DB_BUDGET_MS = 3_500;
+
+/** Timeout for each background database call (recording, finishing attempts). */
+export const DB_CALL_TIMEOUT_MS = 3_000;
+
+/**
+ * TEST-ONLY fault injection (scripts/test-endpoint.ts). Unset in production. Values:
+ * throw_in_handler | throw_in_turn | unhandled_rejection | uncaught_exception.
+ */
+export const FAULT_INJECT = process.env["RELAYPAY_FAULT_INJECT"] ?? "";
+
 /** The reply header must be complete within this many characters of the reply's start. */
 export const HEADER_WINDOW_CHARS = 200;
 

@@ -4,7 +4,10 @@
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 
-export type TurnSource = "agent" | "replay" | "inflight";
+export type TurnSource = "agent" | "replay" | "inflight" | "fallback";
+
+/** The stream opened on each response, so a last-resort error path can finish it (D34). */
+const streams = new WeakMap<ServerResponse, SseStream>();
 
 export class SseStream {
   private readonly id = `chatcmpl-${randomUUID()}`;
@@ -19,6 +22,17 @@ export class SseStream {
       "X-RelayPay-Turn-Source": source,
     });
     this.chunk({ role: "assistant" }, null);
+    streams.set(res, this);
+  }
+
+  /** The stream already opened on this response, if any. */
+  static of(res: ServerResponse): SseStream | undefined {
+    return streams.get(res);
+  }
+
+  /** True once any spoken text has been streamed. */
+  get hasContent(): boolean {
+    return this.sentContent;
   }
 
   get isEnded(): boolean {
@@ -36,8 +50,18 @@ export class SseStream {
     this.res.write(`data: ${JSON.stringify(payload)}\n\n`);
   }
 
+  private sentContent = false;
+
+  /**
+   * Streams one piece of spoken text. Pieces are sentences, so a separating space is added
+   * between them: content deltas are concatenated verbatim by the client, so without it the
+   * assistant's transcript would read "…you with.Is there anything else…".
+   */
   content(text: string): void {
-    if (!this.isEnded && text) this.chunk({ content: text }, null);
+    if (this.isEnded || !text) return;
+    const piece = this.sentContent && !/^\s/.test(text) ? ` ${text}` : text;
+    this.chunk({ content: piece }, null);
+    this.sentContent = true;
   }
 
   finish(): void {

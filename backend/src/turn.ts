@@ -16,21 +16,26 @@ import type { ChildProcess } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { logRetrievalResult, rankKnowledge, summarize, type Db, type KbChunk, type LogContext } from "@relaypay/shared";
+import { logRetrievalResult, newAttemptId, rankKnowledge, summarize, type Db, type KbChunk, type LogContext } from "@relaypay/shared";
 import { cliEnv, mcpEnv } from "./child-env.js";
 import {
   AGENT_MAX_BUDGET_USD,
   AGENT_MAX_TURNS,
   AGENT_MCP_TOOLS,
   AGENT_MODEL,
+  DB_CALL_TIMEOUT_MS,
   FALLBACK_LINE,
+  FAULT_INJECT,
+  PRETURN_DB_BUDGET_MS,
   FIRST_TOKEN_TIMEOUT_MS,
   FORBIDDEN_AGENT_TOOLS,
   SAFE_DECLINE_LINE,
   TURN_HARD_CAP_MS,
 } from "./config.js";
-import { sentences, StreamingGate } from "./gate.js";
-import { beginTurnAttempt, finishTurnAttempt, type AnswerType, type AttemptFinalStatus } from "./persistence.js";
+import { sentences, socialLine, StreamingGate, type SocialIntent } from "./gate.js";
+import { matchSocial } from "./social-fast-path.js";
+import { beginTurnAttempt, finishTurnAttempt, type AnswerType, type AttemptFinalStatus, type AttemptMetrics } from "./persistence.js";
+import { retryOnce, withTimeout } from "./bounded.js";
 import { isAlive, killTree, spawnCli } from "./process-tree.js";
 import { buildTurnPrompt, SYSTEM_PROMPT, type HistoryEntry } from "./prompt.js";
 import { buildRetrievalQuery } from "./retrieval-query.js";
@@ -40,6 +45,11 @@ import { styleViolations } from "./style.js";
 // Test knob: attach the MCP server even though the agent allowlist is empty, so the endpoint
 // tests can prove the guard fails the turn when a forbidden tool shows up.
 const ATTACH_MCP = AGENT_MCP_TOOLS.length > 0 || process.env["RELAYPAY_ATTACH_MCP"] === "1";
+
+const EMPTY_METRICS: AttemptMetrics = {
+  ms_retrieval: null, ms_first_token: null, ms_total: null, model: null, input_tokens: null, output_tokens: null,
+  cache_read_tokens: null, cache_creation_tokens: null, cost_usd_estimate: null, sdk_duration_ms: null, sdk_num_turns: null,
+};
 
 const MCP_ENTRY =
   process.env["RELAYPAY_MCP_ENTRY"] ||
@@ -124,7 +134,83 @@ function usageFrom(result: SDKResultMessage | null) {
   };
 }
 
+/** The last thing the agent said, as Vapi reports it in the conversation history. */
+function previousAgentLine(history: HistoryEntry[]): string | null {
+  for (let i = history.length - 1; i >= 0; i--) if (history[i]!.role === "agent") return history[i]!.text;
+  return null;
+}
+
+/**
+ * Social fast path (D35): speak the fixed line immediately (no model call, no database wait),
+ * then record the attempt and the turn in the background, bounded: each database call has a
+ * timeout, registration gets one retry under a fresh attempt id (a timed-out first try may
+ * still have committed; the retry marks it replaced), and failures only reach stderr. Social
+ * replies have no side effects, so recording late is safe.
+ */
+function runSocialFastPath(input: TurnInput, sink: TurnSink, intent: SocialIntent): TurnHandle {
+  const { db, ctx } = input;
+  const line = socialLine(intent);
+  sink.begin("agent");
+  for (const s of sentences(line)) sink.speak(s);
+  sink.end();
+  const msSpoken = Math.round(performance.now() - input.tReceivedMs);
+  const result: TurnResult = { spoken: line, answerType: "social", source: "agent" };
+
+  let resolveBegun!: () => void;
+  const begun = new Promise<void>((r) => (resolveBegun = r));
+  const persisted = (async () => {
+    let attemptId = ctx.attemptId!;
+    let status = "not recorded";
+    try {
+      if (input.afterPrevious) await withTimeout(input.afterPrevious, 3_000, "previous attempt").catch(() => undefined);
+      const beginWith = (id: string) =>
+        beginTurnAttempt(db, {
+          conversationId: ctx.conversationId, channel: input.channel, caller: input.caller, turnIndex: ctx.turnIndex,
+          attemptId: id, transcriptHash: input.transcriptHash, userTranscript: input.userText,
+        });
+      let started;
+      try {
+        started = await withTimeout(beginWith(attemptId), DB_CALL_TIMEOUT_MS, "begin_turn_attempt (fast path)");
+      } catch {
+        attemptId = newAttemptId();
+        started = await withTimeout(beginWith(attemptId), DB_CALL_TIMEOUT_MS, "begin_turn_attempt (fast path, retry)");
+      }
+      resolveBegun();
+      if (started.action === "replay") {
+        status = "replay (already recorded)";
+        return;
+      }
+      const metrics: AttemptMetrics = { ...EMPTY_METRICS, ms_first_token: msSpoken, ms_total: msSpoken };
+      status = await retryOnce(
+        () =>
+          finishTurnAttempt(db, attemptId, "completed", "social (fast_path)", metrics, {
+            ...metrics,
+            transcript_hash: input.transcriptHash,
+            user_transcript: input.userText,
+            assistant_response: line,
+            answer_type: "social",
+            confidence_note: `fast_path; intent=${intent}`,
+            kb_chunk_ids: [],
+            t_received: input.tReceivedIso,
+            ms_tools: null,
+          }),
+        DB_CALL_TIMEOUT_MS,
+        "finish_turn_attempt (fast path)",
+      );
+    } catch (err) {
+      console.error(`[relaypay] fast-path turn ${ctx.conversationId}#${ctx.turnIndex} (${attemptId}) not recorded: ${summarize(err instanceof Error ? err.message : String(err), 200)}`);
+    } finally {
+      resolveBegun();
+      console.log(JSON.stringify({ event: "turn", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: attemptId, attempt_status: status, answer_type: "social", fast_path: true, intent, ms_first_token: msSpoken, ms_total: msSpoken, cost_usd_estimate: 0 }));
+    }
+  })();
+  return { decided: Promise.resolve(result), persisted, done: persisted, begun, replace: () => {}, attemptId: ctx.attemptId };
+}
+
 export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
+  const socialIntent = matchSocial(input.userText, previousAgentLine(input.history));
+  if (socialIntent) return runSocialFastPath(input, sink, socialIntent);
+
   let resolveDecided!: (r: TurnResult) => void;
   const decided = new Promise<TurnResult>((r) => (resolveDecided = r));
   let resolvePersisted!: () => void;
@@ -360,12 +446,13 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     let replayed = false;
     let registered = false;
     let retrievalLogged: Promise<boolean> = Promise.resolve(true);
+    let beginPromise: Promise<Awaited<ReturnType<typeof beginTurnAttempt>>> | null = null;
     try {
       const rq = buildRetrievalQuery(input.history, input.userText);
       if (rq.combinedWithPrevious) notes.push("follow-up: retrieval searched previous + latest caller message");
       mark("db_start");
       const tRank = performance.now();
-      const beginPromise = (async () => {
+      beginPromise = (async () => {
         // Never register before the attempt this one replaces (see TurnInput.afterPrevious).
         if (input.afterPrevious) await Promise.race([input.afterPrevious, new Promise((r) => setTimeout(r, 3_000))]);
         return beginTurnAttempt(db, {
@@ -378,14 +465,22 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
           userTranscript: input.userText,
         });
       })().finally(() => resolveBegun());
-      const [started, chunks] = await Promise.all([
-        beginPromise,
-        rankKnowledge(db, rq.query.slice(0, 1000)).then((c: KbChunk[]) => {
-          msRetrieval = Math.round(performance.now() - tRank);
-          return c;
-        }),
-      ]);
+      // Bounded (D34): a stalled database must not keep the caller silent. Past the budget the
+      // caller hears the fallback and a late registration is closed as 'failed' in the background.
+      const [started, chunks] = await withTimeout(
+        Promise.all([
+          beginPromise,
+          rankKnowledge(db, rq.query.slice(0, 1000)).then((c: KbChunk[]) => {
+            msRetrieval = Math.round(performance.now() - tRank);
+            return c;
+          }),
+        ]),
+        PRETURN_DB_BUDGET_MS,
+        "pre-turn database work",
+      );
       mark("db_done");
+      if (FAULT_INJECT === "throw_in_turn") throw new Error("injected fault: throw_in_turn");
+      if (FAULT_INJECT === "unhandled_rejection") void Promise.reject(new Error("injected fault: unhandled_rejection"));
 
       if (started.action === "replay") {
         // Genuine retry of a turn that spoke: replay it. Nothing is sent to the model and the
@@ -409,10 +504,27 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       await consume;
       if (!(await retrievalLogged)) notes.push("pre-turn retrieval_logs write FAILED (see stderr)");
     } catch (err) {
-      notes.push(`turn error: ${summarize(err instanceof Error ? err.message : String(err), 300)}`);
+      const reason = summarize(err instanceof Error ? err.message : String(err), 300);
+      notes.push(`turn error: ${reason}`);
       providePrompt(null);
       stop("turn error");
+      if (!finished) release(FALLBACK_LINE, "error"); // the caller hears something right away
       resolveBegun();
+      // The registration may still complete after we gave up on it: close it as 'failed' so the
+      // attempt never stays 'active' (bounded: waits for it, one finish call with a timeout).
+      if (!registered && beginPromise) {
+        const late = beginPromise;
+        void (async () => {
+          try {
+            const r = await withTimeout(late, 10_000, "late begin_turn_attempt");
+            if (r.action === "run") {
+              await retryOnce(() => finishTurnAttempt(db, ctx.attemptId!, "failed", `pre-turn failure: ${reason}`, EMPTY_METRICS, null), DB_CALL_TIMEOUT_MS, "finish_turn_attempt(failed)");
+            }
+          } catch (lateErr) {
+            console.error(`[relaypay] attempt ${ctx.attemptId} for ${ctx.conversationId}#${ctx.turnIndex} left in an unknown state: ${summarize(lateErr instanceof Error ? lateErr.message : String(lateErr), 200)}`);
+          }
+        })();
+      }
     } finally {
       clearTimeout(firstTokenTimer);
       clearTimeout(hardCapTimer);
@@ -465,13 +577,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     let finalStatus: string | null = null;
     if (registered) {
       try {
-        finalStatus = await finishTurnAttempt(
-          db,
-          ctx.attemptId!,
-          status,
-          statusReason,
-          metrics,
-          status === "completed" && outcome.spoken !== null
+        const turnRow = status === "completed" && outcome.spoken !== null
             ? {
                 ...metrics,
                 transcript_hash: input.transcriptHash,
@@ -483,8 +589,9 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
                 t_received: input.tReceivedIso,
                 ms_tools: finalResult || msTools ? Math.round(msTools) : null,
               }
-            : null,
-        );
+            : null;
+        // Bounded (D34): one retry, each call with a timeout; the caller's response is already sent.
+        finalStatus = await retryOnce(() => finishTurnAttempt(db, ctx.attemptId!, status, statusReason, metrics, turnRow), DB_CALL_TIMEOUT_MS, "finish_turn_attempt");
       } catch (err) {
         console.error(`[relaypay] persistence failed for ${ctx.conversationId}#${ctx.turnIndex} (${ctx.attemptId}): ${summarize(err instanceof Error ? err.message : String(err))}`);
       }

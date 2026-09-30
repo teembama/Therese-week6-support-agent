@@ -13,12 +13,13 @@
 // Single-instance limitation: the in-flight map is per process; across instances the database
 // still records attempts and replacements, but identical concurrent retries could both run.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createServiceClient, newAttemptId, transcriptHash, type Db, type LogContext } from "@relaypay/shared";
-import { FALLBACK_LINE, MAX_BODY_BYTES } from "./config.js";
+import { createServiceClient, newAttemptId, summarize, transcriptHash, type Db, type LogContext } from "@relaypay/shared";
+import { FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES } from "./config.js";
 import { debugDetails, shapeOf } from "./debug-shape.js";
 import { sentences } from "./gate.js";
 import { SseStream } from "./sse.js";
@@ -34,6 +35,40 @@ function log(event: Record<string, unknown>): void {
 
 // TEMPORARY (live Vapi test): log request structure only (see debug-shape.ts).
 const DEBUG_REQUEST_SHAPE = process.env["RELAYPAY_DEBUG_REQUEST_SHAPE"] === "1";
+
+// ---- Never a 500 (D34) ------------------------------------------------------------------
+// Once the route and token have matched, every failure still answers 200 with an SSE stream that
+// speaks the fallback line: a 500 makes Vapi end the whole call, a fallback keeps the caller on
+// the line. Wrong token / unknown path stay 404 (security). Errors are logged with message and
+// stack frames only (redacted; never content or the token).
+
+interface RequestContext {
+  res: ServerResponse;
+  model: string;
+}
+/** The request an asynchronous failure belongs to (visible to process-level handlers, Node 22). */
+const requestContext = new AsyncLocalStorage<RequestContext>();
+
+function errorDetails(err: unknown): { message: string; stack: string[] } {
+  const e = err instanceof Error ? err : new Error(String(err));
+  const frames = (e.stack ?? "").split("\n").slice(1, 5).map((l) => l.trim().replace(/\(.*[\\/](backend|shared|mcp-server)[\\/]/, "($1/"));
+  return { message: summarize(`${e.name}: ${e.message}`, 300), stack: frames };
+}
+
+/** Last resort: make sure this response ends as a valid SSE stream, speaking the fallback if nothing was said. */
+function speakFallback(res: ServerResponse, model: string): void {
+  const open = SseStream.of(res);
+  if (!res.headersSent) {
+    const sse = new SseStream(res, model, "fallback");
+    sse.content(FALLBACK_LINE);
+    sse.finish();
+  } else if (open && !open.isEnded) {
+    if (!open.hasContent) open.content(FALLBACK_LINE);
+    open.finish();
+  } else if (!res.writableEnded) {
+    res.end();
+  }
+}
 
 function sendJson(res: ServerResponse, status: number, body: Record<string, unknown>): void {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -70,19 +105,29 @@ const settle = <T>(p: Promise<T>, capMs: number) => Promise.race([p.then(() => u
 async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tReceivedMs: number, loggedPath: string): Promise<void> {
   const tReceivedIso = new Date().toISOString();
   const raw = await readBody(req);
-  if (raw === null) return sendJson(res, 413, { error: "request body too large" });
+  const badRequest = (reason: string) => {
+    log({ event: "bad_request", reason, path: loggedPath });
+    speakFallback(res, "relaypay-agent");
+  };
+  if (raw === null) return badRequest("request body too large");
   let json: unknown;
   try {
     json = JSON.parse(raw);
   } catch {
-    return sendJson(res, 400, { error: "invalid JSON" });
+    return badRequest("invalid JSON");
   }
   if (DEBUG_REQUEST_SHAPE) {
     log({ event: "debug_request_shape", method: req.method, path: loggedPath, token_ok: true, header_names: Object.keys(req.headers).sort(), ...debugDetails(json, req.headers), body_shape: shapeOf(json) });
   }
   const parsed = parseVapiBody(json);
-  if (!parsed.ok) return sendJson(res, 400, { error: parsed.error });
+  if (!parsed.ok) return badRequest(parsed.error);
   const turn = parsed.turn;
+  const store = requestContext.getStore();
+  if (store) store.model = turn.model;
+  if (FAULT_INJECT === "throw_in_handler") throw new Error("injected fault: throw_in_handler");
+  if (FAULT_INJECT === "uncaught_exception") setImmediate(() => {
+    throw new Error("injected fault: uncaught_exception");
+  });
   const key = `${turn.callId}#${turn.turnIndex}`;
   const hash = transcriptHash(turn.userText);
   let sse: SseStream | null = null;
@@ -93,7 +138,13 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
   const existing = inflight.get(key);
   if (existing && joinable(existing, hash)) {
     sse = new SseStream(res, turn.model, "inflight");
-    const outcome = await existing.handle.decided;
+    let outcome: TurnResult;
+    try {
+      outcome = await existing.handle.decided;
+    } catch (err) {
+      log({ event: "request_error", stage: "inflight_join", ...errorDetails(err) });
+      return speakFallback(res, turn.model);
+    }
     if (outcome.spoken !== null) {
       log({ event: "turn_inflight_joined", conversation_id: turn.callId, turn_index: turn.turnIndex, answer_type: outcome.answerType });
       for (const sentence of sentences(outcome.spoken)) sse.content(sentence);
@@ -172,6 +223,20 @@ function main(): void {
     process.exit(1);
   }
   const secretDigest = sha256(secret);
+
+  // unhandledRejection is always a bug (the suite asserts zero): log it and fail only the
+  // request it belongs to, via the fallback path, when that request can be identified.
+  process.on("unhandledRejection", (reason) => {
+    const store = requestContext.getStore();
+    log({ event: "unhandled_rejection", request_identified: Boolean(store), ...errorDetails(reason) });
+    if (store) speakFallback(store.res, store.model);
+  });
+  // After an uncaught exception process state can't be trusted: log and exit(1), relying on the
+  // host's automatic restart (Fly.io restarts crashed machines; locally, restart by hand).
+  process.on("uncaughtException", (err) => {
+    log({ event: "uncaught_exception", request_identified: Boolean(requestContext.getStore()), ...errorDetails(err) });
+    process.exit(1);
+  });
   const db = createServiceClient();
   const port = Number(process.env["PORT"] || 8787);
 
@@ -194,10 +259,12 @@ function main(): void {
       req.resume();
       return sendJson(res, 404, { error: "not found" });
     }
-    handleChat(req, res, db, tReceivedMs, loggedPath).catch((err: unknown) => {
-      log({ event: "request_error", message: err instanceof Error ? err.message : String(err) });
-      if (!res.headersSent) sendJson(res, 500, { error: "internal error" });
-      else if (!res.writableEnded) res.end();
+    const context: RequestContext = { res, model: "relaypay-agent" };
+    requestContext.run(context, () => {
+      handleChat(req, res, db, tReceivedMs, loggedPath).catch((err: unknown) => {
+        log({ event: "request_error", stage: "handler", path: loggedPath, ...errorDetails(err) });
+        speakFallback(res, context.model);
+      });
     });
   });
   server.listen(port, () => log({ event: "listening", port, node: process.version }));

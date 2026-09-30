@@ -7,6 +7,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { createServer as createNetServer } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -22,26 +23,34 @@ const check = (ok: boolean, label: string, detail = "") => {
   if (!ok) failures++;
 };
 
-interface Server { proc: ChildProcess; port: number; logs: string[] }
+interface Server { proc: ChildProcess; port: number; logs: string[]; exitCode: number | null; injected: boolean }
 
 async function startServer(port: number, extraEnv: Record<string, string> = {}): Promise<Server> {
   const proc = spawn(process.execPath, [SERVER], { env: { ...process.env, PORT: String(port), ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
-  const logs: string[] = [];
-  proc.stdout!.on("data", (d: Buffer) => logs.push(...d.toString().split("\n").filter(Boolean)));
-  proc.stderr!.on("data", (d: Buffer) => logs.push(...d.toString().split("\n").filter(Boolean)));
+  const server: Server = { proc, port, logs: [], exitCode: null, injected: Boolean(extraEnv["RELAYPAY_FAULT_INJECT"]) };
+  proc.stdout!.on("data", (d: Buffer) => server.logs.push(...d.toString().split("\n").filter(Boolean)));
+  proc.stderr!.on("data", (d: Buffer) => server.logs.push(...d.toString().split("\n").filter(Boolean)));
+  proc.on("exit", (code) => (server.exitCode = code));
   for (let i = 0; i < 100; i++) {
-    if (logs.some((l) => l.includes('"event":"listening"'))) return { proc, port, logs };
+    if (server.logs.some((l) => l.includes('"event":"listening"'))) return server;
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`server on ${port} did not start: ${logs.join(" | ")}`);
+  throw new Error(`server on ${port} did not start: ${server.logs.join(" | ")}`);
 }
+
+/** Every HTTP status the suite received, to assert that nothing ever returned a 5xx (D34). */
+const STATUSES: Array<{ status: number; label: string }> = [];
+
+const FALLBACK = "Sorry, I'm having trouble checking that right now. Could you try again in a moment?";
+const THANKS_LINE = "You're welcome. Is there anything else I can help you with?";
+const GOODBYE_LINE = "Thanks for calling RelayPay. Goodbye.";
 
 interface Reply { status: number; source: string | null; text: string; events: unknown[]; raw: string; ms: number }
 
 /** The valid chat path for the per-run test secret (D26: the token travels in the path). */
 const chatPath = () => `/v/${process.env["VAPI_LLM_SECRET"]}/chat/completions`;
 
-async function post(port: number, body: unknown, opts: { path?: string; method?: string; abortAfterMs?: number } = {}): Promise<Reply> {
+async function post(port: number, body: unknown, opts: { path?: string; method?: string; abortAfterMs?: number; rawBody?: string } = {}): Promise<Reply> {
   const t0 = performance.now();
   const controller = new AbortController();
   if (opts.abortAfterMs) setTimeout(() => controller.abort(), opts.abortAfterMs);
@@ -51,8 +60,9 @@ async function post(port: number, body: unknown, opts: { path?: string; method?:
       method: opts.method ?? "POST",
       headers,
       signal: controller.signal,
-      ...(opts.method === "GET" ? {} : { body: JSON.stringify(body) }),
+      ...(opts.method === "GET" ? {} : { body: opts.rawBody ?? JSON.stringify(body) }),
     });
+    STATUSES.push({ status: res.status, label: `${opts.method ?? "POST"} ${opts.path ? "custom path" : "chat"} :${port}` });
     const raw = await res.text();
     const events = raw.split("\n").filter((l) => l.startsWith("data: ")).map((l) => l.slice(6)).map((d) => (d === "[DONE]" ? d : JSON.parse(d)));
     const text = events
@@ -162,7 +172,14 @@ async function main(): Promise<number> {
     check((await post(A.port, hiBody, { path: `/v/${secret}/chat/completions/chat/completions` })).status === 404, "valid token, doubled suffix -> 404");
     check((await post(A.port, {}, { path: "/v1/chat/completions" })).status === 404, "other path -> 404");
     check((await post(A.port, {}, { method: "GET" })).status === 404, "GET on the valid path -> 404");
-    check((await post(A.port, { messages: [{ role: "user", content: "hi" }] })).status === 400, "valid token, missing call.id -> 400");
+    // D34: behind a valid token, bad requests still get 200 + a fallback stream (never 4xx/5xx to Vapi).
+    const noCallId = await post(A.port, { messages: [{ role: "user", content: "hi" }] });
+    check(noCallId.status === 200 && noCallId.text === FALLBACK && sseWellFormed(noCallId), "valid token, missing call.id -> 200 + fallback stream");
+    const badJson = await post(A.port, null, { rawBody: "{not json" });
+    check(badJson.status === 200 && badJson.text === FALLBACK && sseWellFormed(badJson), "valid token, invalid JSON -> 200 + fallback stream");
+    const huge = await post(A.port, null, { rawBody: JSON.stringify({ call: { id: `test-ep-${RUN}-huge` }, messages: [{ role: "user", content: "x".repeat(1_100_000) }] }) });
+    check(huge.status === 200 && huge.text === FALLBACK, "valid token, oversized body -> 200 + fallback stream");
+    check(A.logs.filter((l) => l.includes('"event":"bad_request"')).length >= 3, "bad requests logged as bad_request");
     check(A.logs.some((l) => l.includes('"event":"not_found"') && l.includes('"path":"/v/[redacted]/chat/completions"')), "wrong-token 404 logged with the redacted path");
     check(A.logs.some((l) => l.includes('"event":"not_found"') && l.includes('"path":"/v1/chat/completions"')), "unknown-path 404 logged with method and path");
 
@@ -357,11 +374,78 @@ async function main(): Promise<number> {
         .map((l) => JSON.parse(l) as { conversation_id: string; marks: Record<string, number> })
         .map((e) => ({ run: e.conversation_id.split("-").pop(), ...e.marks })));
     }
+    console.log("\n== Social fast path (D35): fixed line, no model call");
+    const fpThanks = `test-ep-${RUN}-fp-thanks`;
+    const t1 = await post(A.port, body(fpThanks, ["All right, thank you."]));
+    const fpBye = `test-ep-${RUN}-fp-bye`;
+    const t2 = await post(A.port, body(fpBye, ["Thank you.", "No, I'm good."], [THANKS_LINE]));
+    const fpNo = `test-ep-${RUN}-fp-bare-no`;
+    const t3 = await post(A.port, body(fpNo, ["No."]));
+    const fpRow1 = await turnRow(db, fpThanks);
+    const fpRow2 = await turnRow(db, fpBye, 1);
+    const fastLines = A.logs.filter((l) => l.includes('"fast_path":true'));
+    console.log(`thanks: ${t1.ms}ms ${JSON.stringify(t1.text)} | goodbye: ${t2.ms}ms ${JSON.stringify(t2.text)} | bare "no": ${JSON.stringify(t3.text.slice(0, 80))}`);
+    check(t1.text === THANKS_LINE && fpRow1?.["answer_type"] === "social" && String(fpRow1?.["confidence_note"]).startsWith("fast_path"), "'All right, thank you.' -> thanks line, social, note fast_path");
+    check(t2.text === GOODBYE_LINE && fpRow2?.["answer_type"] === "social", "'No, I'm good.' after 'anything else?' -> goodbye line");
+    check(fastLines.some((l) => l.includes(fpThanks)) && fastLines.some((l) => l.includes(fpBye)) && !fastLines.some((l) => l.includes(fpNo)), "fast path used for both; a bare 'no' without context went to the model");
+    const fpTurnLines = A.logs.filter((l) => l.includes('"event":"turn"') && (l.includes(fpThanks) || l.includes(fpBye)));
+    check(fpTurnLines.length === 2 && fpTurnLines.every((l) => l.includes('"fast_path":true') && l.includes('"cost_usd_estimate":0')), "one turn each, no model call (cost 0)");
+
+    console.log("\n== Never a 500 (D34): database unreachable / slow, injected faults");
+    const probe = async (label: string, extraEnv: Record<string, string>, msgs: string[]) => {
+      const s = await startServer(8791, extraEnv);
+      const id = `test-ep-${RUN}-${label}`;
+      const r = await post(s.port, body(id, msgs));
+      await new Promise((res) => setTimeout(res, 1_500));
+      if (s.exitCode === null) s.proc.kill();
+      await new Promise((res) => setTimeout(res, 500));
+      return { r, s, id };
+    };
+    const unreach = await probe("db-unreachable", { SUPABASE_URL: "https://relaypay-unreachable.invalid" }, ["What fees does RelayPay charge?"]);
+    console.log(`db unreachable: HTTP ${unreach.r.status} in ${unreach.r.ms}ms ${JSON.stringify(unreach.r.text)}`);
+    check(unreach.r.status === 200 && unreach.r.text === FALLBACK && sseWellFormed(unreach.r) && unreach.r.ms < 4_500, "database unreachable -> 200 + fallback within ~4s");
+
+    const held = new Set<import("node:net").Socket>();
+    const blackhole = createNetServer((sock) => {
+      // Accept and never answer; resets from the killed server are expected.
+      sock.on("error", () => {});
+      held.add(sock);
+    });
+    await new Promise<void>((r) => blackhole.listen(8790, "127.0.0.1", () => r()));
+    const slow = await probe("db-slow", { SUPABASE_URL: "http://127.0.0.1:8790" }, ["What fees does RelayPay charge?"]);
+    console.log(`db never answers: HTTP ${slow.r.status} in ${slow.r.ms}ms ${JSON.stringify(slow.r.text)}`);
+    check(slow.r.status === 200 && slow.r.text === FALLBACK && slow.r.ms < 4_500, "database never answers -> 200 + fallback within ~4s (budget 3.5s)");
+    const slowThanks = await probe("db-slow-thanks", { SUPABASE_URL: "http://127.0.0.1:8790" }, ["Thank you."]);
+    console.log(`fast path with a dead database: ${slowThanks.r.ms}ms ${JSON.stringify(slowThanks.r.text)}`);
+    check(slowThanks.r.text === THANKS_LINE && slowThanks.r.ms < 1_000, "fast path speaks without waiting for the database");
+    for (const sock of held) sock.destroy();
+    blackhole.close();
+
+    const inHandler = await probe("fault-handler", { RELAYPAY_FAULT_INJECT: "throw_in_handler" }, ["What fees does RelayPay charge?"]);
+    check(inHandler.r.status === 200 && inHandler.r.text === FALLBACK && inHandler.s.logs.some((l) => l.includes('"event":"request_error"') && l.includes('"stack"')), "exception in the handler -> 200 + fallback, logged with stack");
+    const inTurn = await probe("fault-turn", { RELAYPAY_FAULT_INJECT: "throw_in_turn" }, ["What fees does RelayPay charge?"]);
+    const inTurnAttempts = await attemptsFor(db, inTurn.id, 1);
+    console.log(`exception in the turn: ${JSON.stringify(inTurn.r.text)} | attempt: ${JSON.stringify(inTurnAttempts.map((a) => [a["status"], a["status_reason"]]))}`);
+    check(inTurn.r.status === 200 && inTurn.r.text === FALLBACK && inTurnAttempts[0]?.["status"] === "failed", "exception in the turn -> 200 + fallback; attempt ends 'failed'");
+    const rejection = await probe("fault-rejection", { RELAYPAY_FAULT_INJECT: "unhandled_rejection" }, ["What fees does RelayPay charge?"]);
+    const rejLine = rejection.s.logs.find((l) => l.includes('"event":"unhandled_rejection"')) ?? "";
+    check(rejection.r.status === 200 && rejection.r.text === FALLBACK && rejLine.includes('"request_identified":true'), "unhandled rejection -> logged, identified, its request gets the fallback");
+    const crash = await probe("fault-uncaught", { RELAYPAY_FAULT_INJECT: "uncaught_exception" }, ["What fees does RelayPay charge?"]);
+    const crashLine = crash.s.logs.find((l) => l.includes('"event":"uncaught_exception"')) ?? "";
+    console.log(`uncaught exception: server exit code ${crash.s.exitCode}; request status ${crash.r.status}`);
+    check(crash.s.exitCode === 1 && crashLine.includes('"stack"') && !crashLine.includes("What fees"), "uncaught exception -> logged (stack, no content) and exit(1) for the host to restart");
+    for (const x of [unreach, slow, slowThanks, inHandler, inTurn, rejection, crash]) servers.push(x.s);
+
     console.log("\n== Token never logged (every server, every stdout/stderr line)");
     const allLines = servers.flatMap((s) => s.logs);
     const leaks = allLines.filter((l) => l.includes(process.env["VAPI_LLM_SECRET"]!) || /\/v\/wrong-[0-9a-f]{40}/.test(l));
     console.log(`scanned ${allLines.length} log lines; lines containing a token: ${leaks.length}`);
     check(leaks.length === 0, "no log line contains the real or the wrong token");
+    const fiveHundreds = STATUSES.filter((s) => s.status >= 500);
+    console.log(`responses received: ${STATUSES.length}; 5xx: ${fiveHundreds.length} ${JSON.stringify(fiveHundreds)}`);
+    check(fiveHundreds.length === 0, "no response in the whole suite returned a 5xx");
+    const rejections = servers.filter((s) => !s.injected).flatMap((s) => s.logs).filter((l) => l.includes('"event":"unhandled_rejection"'));
+    check(rejections.length === 0, "zero unhandled rejections on every server without injected faults", rejections.slice(0, 2).join(" | "));
     const serverErrors = allLines.filter((l) => /\[relaypay\]|"event":"request_error"/.test(l));
     if (serverErrors.length) {
       console.log(`\nserver-side error lines (${serverErrors.length}):`);
