@@ -1142,6 +1142,31 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - a sentence-initial "Your" → capitalised correctly.
   - The backend suite has 176 tests, all passing.
 
+### D63. Accepted residual risks from the audit: F2 identity strength, F1 pre-verification references, G1 number-free claims (Batch 3A item 7, 2026-10-01)
+
+- **F2: first name + company name verifies a caller.**
+  - This is **required by Scenario 3's own wording**. assets/test-scenarios.md: "Hi, this is Amara from LagosLedger. Can you check my account status?". The expected behaviour is a `lookup_customer` with that information and a safe summary. A rule demanding an email or customer ID would fail the scenario as written.
+  - **Compensating control:** verification unlocks **no sensitive data** (D40). Verified or not, the tools never return an amount, currency, contact email or support notes. The customer lookup returns only plan, account status and KYC status, spoken as customer-safe values (D45).
+  - What verification does unlock: ownership-scoped reference lookups (D44, D57) and linking tickets and escalations to that customer.
+  - **Residual risk:** someone who knows a customer's contact name and company can hear that customer's plan and account status, and file a ticket or escalation under that customer with their own email. A specialist's callback goes to the email the caller gave, not the one on file.
+  - **Future work:** require a non-public identifier for anything beyond status, and flag escalations whose email differs from the account's.
+- **F1: TXN/PAY reference lookups before verification.**
+  - This is **required by Scenario 4**: "Can you check transaction TXN-9001?", with no identity step. The expected behaviour is a `lookup_transaction` and a safe summary.
+  - D44 makes a reference a bearer token only until the caller is verified.
+  - **Only the safe summary is returned:** type, customer-safe status and summary, estimated arrival and a past-ETA flag. There is no amount, currency, customer identity or recipient (D40).
+  - **Known limitation:** there is **no rate limit on enumeration**. References are the prefix plus 4 digits, so 10,000 values per prefix. A caller could step through them, one tool call each and at most 4 per turn (maxTurns). That would reveal other customers' operational statuses, but nothing that identifies them.
+  - Voice makes this slow. The per-process cap (D59) bounds concurrency, not volume.
+  - **Future work:** a per-conversation cap on distinct references looked up while unverified.
+- **G1: a number-free unsupported claim in an answer that cites a valid chunk can be spoken.**
+  - Example: "Your payment is most likely held up by bank processing times", under the "why is my payment delayed" chunk.
+  - Pattern checks can't catch this. The meaning is added without any of their markers: no number, promise, strengthening word, invented "your", or (for answers) diagnosis wording.
+  - D58 closes it for decline/clarify/escalate, with the diagnosis check and tool/caller-only evidence. For answers, a cited chunk may legitimately explain causes, so that check would drop correct answers.
+  - **The backstop is the offline LLM judge.** It is the Task 6 evals, planned and **not yet built** (limitations.md). It would run on recorded answers against the chunks they cite, after the fact.
+  - **A runtime judge was considered and rejected for latency.** It would be a second Haiku 4.5 call ($1 / $5 per MTok, per the claude-api skill's model table, cached 2026-09-25) before each answer is spoken.
+    - **Cost (estimate):** about 1,000 input tokens (instructions, 1–2 cited chunks, the answer) and about 30 output tokens. That is ≈ **$0.0012 per answer turn**, about +40% on the measured mean of $0.0028 per turn (test:agent, 2026-10-01).
+    - **Latency (estimate, not measured):** the judge must see the whole answer before any of it is spoken. That adds one direct model round trip, roughly **0.6–1.2 s**, on top of the deployed KB first-token p50 of 1.33 s (latency.md). It would also cancel sentence streaming, which the latency work depends on.
+    - The added latency is the reason for rejecting it; the cost is acceptable. Revisit it if the offline judge shows these claims happen often.
+
 
 ## Migration log
 
