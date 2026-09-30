@@ -727,7 +727,10 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - **Identity for lookups.** `lookup_transaction` and `lookup_payout` need only the reference (they return only customer-safe fields, D40). Only account questions need `lookup_customer`.
 - **Known gaps after this batch:**
   - S3: Haiku still asks for an email or ID after "I am Amara from LagosLedger" despite an explicit example.
-  - "They will follow up to help get this resolved" passes the promise filter (no promise construction). It's a soft phrase for the Task 6 judge.
+  - *(Considered and allowed, 2026-09-30, decision 3.)* "They will follow up to help get this resolved" passes the promise filter, and that is intended.
+    - `escalation-rules.md` requires the agent to confirm that a representative will follow up.
+    - "to help get this resolved" states the team's intent, not an outcome: it doesn't say the issue **will be** resolved, or when.
+    - The filter keeps blocking outcome constructions ("will be resolved", "will be lifted") and timelines.
   - No per-turn ticket cap in the tool. Idempotency keys are per category, so a model making parallel calls in several categories could create several tickets. The five-tickets test passed only because the model refused.
 
 ### D42. Security decisions belong to code: the model passes details, the tool decides (2026-09-30)
