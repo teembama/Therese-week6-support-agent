@@ -1040,7 +1040,7 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - Answers don't get this check, because a cited chunk may legitimately explain causes.
   - **Reference-format descriptions** are not checked for numbers or "exactly": "TXN followed by four digits", "exactly four numbers", "like TXN-9001".
   - **"your X" in a question** asks, not claims ("Is your payment incoming or outgoing?").
-  - **Extra allowed "your" nouns:** identity, information, account, dashboard, customer, id, company, issue, concern, frustration, situation. "your name / email / preferred time" stay allowed as before.
+  - **Extra allowed "your" nouns:** identity, information, account, dashboard, customer, id, company, issue, concern, frustration, situation, and service/services (added after `test:agent` flagged "your service" in the SEC-notes decline). "your name / email / preferred time" stay allowed as before.
 - **Also:** "one" as a pronoun or in a set phrase is no longer read as the number 1 ("is it one you're sending", "one moment").
 - **Replay:** all 106 stored decline/clarify/escalate replies (235 sentences, from Supabase, read-only) were run through the new filter with evidence = caller words only. That is stricter than at runtime, because tool records aren't stored in full.
   - The first pass flagged 14 sentences that the old filter passed, all false positives. They led to the allowances above: the pronoun "one", "four numbers", "your identity / dashboard / account".

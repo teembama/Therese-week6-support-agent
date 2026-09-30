@@ -252,6 +252,10 @@ describe("full filter on decline, clarify and escalate (D58, audit G2/G3)", () =
     const r = run(["[[type=escalate; kb=none; tool=none]] Could I have your name and email? ", "I'll also note your preferred time for the callback."], observed([]), S7);
     assert.equal(r.filtered.length, 0, JSON.stringify(r.filtered));
   });
+  it("decline: 'your service' is allowed (test:agent SEC-notes reply, 2026-10-01)", () => {
+    const r = run(["[[type=decline; kb=none; tool=none]] I can't share internal notes over the phone. ", "I'm happy to help with questions about your service or look into a specific transaction for you."]);
+    assert.equal(r.filtered.length, 0, JSON.stringify(r.filtered));
+  });
   it("a denied diagnosis is not a diagnosis: \"I can't say why it was flagged\"", () => {
     const f = new SentenceFilter([], "", { mode: "full", nonAnswer: true });
     assert.deepEqual(f.check("I can't say why it was flagged."), []);

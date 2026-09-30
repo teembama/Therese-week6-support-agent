@@ -52,7 +52,7 @@ const REQUEST_NOUNS = ["name", "email", "preferred", "callback", "call", "time",
  * dashboard") and the caller's matter in general terms. A claim ABOUT it is still checked
  * (diagnosis, numbers, promises, statuses).
  */
-const NON_ANSWER_NOUNS = ["identity", "information", "account", "dashboard", "customer", "id", "company", "issue", "concern", "frustration", "situation"];
+const NON_ANSWER_NOUNS = ["identity", "information", "account", "dashboard", "customer", "id", "company", "issue", "concern", "frustration", "situation", "service", "services"];
 /** "your <noun>" allowed once a tool has returned the caller's record in this attempt. */
 const RECORD_NOUNS = ["account", "payout", "payouts", "transaction", "transactions", "payment", "payments", "transfer", "invoice", "ticket", "escalation", "case", "record", "business", "company", "plan", "verification", "kyc", "status"];
 
