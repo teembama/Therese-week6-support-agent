@@ -9,6 +9,7 @@
     "verify-seed": "tsx verify-seed.ts",
     "eval-retrieval": "tsx eval-retrieval.ts",
     "test-mcp": "tsx test-mcp.ts",
+    "test-tools": "tsx test-tools.ts",
     "test-endpoint": "tsx test-endpoint.ts",
     "eval-grounding": "tsx eval-grounding.ts"
   },

@@ -610,6 +610,53 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - The "RLS on every table" count is now 13/13.
 - **Planned for Batch 2C:** S7's "right away" and "in most cases they're lifted" (run 4) break `escalation-rules.md`: no outcome promises, no timelines for reviews. The runtime filter (D37) will get outcome-promise and timeline-promise phrase checks in 2C.
 
+### D39. Batch 2B tools: choices the spec didn't cover
+
+- **Identity (`lookup_customer`):**
+  - `contact_name` counts as an identifier. The spec's test "Amara" + "Lagos Ledger" is two identifiers: a name and a company.
+  - A contact name matches the whole record name or exactly one of its words. "Amara" and "Okafor" match "Amara Okafor"; "Ama" does not match.
+  - Companies are compared after normalising (`normaliseName`), emails after `normaliseEmail`, and IDs after `normaliseReference`.
+  - With fewer than two identifiers, **nothing is looked up**: whether a single identifier exists is itself information.
+  - Outcomes:
+    - no match (including conflicting identifiers) → status `not_found`, reason `no_match`, event `identity_failed`;
+    - several matches → `denied`, reason `ambiguous`, event `identity_ambiguous`;
+    - verified → `success` plus `identity_verified`;
+    - conversation already verified as someone else → `denied`, reason `already_verified_other_customer` (D38).
+  - Event metadata lists which identifier **kinds** were given, never their values.
+  - Escalation flag: KYC `review required` → `compliance`; account `restricted` → `account`. Compliance wins when both apply (CUS-1003).
+  - The customers table is read whole (limit 10,000) and matched in code. That's fine for seed-scale data; at real scale, it would move into a SQL function on normalised columns.
+- **`lookup_transaction`:**
+  - IDs are accepted in any case, with or without a separator ("txn 9001" → `TXN-9001`), but must be exactly four digits.
+  - `past_estimated_arrival` = an arrival date is set, the status is not `completed`, and today (UTC) is after it.
+  - `failed` → `payment` escalation; `review required` → `compliance`.
+  - `customer_id` is never returned. The amount and currency are replaced by an `amount_withheld` note unless the verified customer owns the transaction.
+- **`lookup_payout`:**
+  - Takes a payout ID or a transaction ID. When both are given, they must refer to the same payout.
+  - `failure_reason` passes through a whitelist of customer-safe texts. Any unlisted reason becomes "The payout could not be completed.", and "compliance review" is spoken as "The payout is under review." (escalation rules: no internal compliance explanations).
+  - `support_summary` = a status sentence plus the linked transaction's `support_summary` (Task 1 decision).
+  - Only `review required` sets `requires_escalation` (per the spec). A `failed` payout does not.
+  - Amounts and recipient names are not returned.
+- **`create_support_ticket`:**
+  - The model can't pass `customer_id` or `priority`: they're stripped by the schema. The customer comes from the verified conversation, and the priority from SQL.
+  - The idempotency key is `ticket:<conversation>:<category>:<transaction ID, payout ID or none>`.
+  - A transaction or payout that doesn't exist → `not_found`, and nothing is created.
+  - `ticket_created` is logged only when a ticket was actually created, not on a duplicate.
+- **`create_escalation`:**
+  - Keys are `escalation:<conversation>:<category>` and `escalation-ticket:<conversation>:<category>`, namespaced apart from plain tickets.
+  - The ticket summary is "Escalation (<category>): <reason>".
+  - `follow_up_summary` says a specialist will follow up by email, plus the noted preferred time. It gives no timeline and no outcome, and a unit test asserts that.
+  - `escalation_created` is logged only when the escalation was actually created.
+- **`log_conversation_event`:**
+  - The model may log only `clarification_requested`, `declined_unsupported`, `lookup_performed` and `other`. Identity, ticket and escalation events are written by those tools, and `gate_blocked` is the backend's.
+  - Why: an audit trail the model could fake ("identity_verified") would be worthless.
+  - The summary is truncated to 300 characters. Metadata over 2 KB is rejected with `invalid_input`. Both are redacted with the shared log redaction.
+- **Status mapping:**
+  - `ATTEMPT_NOT_ACTIVE` → `denied` (from `withWriteToolLogging`).
+  - Other database refusals (`ATTEMPT_SCOPE_MISMATCH`, `ESCALATION_KEY_CONFLICT`) → `error`, because they are bugs.
+  - Missing records → `found:false`, never a crash.
+  - `lookup_customer` is a write tool: it sets the verified customer and logs events, so it is guarded too.
+- **Not in 2B:** the agent's tool allowlist and prompt are unchanged. The tools exist and are tested directly; wiring them to the agent is Batch 2C.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

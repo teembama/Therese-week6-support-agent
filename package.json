@@ -21,6 +21,7 @@
     "db:load-kb": "tsc -b && npm run load-kb -w @relaypay/db --",
     "eval:retrieval": "tsc -b && npm run eval-retrieval -w @relaypay/scripts --",
     "test:mcp": "tsc -b && npm run test-mcp -w @relaypay/scripts --",
+    "test:tools": "tsc -b && npm run test-tools -w @relaypay/scripts --",
     "test:endpoint": "tsc -b && npm run test-endpoint -w @relaypay/scripts --",
     "test:gate": "tsc -b && npm run test:gate -w @relaypay/backend",
     "eval:grounding": "tsc -b && npm run eval-grounding -w @relaypay/scripts --"
