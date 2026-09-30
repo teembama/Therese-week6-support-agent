@@ -727,6 +727,17 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - "They will follow up to help get this resolved" passes the promise filter (no promise construction). It's a soft phrase for the Task 6 judge.
   - No per-turn ticket cap in the tool. Idempotency keys are per category, so a model making parallel calls in several categories could create several tickets. The five-tickets test passed only because the model refused.
 
+### D42. Security decisions belong to code: the model passes details, the tool decides (2026-09-30)
+
+- The first 2C prompt told the model to check identity itself ("ask for a second identifier BEFORE calling lookup_customer").
+  - Haiku then refused to call the tool even with a name plus a company (S3 failed twice), and asked for a customer ID or email instead.
+  - The rule was being enforced twice, and the model's copy was the unreliable one.
+- **Rule:** the model does not gatekeep identity. It calls `lookup_customer` with whatever identifiers the caller gave (contact name, company, email, customer ID).
+  - The tool enforces the two-identifier rule in code (D39) and returns `needs_second_identifier`, `ambiguous` or `no_match`.
+  - Only then does the model ask for another identifier, without saying which detail was wrong.
+- "Clarify before calling" stays only for a missing transaction or payout reference. Without it there is nothing to look up, and guessing one would be worse.
+- General principle for Phase 2: anything security- or policy-critical (identity, amounts, write limits, idempotency, supersession) is enforced in code or in SQL. The prompt only describes what to do with the tool's answer.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
