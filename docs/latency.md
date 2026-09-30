@@ -135,3 +135,54 @@ A KB-only turn (the fees question), 8 runs per variant, interleaved on one lapto
 - **MCP server cold start, measured alone:** about 700–800 ms from `dist/main.js`, all of it module loading. Node's compile cache (`NODE_COMPILE_CACHE`) did not help. An esbuild bundle (`mcp-server/dist/bundle/server.mjs`) starts in about 450–550 ms, so the backend now spawns the bundle (D41).
 - **Net cost of attaching MCP with the bundle:** about +1.0 s at p50 first token on a KB-only turn. About 0.9 s of that is the later `init`; the rest is the doubled input (the six tool schemas).
 - **Not done** (would need an architecture change): pre-warming MCP processes, or a long-lived MCP server over HTTP. The stdio server per turn is locked.
+
+## Batch 2D Part B: laptop vs deployed (Railway EU West / Amsterdam), 2026-09-30
+
+- **Deployed:** `relaypay-backend-production-aa34.up.railway.app`, service in `europe-west4-drams3a`, Supabase in eu-central-1 (Frankfurt). The model is Haiku 4.5 with the MCP bundle.
+- **Laptop:** the same code, run from Lagos.
+- All times are ms from request receipt, **server-side**: turn rows plus the turn log's marks (`railway logs`). Client-observed times include the laptop → Railway network and are listed separately.
+- Deployed runs: `npm run test:deployed -- --kb-runs 10 --s4-runs 10`, interleaved, 0 errors. Laptop numbers are from this morning's runs (Batch 2C step 1, run B, and step 6 run 2).
+
+**KB-only (the fees question), p50 / p95**
+
+| | Laptop (MCP bundle) | Deployed |
+| --- | --- | --- |
+| `db_done` (attempt + retrieval) | 500–1900 ms | **73 ms** |
+| `init` (CLI + MCP ready) | ~2.5 s | **391 ms** |
+| First token | 3752 / 4333 | **1329 / 1437** |
+| Total | 4039 / 4526 | **1598 / 1690** |
+| Client-observed (deployed) | n/a | 1728 p50 (≈ +130 ms network from Lagos) |
+
+**Tool-backed: S4 "Can you check transaction TXN-9001?", p50 (p95 where measured)**
+
+| | Laptop (step 6 run 2, median of 4 tool turns) | Deployed (10 runs) |
+| --- | --- | --- |
+| Filler ("One moment while I check that.") | 4116 | **1171 / 1236** |
+| First answer sentence | 6161 | **2512 / 2557** |
+| Total | 6534 | **2971 / 3053** |
+| Client-observed | n/a | 3194 p50 |
+
+**S3 (lookup_customer) ×3 per model, deployed vs laptop ×5, p50**
+
+| | Haiku, laptop | Haiku, deployed | Sonnet 5.5, laptop | Sonnet 5.5, deployed |
+| --- | --- | --- | --- | --- |
+| Pass rate | 5/5 | 3/3 | 5/5 | 3/3 |
+| Filler | 2544 | 1295 | 2732 | 1785 |
+| First answer sentence | 5167 | **3033** | 6465 | **3520** |
+| Total | 5430 | 3292 | 6521 | 3542 |
+| Cost per turn (mean; cache warm) | $0.0031 (0.0018) | $0.0023 (0.0018) | $0.0076 (0.0043) | $0.0098 (0.0043) |
+
+Sonnet was measured deployed by setting the service's `AGENT_MODEL=claude-sonnet-5-5` and redeploying; it was then set back to Haiku. `conversation_turns.model` confirms which model answered each turn.
+
+**Reading:**
+- D24's hypothesis holds. Most of the laptop latency was the laptop:
+  - database round trips Lagos → Frankfurt (`db_done` 73 ms vs up to 1.9 s);
+  - process start (`init` 391 ms vs about 2.5 s: CLI and MCP spawn on a fast Linux host vs a Windows laptop).
+- Deployed, a KB answer starts at about 1.3 s, and a tool-backed answer's filler at about 1.2 s, with the answer at about 2.5 s.
+- The model gap stays about 0.5 s at the first answer sentence (Haiku 3.0 s vs Sonnet 3.5 s on S3), at 2.4–4× the cost. This supports the Haiku decision (docs/model-choice.md).
+- The long-lived session (D24) is not needed on these numbers.
+- The p95s are tight (n = 10). Re-measure under real call traffic (the Vapi webhook stores `performanceMetrics` per call, D50).
+
+**Also seen in the deployed runs (grounding, not latency):**
+- In 9 of the 10 KB runs, the runtime filter (D37) dropped Haiku's embellished second sentence, e.g. "…so you'll see **exactly** what applies to **your specific payment**". The caller heard only the grounded first sentence. The filter is doing its job, but the model still does this unprompted.
+- One answer was lost entirely: "International payouts usually take 2 to 5 business days, depending on the destination and **your** banking partners." That one invented word dropped the only sentence, and the caller got the safe decline. This is the precision cost of dropping whole sentences; kept as is for now, a Task 6 eval item.

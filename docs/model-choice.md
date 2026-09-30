@@ -88,3 +88,13 @@ What was spoken was almost identical for both models: "Thanks, Amara. Your accou
 
 - Haiku: $0.0156.
 - Sonnet: $0.0382.
+
+## Experiment 2: deployed (Railway EU West), S3 ×3 per model, 2026-09-30
+
+| Model | Pass rate | Filler, median | First answer sentence, median | Total, median | Cost per turn, mean (cache warm) |
+| --- | --- | --- | --- | --- | --- |
+| claude-haiku-4-5 | 3/3 | 1295 ms | **3033 ms** | 3292 ms | **$0.0023** ($0.0018) |
+| claude-sonnet-5-5 | 3/3 | 1785 ms | 3520 ms | 3542 ms | $0.0098 ($0.0043) |
+
+- Deployed, both models are much faster than on the laptop (docs/latency.md), and the gap between them shrinks to about 0.5 s.
+- Haiku is still faster and 2.4–4× cheaper, with the same reliability on S3. **The decision stands.**
