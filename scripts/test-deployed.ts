@@ -114,7 +114,7 @@ async function main(): Promise<number> {
   statuses.push(page.status);
   const html = await page.text();
   const dcsp = page.headers.get("content-security-policy") ?? "";
-  check(page.status === 200 && html.includes("Start call") && dcsp.includes("script-src 'self' 'unsafe-eval' https://esm.sh https://*.daily.co;") && !dcsp.includes("unsafe-inline"), "GET / -> page with CSP ('unsafe-eval' for Daily only, no 'unsafe-inline')");
+  check(page.status === 200 && html.includes("Start call") && dcsp.includes("script-src 'self' 'unsafe-eval' blob: https://esm.sh https://*.daily.co;") && !dcsp.includes("unsafe-inline"), "GET / -> page with CSP ('unsafe-eval' for Daily only, no 'unsafe-inline')");
   const cfg = (await (await fetch(`${BASE}/config`)).json()) as Row;
   check(cfg["vapiPublicKey"] === process.env["VAPI_PUBLIC_KEY"] && cfg["vapiAssistantId"] === process.env["VAPI_ASSISTANT_ID"] && Object.keys(cfg).length === 2, "GET /config -> exactly the two public values, equal to .env (not printed)");
   check((await (await fetch(`${BASE}/health`)).text()) === '{"status":"ok"}', "GET /health -> ok only");

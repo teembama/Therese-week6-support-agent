@@ -16,14 +16,15 @@ const FILES: Record<string, { file: string; type: string }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/app.css": { file: "app.css", type: "text/css; charset=utf-8" },
+  "/favicon.svg": { file: "favicon.svg", type: "image/svg+xml" },
 };
 
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  // 'unsafe-eval' ONLY because Daily's bundle (loaded via the pinned Vapi SDK) calls eval: the first
-  // live call was blocked by exactly this (CSP report: script-src, blocked eval, source esm.sh).
-  // No 'unsafe-inline'; everything else unchanged (D55).
-  "script-src 'self' 'unsafe-eval' https://esm.sh https://*.daily.co",
+  // 'unsafe-eval' because Daily's bundle calls eval (first live call: script-src blocked eval), and
+  // blob: because Daily's Krisp noise filter loads its AudioWorklet module from a blob: URL, and
+  // worklet modules fall back to script-src (second live call). No 'unsafe-inline' (D55).
+  "script-src 'self' 'unsafe-eval' blob: https://esm.sh https://*.daily.co",
   "style-src 'self'",
   "img-src 'self' data:",
   "connect-src 'self' https: wss:",

@@ -978,6 +978,17 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - the SDK is pinned: `@vapi-ai/web@2.7.1` with `@daily-co/daily-js@0.87.0`;
     - `frame-ancestors 'none'`, `base-uri 'none'` and `form-action 'none'`.
   - The vendor requires eval; the alternative is no web calls.
+- **Second live call: `blob:` added to `script-src` (2026-09-30).**
+  - With eval allowed, the call got further. Daily's **Krisp** noise filter then failed. Chrome: "Loading the script 'blob:https://relaypay-backend-production-aa34.up.railway.app/…' violates … script-src", then "Failed to load worklet module script", then `KrispInitError … WORKLET_NOT_SUPPORTED`.
+  - Worklet modules have no directive of their own and fall back to `script-src` (`script-src-elem` isn't set).
+  - Vapi recorded `silence-timed-out` after 41 s with no customer audio (`fromTransportLatencyAverage` 0), and the browser showed "Meeting ended due to ejection".
+  - Change: `script-src 'self' 'unsafe-eval' blob: https://esm.sh https://*.daily.co`.
+  - `worker-src 'self' blob:` was already present (D52), and no worker violation was reported. **Nothing else was added.**
+  - Our report route received no report for this block, so Chrome's console was the only evidence. It is kept as the evidence here.
+  - **Why `blob:` is acceptable:**
+    - a `blob:` URL can only be created by script that is already allowed to run on this page (our own code, or the pinned SDK sources). So it adds no new source of code, only a new way for already-trusted code to load a module;
+    - there is still no `'unsafe-inline'`, and still no user-generated content.
+  - **Why noise filtering is kept** (instead of disabling Krisp to avoid `blob:`): on earlier calls, background noise was transcribed as caller speech and started spurious turns. The filter is worth the directive.
 - **Error messages (the page):**
   - A component or bundle load failure, or a failure while the browser reported a CSP violation in this attempt, now says: "The call couldn't start because the voice component failed to load. This is a problem on our side, not your microphone or network."
   - The microphone, device, network, origin and not-configured messages are unchanged.

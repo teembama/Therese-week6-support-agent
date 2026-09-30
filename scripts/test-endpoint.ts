@@ -192,7 +192,9 @@ async function main(): Promise<number> {
     const page = await get("/");
     check(page.status === 200 && /text\/html/.test(page.headers.get("content-type") ?? "") && page.text.includes("Start call") && page.text.includes("End call") && page.text.includes('role="status"') && page.text.includes('aria-live="polite"'), "GET / -> the voice page (Start/End call, aria-live status)");
     const csp = page.headers.get("content-security-policy") ?? "";
-    check(csp.includes("script-src 'self' 'unsafe-eval' https://esm.sh https://*.daily.co;") && !csp.includes("unsafe-inline") && csp.includes("frame-ancestors 'none'") && page.headers.get("x-content-type-options") === "nosniff", "page has the CSP (scripts: self, 'unsafe-eval' for Daily, esm.sh, Daily; no 'unsafe-inline') and nosniff (D55)");
+    check(csp.includes("script-src 'self' 'unsafe-eval' blob: https://esm.sh https://*.daily.co;") && csp.includes("worker-src 'self' blob:") && !csp.includes("unsafe-inline") && csp.includes("frame-ancestors 'none'") && page.headers.get("x-content-type-options") === "nosniff", "page has the CSP (scripts: self, 'unsafe-eval' and blob: for Daily/Krisp, esm.sh, Daily; no 'unsafe-inline') and nosniff (D55)");
+    const icon = await get("/favicon.svg");
+    check(icon.status === 200 && /image\/svg\+xml/.test(icon.headers.get("content-type") ?? "") && page.text.includes('rel="icon" href="/favicon.svg"'), "favicon served and linked from the page");
     const js = await get("/app.js");
     check(js.status === 200 && js.text.includes("https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0") && !/pk_|vapiPublicKey\s*=\s*["']/.test(js.text), "GET /app.js -> SDK pinned (web 2.7.1, daily-js 0.87.0); no key in the file");
     check((await get("/app.css")).status === 200, "GET /app.css -> 200");
