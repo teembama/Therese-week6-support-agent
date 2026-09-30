@@ -8,13 +8,28 @@ export const AGENT_MAX_TURNS = 4;
 /** Agent SDK maxBudgetUsd per caller turn. A typical turn is ~$0.005; this is ~10x headroom. */
 export const AGENT_MAX_BUDGET_USD = 0.05;
 
+/** The six support tools the agent may call (Batch 2C). */
+export const AGENT_TOOL_NAMES = [
+  "lookup_customer", "lookup_transaction", "lookup_payout", "create_support_ticket", "create_escalation", "log_conversation_event",
+] as const;
+export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
+
+/** Lookup tools whose successful result can ground a type=answer (D41). */
+export const LOOKUP_TOOL_NAMES: readonly AgentToolName[] = ["lookup_customer", "lookup_transaction", "lookup_payout"];
+
+/** The Claude Code name of a tool on the relaypay MCP server. */
+export const MCP_TOOL_PREFIX = "mcp__relaypay__";
+
+/** Test-only (scripts/test-endpoint.ts --compare-mcp): run without the MCP server, for a latency baseline. */
+export const TEST_DETACH_MCP = process.env["RELAYPAY_TEST_DETACH_MCP"] === "1";
+
 /**
  * MCP tools the AGENT may use. init.tools must equal this list exactly (tool-list guard).
  * search_knowledge_base is deliberately NOT here: retrieval is a guaranteed pre-turn step
- * owned by the backend (D20). The MCP server keeps the tool for Inspector/manual testing.
- * While this list is empty the MCP server is not attached to the agent at all.
+ * owned by the backend (D20). The backend spawns the MCP server with MCP_TOOLSET=agent, so the
+ * server neither lists nor runs it; Inspector/manual runs keep the full set.
  */
-export const AGENT_MCP_TOOLS: readonly string[] = [];
+export const AGENT_MCP_TOOLS: readonly string[] = TEST_DETACH_MCP ? [] : AGENT_TOOL_NAMES.map((n) => `${MCP_TOOL_PREFIX}${n}`);
 
 /** Tools that must never appear in the agent's tool list; the guard fails the turn if they do. */
 export const FORBIDDEN_AGENT_TOOLS: readonly string[] = ["mcp__relaypay__search_knowledge_base"];

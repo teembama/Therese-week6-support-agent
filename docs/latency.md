@@ -119,3 +119,19 @@ A/B test with two local servers taking alternating requests, 10 runs each:
 Confirmation run after adopting it (full suite, 10 fees runs): p50 **2171**, p95 7160. `ms_total` p50 2475, p95 7544.
 
 The p95 is still set by one or two network outliers per 10 runs, measured from the laptop in Lagos. The deployment comparison follows.
+
+## Batch 2C step 1: attaching the MCP server (2026-09-30)
+
+A KB-only turn (the fees question), 8 runs per variant, interleaved on one laptop. `no-mcp` is the test-only `RELAYPAY_TEST_DETACH_MCP=1` baseline; `default` attaches the relaypay MCP server with the six agent tools.
+
+| Run | Variant | `init` median | First token p50 / p95 | Total p50 | Errors | Input tokens |
+| --- | --- | --- | --- | --- | --- | --- |
+| A: MCP from `dist/main.js` | no-mcp | ~1.8 s | 3529 / 6170 ms | 3665 ms | 0 | 1,824 |
+| | default | ~3.9 s | 4994 / 8012 ms | 5338 ms | 1 (8 s first-token timeout: `init` never arrived) | 3,843 |
+| B: MCP from the bundle | no-mcp | ~1.6 s | 2746 / 4441 ms | 2967 ms | 0 | 1,824 |
+| | default | ~2.5 s | 3752 / 4333 ms | 4039 ms | 0 | 3,843 |
+
+- **The database work still overlaps.** In every run, `db_done` and `message_yielded` come well before `init`. The cost is on the CLI side: the CLI starts the MCP server only after its own boot, and emits `init` only once that server has connected. So MCP startup adds directly to the critical path instead of overlapping the database work.
+- **MCP server cold start, measured alone:** about 700–800 ms from `dist/main.js`, all of it module loading. Node's compile cache (`NODE_COMPILE_CACHE`) did not help. An esbuild bundle (`mcp-server/dist/bundle/server.mjs`) starts in about 450–550 ms, so the backend now spawns the bundle (D41).
+- **Net cost of attaching MCP with the bundle:** about +1.0 s at p50 first token on a KB-only turn. About 0.9 s of that is the later `init`; the rest is the doubled input (the six tool schemas).
+- **Not done** (would need an architecture change): pre-warming MCP processes, or a long-lived MCP server over HTTP. The stdio server per turn is locked.

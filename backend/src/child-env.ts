@@ -4,7 +4,9 @@
 // - Claude Code CLI (spawned by the Agent SDK): OS basics + ANTHROPIC_API_KEY. The SDK's
 //   `env` option REPLACES the subprocess environment, so this is the whole of it.
 // - RelayPay MCP server: OS basics + SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
-//   CONVERSATION_ID, TURN_INDEX, ATTEMPT_ID (D9, D28). Never the Anthropic key (D13).
+//   CONVERSATION_ID, TURN_INDEX, ATTEMPT_ID (D9, D28), and MCP_TOOLSET=agent so the server hides
+//   search_knowledge_base from the agent (retrieval is backend-owned, D20). Never the Anthropic
+//   key (D13).
 
 import type { LogContext } from "@relaypay/shared";
 
@@ -51,5 +53,8 @@ export function mcpEnv(ctx: LogContext, source: NodeJS.ProcessEnv = process.env)
     CONVERSATION_ID: ctx.conversationId,
     TURN_INDEX: String(ctx.turnIndex),
     ATTEMPT_ID: required({ ATTEMPT_ID: ctx.attemptId }, "ATTEMPT_ID"),
+    // Test-only override (scripts/test-endpoint.ts): expose every tool so the tool-list guard
+    // can be seen failing the turn.
+    MCP_TOOLSET: source["RELAYPAY_TEST_MCP_TOOLSET"] === "all" ? "all" : "agent",
   };
 }

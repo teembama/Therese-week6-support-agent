@@ -26,7 +26,7 @@ interface ToolDefinition {
   handler: LoggedTool;
 }
 
-const TOOLS: readonly ToolDefinition[] = [
+const ALL_TOOLS: readonly ToolDefinition[] = [
   searchKnowledgeBase,
   lookupCustomer,
   lookupTransaction,
@@ -36,12 +36,15 @@ const TOOLS: readonly ToolDefinition[] = [
   logConversationEvent,
 ];
 
+/** Hidden from the agent (MCP_TOOLSET=agent): retrieval is a backend-owned pre-turn step (D20). */
+const NOT_FOR_AGENT = new Set(["search_knowledge_base"]);
+
 function jsonSchemaFor(schema: z.ZodType): { type: "object"; [key: string]: unknown } {
   const { $schema: _ignored, ...json } = z.toJSONSchema(schema, { io: "input" }) as Record<string, unknown>;
   return { ...json, type: "object" };
 }
 
-function buildServer(deps: ToolDeps): Server {
+function buildServer(deps: ToolDeps, TOOLS: readonly ToolDefinition[]): Server {
   const server = new Server({ name: "relaypay-support", version: "0.1.0" }, { capabilities: { tools: {} } });
 
   server.setRequestHandler("tools/list", async () => ({
@@ -83,12 +86,13 @@ function main(): void {
     db: createServiceClient({ SUPABASE_URL: env.supabaseUrl, SUPABASE_SERVICE_ROLE_KEY: env.supabaseKey }),
     ctx: env.context,
   };
-  const handle = serveStdio(() => buildServer(deps));
+  const tools = env.toolset === "agent" ? ALL_TOOLS.filter((t) => !NOT_FOR_AGENT.has(t.name)) : ALL_TOOLS;
+  const handle = serveStdio(() => buildServer(deps, tools));
   const shutdown = () => void handle.close();
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   console.error(
-    `[relaypay-mcp] serving ${TOOLS.length} tool(s) on stdio for conversation ${env.context.conversationId}, ` +
+    `[relaypay-mcp] serving ${tools.length} tool(s) (toolset ${env.toolset}) on stdio for conversation ${env.context.conversationId}, ` +
       `turn ${env.context.turnIndex}; ANTHROPIC_API_KEY in env: ${"ANTHROPIC_API_KEY" in process.env}`,
   );
 }

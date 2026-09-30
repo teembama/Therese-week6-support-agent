@@ -57,6 +57,13 @@ async function main(): Promise<number> {
   const refusedAttempt = spawnSync(process.execPath, [SERVER], { env: envNoAttempt, input: "", encoding: "utf8", timeout: 15_000 });
   check(refusedAttempt.status !== 0 && refusedAttempt.stderr.includes("ATTEMPT_ID is not set"), "server refuses to start without ATTEMPT_ID");
 
+  console.log("\n== 1c. ANTHROPIC_API_KEY scrubbed before the server loads (D13), for main.js AND the bundle the backend spawns");
+  for (const entry of [SERVER, resolve(REPO, "mcp-server", "dist", "bundle", "server.mjs")]) {
+    const r = spawnSync(process.execPath, [entry], { env: { ...serverEnv, ANTHROPIC_API_KEY: "sk-ant-test-not-a-real-key" }, input: "", encoding: "utf8", timeout: 15_000 });
+    const label = entry.endsWith("server.mjs") ? "bundle" : "main.js";
+    check(r.stderr.includes("ANTHROPIC_API_KEY was present") && r.stderr.includes("ANTHROPIC_API_KEY in env: false"), `${label}: key removed before startup, server saw none`);
+  }
+
   // Register the attempt the MCP server acts for (migration 003); this also creates the conversation.
   const { error: beginError } = await db.rpc("begin_turn_attempt", {
     p_conversation_id: conversationId, p_channel: "test", p_caller: "scripts/test-mcp.ts", p_turn_index: 0,
@@ -77,6 +84,19 @@ async function main(): Promise<number> {
     // Batch 2B added the six support tools (the agent's allowlist is unchanged until 2C).
     const expected = ["create_escalation", "create_support_ticket", "log_conversation_event", "lookup_customer", "lookup_payout", "lookup_transaction", "search_knowledge_base"];
     check(JSON.stringify(tools.map((t) => t.name).sort()) === JSON.stringify(expected), `exactly the 7 tools: ${expected.join(", ")}`);
+
+    console.log("\n== 2b. MCP_TOOLSET=agent (how the backend spawns it)");
+    const agentClient = new Client({ name: "relaypay-test-mcp-agent", version: "0.1.0" });
+    await agentClient.connect(new StdioClientTransport({ command: process.execPath, args: [SERVER], env: { ...serverEnv, MCP_TOOLSET: "agent" }, stderr: "pipe" }));
+    try {
+      const agentTools = (await agentClient.listTools()).tools.map((t) => t.name).sort();
+      console.log(`agent toolset: ${agentTools.join(", ")}`);
+      check(JSON.stringify(agentTools) === JSON.stringify(expected.filter((n) => n !== "search_knowledge_base")), "agent toolset: the 6 support tools, no search_knowledge_base");
+      const hidden = (await agentClient.callTool({ name: "search_knowledge_base", arguments: { query: "fees" } })).structuredContent as Record<string, unknown>;
+      check((hidden["error"] as Record<string, unknown> | undefined)?.["code"] === "unknown_tool", "agent toolset: calling search_knowledge_base -> unknown_tool");
+    } finally {
+      await agentClient.close();
+    }
 
     const call = async (label: string, args: Record<string, unknown>) => {
       console.log(`\n== ${label}\narguments: ${JSON.stringify(args)}`);
@@ -134,9 +154,9 @@ async function main(): Promise<number> {
     .order("id");
   if (callsError) throw new Error(callsError.message);
   console.table(calls);
-  check(calls?.length === 3, "3 tool_calls rows (fees, empty, injected)");
+  check(calls?.length === 4, "4 tool_calls rows (hidden search_knowledge_base, fees, empty, injected)");
   check((calls ?? []).every((c) => c.attempt_id === attemptId), "tool_calls rows carry the spawning attempt_id");
-  check((calls ?? []).map((c) => c.status).join(",") === "success,invalid_input,success", "statuses: success, invalid_input, success");
+  check((calls ?? []).map((c) => c.status).join(",") === "invalid_input,success,invalid_input,success", "statuses: invalid_input (hidden tool), success, invalid_input, success");
 
   console.log(`\n== retrieval_logs for ${conversationId}`);
   const { data: logs, error: logsError } = await db

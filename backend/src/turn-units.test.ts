@@ -6,16 +6,24 @@ import { buildRetrievalQuery, meaningfulWordCount } from "./retrieval-query.js";
 import { styleViolations } from "./style.js";
 import { toolListProblem } from "./turn.js";
 
+const SIX = ["lookup_customer", "lookup_transaction", "lookup_payout", "create_support_ticket", "create_escalation", "log_conversation_event"].map((n) => `mcp__relaypay__${n}`);
+const CONNECTED = [{ name: "relaypay", status: "connected" }];
+
 describe("tool-list guard", () => {
-  it("passes when the agent has exactly the allowlist (currently no tools)", () => {
-    assert.equal(toolListProblem({ tools: [], mcp_servers: [] }), null);
+  it("passes when the agent has exactly the six support tools and the server is connected", () => {
+    assert.equal(toolListProblem({ tools: [...SIX].reverse(), mcp_servers: CONNECTED }), null);
+  });
+  it("fails when a tool is missing or the server is not connected", () => {
+    assert.match(toolListProblem({ tools: SIX.slice(1), mcp_servers: CONNECTED }) ?? "", /!= allowlist/);
+    assert.match(toolListProblem({ tools: [], mcp_servers: [] }) ?? "", /!= allowlist/);
+    assert.match(toolListProblem({ tools: SIX, mcp_servers: [{ name: "relaypay", status: "failed" }] }) ?? "", /status failed/);
   });
   it("fails when search_knowledge_base is present", () => {
     const p = toolListProblem({ tools: ["mcp__relaypay__search_knowledge_base"], mcp_servers: [{ name: "relaypay", status: "connected" }] });
     assert.match(p ?? "", /forbidden tool\(s\) present: mcp__relaypay__search_knowledge_base/);
   });
   it("fails when any built-in or unexpected tool is present", () => {
-    assert.match(toolListProblem({ tools: ["Bash"], mcp_servers: [] }) ?? "", /!= allowlist/);
+    assert.match(toolListProblem({ tools: [...SIX, "Bash"], mcp_servers: CONNECTED }) ?? "", /!= allowlist/);
   });
 });
 

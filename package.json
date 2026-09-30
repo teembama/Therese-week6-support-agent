@@ -13,18 +13,18 @@
     "scripts"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run bundle -w @relaypay/mcp-server",
     "typecheck": "tsc -b",
-    "db:seed": "tsc -b && npm run seed -w @relaypay/db --",
-    "db:verify": "tsc -b && npm run verify-seed -w @relaypay/scripts --",
+    "db:seed": "npm run build && npm run seed -w @relaypay/db --",
+    "db:verify": "npm run build && npm run verify-seed -w @relaypay/scripts --",
     "db:test": "bash db/tests/schema-suite.sh && bash db/tests/race.sh",
-    "db:load-kb": "tsc -b && npm run load-kb -w @relaypay/db --",
-    "eval:retrieval": "tsc -b && npm run eval-retrieval -w @relaypay/scripts --",
-    "test:mcp": "tsc -b && npm run test-mcp -w @relaypay/scripts --",
-    "test:tools": "tsc -b && npm run test-tools -w @relaypay/scripts --",
-    "test:endpoint": "tsc -b && npm run test-endpoint -w @relaypay/scripts --",
-    "test:gate": "tsc -b && npm run test:gate -w @relaypay/backend",
-    "eval:grounding": "tsc -b && npm run eval-grounding -w @relaypay/scripts --"
+    "db:load-kb": "npm run build && npm run load-kb -w @relaypay/db --",
+    "eval:retrieval": "npm run build && npm run eval-retrieval -w @relaypay/scripts --",
+    "test:mcp": "npm run build && npm run test-mcp -w @relaypay/scripts --",
+    "test:tools": "npm run build && npm run test-tools -w @relaypay/scripts --",
+    "test:endpoint": "npm run build && npm run test-endpoint -w @relaypay/scripts --",
+    "test:gate": "npm run build && npm run test:gate -w @relaypay/backend",
+    "eval:grounding": "npm run build && npm run eval-grounding -w @relaypay/scripts --"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",

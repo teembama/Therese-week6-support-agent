@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node bundle.mjs",
+    "bundle": "node bundle.mjs",
     "typecheck": "tsc -b",
     "start": "node dist/main.js",
     "test": "node --test dist/tool-logging.test.js dist/tools.test.js"
@@ -13,5 +14,8 @@
     "@modelcontextprotocol/server": "^2.2.0",
     "zod": "^4.6.5",
     "@relaypay/shared": "*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

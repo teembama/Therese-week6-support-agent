@@ -151,7 +151,7 @@ function percentile(values: number[], p: number): number {
 }
 
 async function main(): Promise<number> {
-  const { values } = parseArgs({ options: { "latency-only": { type: "boolean" }, runs: { type: "string" } } });
+  const { values } = parseArgs({ options: { "latency-only": { type: "boolean" }, runs: { type: "string" }, "compare-mcp": { type: "boolean" } } });
   const latencyRuns = Number(values.runs ?? 10);
   process.loadEnvFile(resolve(REPO, ".env"));
   // Per-run secret for the spawned test servers (they inherit it; loadEnvFile does not
@@ -313,8 +313,8 @@ async function main(): Promise<number> {
     check(to.text === "Sorry, I'm having trouble checking that right now. Could you try again in a moment?", "timeout: fallback line spoken");
     check(toRow?.["answer_type"] === "error" && String(toRow?.["confidence_note"]).includes("aborted: first-token timeout"), "timeout: answer_type error, agent aborted and logged");
 
-    console.log("\n== Tool-list guard (server C, MCP server force-attached -> search_knowledge_base visible)");
-    const C = await startServer(8797, { RELAYPAY_ATTACH_MCP: "1" });
+    console.log("\n== Tool-list guard (server C, MCP server with the full toolset -> search_knowledge_base visible)");
+    const C = await startServer(8797, { RELAYPAY_TEST_MCP_TOOLSET: "all" });
     servers.push(C);
     const gId = `test-ep-${RUN}-guard`;
     const g = await post(C.port, body(gId, ["What fees does RelayPay charge?"]));
@@ -348,6 +348,12 @@ async function main(): Promise<number> {
    }
 
     const variants: Array<{ name: string; server: Server }> = [{ name: "default", server: A }];
+    if (values["compare-mcp"]) {
+      // Batch 2C step 1: the same KB-only question without the MCP server attached (baseline).
+      const D = await startServer(8794, { RELAYPAY_TEST_DETACH_MCP: "1" });
+      servers.push(D);
+      variants.unshift({ name: "no-mcp", server: D });
+    }
     console.log(`\n== Latency: ${latencyRuns} runs of the fees question per variant (${variants.map((v) => v.name).join(", ")})`);
     const results = new Map(variants.map((v) => [v.name, { firsts: [] as number[], totals: [] as number[], rows: [] as Record<string, unknown>[] }]));
     for (let i = 0; i < latencyRuns; i++) {

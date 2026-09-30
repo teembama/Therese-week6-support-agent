@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { query, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { logRetrievalResult, newAttemptId, rankKnowledge, summarize, type Db, type KbChunk, type LogContext } from "@relaypay/shared";
 import { cliEnv, mcpEnv } from "./child-env.js";
+import { pickMcpEntry } from "./mcp-entry.js";
 import {
   AGENT_MAX_BUDGET_USD,
   AGENT_MAX_TURNS,
@@ -42,18 +43,19 @@ import { buildRetrievalQuery } from "./retrieval-query.js";
 import type { TurnSource } from "./sse.js";
 import { styleViolations } from "./style.js";
 
-// Test knob: attach the MCP server even though the agent allowlist is empty, so the endpoint
-// tests can prove the guard fails the turn when a forbidden tool shows up.
-const ATTACH_MCP = AGENT_MCP_TOOLS.length > 0 || process.env["RELAYPAY_ATTACH_MCP"] === "1";
+// The MCP server is attached whenever the agent has tools (always, except the test-only
+// latency baseline RELAYPAY_TEST_DETACH_MCP=1).
+const ATTACH_MCP = AGENT_MCP_TOOLS.length > 0;
 
 const EMPTY_METRICS: AttemptMetrics = {
   ms_retrieval: null, ms_first_token: null, ms_total: null, model: null, input_tokens: null, output_tokens: null,
   cache_read_tokens: null, cache_creation_tokens: null, cost_usd_estimate: null, sdk_duration_ms: null, sdk_num_turns: null,
 };
 
-const MCP_ENTRY =
-  process.env["RELAYPAY_MCP_ENTRY"] ||
-  resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "mcp-server", "dist", "main.js");
+const MCP = pickMcpEntry();
+if (ATTACH_MCP && MCP.reason) console.error(`[relaypay] MCP server entry: ${MCP.path} (${MCP.reason})`);
+const MCP_ENTRY = MCP.path;
+export const MCP_ENTRY_KIND = MCP.kind;
 
 export interface TurnInput {
   db: Db;
