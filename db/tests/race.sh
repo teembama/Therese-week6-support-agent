@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Two-session race test of create_escalation_with_ticket.
+# Two-session race test of create_escalation_with_ticket (v2, migration 005: guarded by an active attempt).
 # Session A opens a transaction, calls the function and holds it uncommitted; session B makes
 # the same call with the same keys and must block, then return A's rows with created=false.
 # Runs against a throwaway local Postgres only. See db/tests/README.md.
@@ -10,10 +10,11 @@ start_cluster
 setup_supabase_like_schema || exit 1
 pg -c "\copy customers from '$REPO/assets/seed-data/customers.csv' csv header"
 pg -c "insert into conversations(conversation_id,channel) values ('call-race','voice')"
+pg -c "insert into turn_attempts(attempt_id,conversation_id,turn_index,transcript_hash) values ('ATT-RACE','call-race',0,'h')"
 
 CALL="select 'result: ticket_id=' || ticket_id || ' escalation_id=' || escalation_id || ' created=' || created
   from create_escalation_with_ticket(
-    p_conversation_id => 'call-race', p_ticket_idempotency_key => 'K1', p_escalation_idempotency_key => 'K2',
+    p_attempt_id => 'ATT-RACE', p_conversation_id => 'call-race', p_ticket_idempotency_key => 'K1', p_escalation_idempotency_key => 'K2',
     p_category => 'account', p_ticket_summary => 'Race test', p_reason => 'Race test',
     p_user_name => 'Efua Mensah', p_user_email => 'efua@accrastack.example', p_customer_id => 'CUS-1003');"
 TS="to_char(clock_timestamp(), 'HH24:MI:SS.MS')"

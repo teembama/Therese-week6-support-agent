@@ -433,10 +433,18 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - **Evidence rule:** for every claim judged "supported", the judge must quote the supporting span. Code then checks that the quote appears **verbatim** (after whitespace normalisation) in a cited chunk. An unverifiable quote counts as **unsupported**, regardless of the judge's verdict.
   - Results go to the `evaluations` table.
 
-### D33. Deployment region: Fly.io `fra`, next to Supabase `eu-central-1` (Batch 2D)
+### D33. Deployment: Railway Hobby, EU region (Amsterdam), next to Supabase `eu-central-1` (Batch 2D; revised 2026-09-30)
+
+- **Revision (2026-09-30):** the original plan was Fly.io region `fra`. Fly.io no longer fits: its free trial is 2 hours of machine runtime or 7 days, and a card is required (https://docs.fly.io/about/free-trial/), while the budget allows $0 extra.
+  - The user already pays for **Railway Hobby** ($5/month including $5 of usage), so the backend deploys there, in the EU region (Amsterdam, roughly 7–10 ms from Frankfurt).
+  - **Usage budget:** the user sets a $5 hard usage limit and stops their Week 5 services, so this service must stay within about $5/month.
+    - Size it at the minimum that fits the measured footprint: about 272 MB peak per turn without MCP (CLI 195 MB + backend 88 MB, measured 2026-09-30), plus an estimated 60–80 MB once the MCP server is attached, so ~350 MB per turn.
+    - Report the expected monthly cost before deploying.
+  - Nothing is created on Railway until after Batch 2B.
+- *Original entry, kept for the record:*
 
 - The Supabase project's region is **eu-central-1** (Frankfurt), per the user on 2026-09-29.
-- The backend will be deployed to **Fly.io region `fra`** in Batch 2D, to test D24's hypothesis that most of the latency tail and the Supabase stalls come from running on a laptop far from the database.
+- *(superseded above)* The backend will be deployed to **Fly.io region `fra`** in Batch 2D, to test D24's hypothesis that most of the latency tail and the Supabase stalls come from running on a laptop far from the database.
 - Laptop evidence for that hypothesis, from live call `01a0ef57-1c4e-7440-889d-332b7ea6d2dd`:
   - one turn's database phase took **42.6s**;
   - Supabase connect timeouts (`UND_ERR_CONNECT_TIMEOUT`, 10s per attempt) were seen from this network in the same hour.
@@ -565,6 +573,42 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - clarify and decline unfiltered;
   - no evidence → no filter;
   - cost.
+
+### D38. Migration 005: choices the Batch 2B spec didn't cover
+
+- **Attempt scope check (`check_attempt_scope`).**
+  - Right after `require_active_attempt`, every guarded write also checks that the attempt belongs to the conversation being written. For events, it must also belong to the turn.
+  - A mismatch raises `P0001 ATTEMPT_SCOPE_MISMATCH` and nothing is written.
+  - The MCP server takes both values from the same spawn environment (D9), so a mismatch is a bug. This stops an active attempt from one call writing into another.
+- **`log_conversation_event` is a guarded write.**
+  - D29 exempts `tool_calls` and `retrieval_logs`, which are observability logs that must record denied calls too.
+  - `conversation_events` records model-initiated actions and decisions ("ticket_created", "identity_verified"), so it follows the write rule: a superseded attempt records nothing there. Its denied call is still visible in `tool_calls`.
+  - Written through `log_conversation_event_guarded(p_attempt_id, p_conversation_id, p_turn_index, p_event_type, p_summary, p_metadata)`.
+- **`conversation_events` limits:**
+  - `summary` is 1–500 characters;
+  - `metadata` must be a JSON object of at most 4 KB (as text);
+  - `attempt_id` is nullable, so the Batch 2D webhook can log events that no attempt made. Guarded writes always set it.
+- **`set_verified_customer`:**
+  - Re-verifying the same customer is a no-op.
+  - A **different** customer than the one already verified is refused with `P0001 VERIFIED_CUSTOMER_CONFLICT`: one call acts for one customer. This keeps a second identity from silently unlocking another customer's amounts mid-call.
+- **Ticket priority** looks only at the transaction and payout passed in, and uses each one's own status.
+  - The ticket function does not cross-check that they belong to the ticket's customer. Tickets are internal records and expose nothing to the caller.
+  - On a duplicate key, the existing ticket's fields (including its priority) are returned unchanged.
+- **Escalation v2** is 001's body unchanged, plus the guard and the scope check. `p_attempt_id` is the first argument. Priority stays `high` (D1).
+- **Stale attempts:**
+  - The 60-second rule runs inside `begin_turn_attempt`, only for the same turn, before the replacement step.
+  - A stale attempt becomes `failed` with `status_reason 'stale'`, and is **not** listed in `replaced_attempt_ids`, because it wasn't replaced by this request.
+  - If its backend later calls `finish_turn_attempt`, the `failed` status is kept (003 never overwrites a final status).
+- **Abandonment:**
+  - "Last activity" is the latest of the conversation start, any turn's `t_received`, and any attempt's start or end.
+  - An abandoned conversation's `ended_at` is set to that last activity, not to the time of the sweep.
+  - Its still-active attempts are failed as `stale`, so none stays `active` forever.
+  - `ended_reason` is left for the Vapi webhook.
+  - The function takes an optional `p_idle_minutes` (default 15), returns the count, and has no caller yet (Batch 2D).
+- **Existing tests changed because 005 drops the old signature:**
+  - The 001 escalation checks in `schema-suite.sh` and `race.sh` now call v2 with an active attempt. The assertions are unchanged.
+  - The "RLS on every table" count is now 13/13.
+- **Planned for Batch 2C:** S7's "right away" and "in most cases they're lifted" (run 4) break `escalation-rules.md`: no outcome promises, no timelines for reviews. The runtime filter (D37) will get outcome-promise and timeline-promise phrase checks in 2C.
 
 ## Migration log
 
