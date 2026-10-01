@@ -4,6 +4,11 @@ Things that must be done or undone before the project is submitted.
 
 ## Tomorrow morning (2026-10-02), before the presentation
 
+- [ ] **FIRST: 2-minute live smoke test** (unit-tested and deployed; live check pending; D78–D81). Do it before recording.
+  1. Start a call with the weather as the **first** question ("What's the weather in Lagos like?") → "That's outside what I can help with. I can only help with RelayPay payments and accounts. Is there anything RelayPay-related I can help you with?"
+  2. Say "No thanks" → "Thanks for calling RelayPay. Goodbye."
+  3. During the call, press **Hide captions** and then **Show captions**: the panel must disappear and come back, with the label changing.
+  4. Record the result in docs/testing-evidence.md (the "Web page round and D78" table).
 - [ ] **Remove the debug structure log** (TEMPORARY, D26/D28). Remove `backend/src/debug-shape.ts`, the `RELAYPAY_DEBUG_REQUEST_SHAPE` handling in `backend/src/server.ts`, its `.env.example` entry, and the debug checks in `scripts/test-endpoint.ts`. Run the unit suites, then redeploy (EU West).
 - [ ] **Check Claude Haiku 4.5's deprecation status** at https://platform.claude.com/docs/en/about-claude/model-deprecations (retirement floor "not sooner than October 15, 2026"). Record the date and status in docs/model-choice.md. If a retirement date falls before or during grading, set `AGENT_MODEL=claude-sonnet-5-5` on Railway.
 - [ ] **Delete the old Vapi public key** in the Vapi dashboard (the user does this). The Railway-origin key, created 2026-09-30, is the one in use.

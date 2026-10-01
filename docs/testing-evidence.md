@@ -50,6 +50,20 @@ The AFTER judge cost more because every call now carries the approved-procedure 
 | after3 `…12-57-09-324Z-after3` | `57eebdf1` / `75ad1e1` | 0/3 | D70 (follow-up text without channel or time; description reworded) | **Regression:** 2 of 2 complete runs created the escalation straight after the email, with no read-back and no time question. r3 was cut short by the $0.06 cap. |
 | after4 `…13-11-57-971Z-after4` | `6993cf50` / `e637f65` | **3/3** | **D72**: the flow is enforced by the input schema (`email_confirmed_by_caller`, plus a preferred time or `preferred_time_declined`), with an actionable `invalid_input` otherwise | The full flow 3/3, clean follow-up text, judge clean. |
 
+**Web page round and D78 (2026-10-01, evening):** unit-tested and deployed; **live check pending.**
+
+| Change | Commit / deploy | Evidence so far | Live check |
+| --- | --- | --- | --- |
+| D79 captions toggle really hides and shows | `590af9f` / `5c4736b3` | `captions.test.ts` (toggle state, the `[hidden]` CSS rule, the initial markup) | pending |
+| D80 full-call scrollable captions, "Jump to latest", same-speaker fragments merged | `d572812` / `5c4736b3` | `captions.test.ts` (all lines kept, the live "corridor—" merge, scroll decision, panel markup) | pending |
+| D81 failures by type (user-fixable / network / our side), "Reference: <code>" line | `125b230` / `5c4736b3` | `call-end.test.ts` (each mapping, including the live mid-call daily-error and the start-method-error signalling disconnect) | pending |
+| D78 evidence-free decline: fixed line by reason (off_topic / not_covered) | `68119a4` / `1319faf5` | `tool-grounding.test.ts`, `social-fast-path.test.ts` (weather → off-topic line; "no thanks" after it → goodbye; crypto-style miss → safe line; missing or invalid reason → safe line) | pending |
+
+**Pending 2-minute smoke test, before recording the Loom:**
+1. A call whose **first** question is about the weather → the off-topic line.
+2. "No thanks" → goodbye.
+3. The captions panel hides and shows.
+
 ## How a run is judged
 
 A run passes only if **all deterministic checks pass** and **the LLM judge finds no unsupported or strengthened claim**. The details are in Appendix A; three things changed for the AFTER run:
