@@ -44,6 +44,11 @@ export const KB_QUERY_SYNONYMS: Readonly<Record<string, string>> = {
   // X1 "do you support crypto wallets": the English stemmer keeps `crypto` and `cryptocurr`
   // apart, so the "Cryptocurrency payments" limitation chunk was never matched.
   crypto: "cryptocurrency",
+  // ROB-OVERSEAS "What's it cost to pay someone overseas?" (BEFORE eval 2026-10-01): zero chunks
+  // retrieved; the fees chunk says "fees", "international payments". One entry per missed word.
+  cost: "fees",
+  overseas: "international",
+  "pay someone": "payment",
 };
 
 /** Maximum length of input/result summaries and error messages written to the log tables. */
