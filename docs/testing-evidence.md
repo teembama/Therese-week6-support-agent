@@ -49,6 +49,7 @@ The AFTER judge cost more because every call now carries the approved-procedure 
 | AFTER `…11-39-53-015Z` | `61844fd9` / `3639936` | **3/3** | D65 (prompt: no follow-up channel or time), D66 (procedure corpus for the judge) | The full flow, judge clean. |
 | after3 `…12-57-09-324Z-after3` | `57eebdf1` / `75ad1e1` | 0/3 | D70 (follow-up text without channel or time; description reworded) | **Regression:** 2 of 2 complete runs created the escalation straight after the email, with no read-back and no time question. r3 was cut short by the $0.06 cap. |
 | after4 `…13-11-57-971Z-after4` | `6993cf50` / `e637f65` | **3/3** | **D72**: the flow is enforced by the input schema (`email_confirmed_by_caller`, plus a preferred time or `preferred_time_declined`), with an actionable `invalid_input` otherwise | The full flow 3/3, clean follow-up text, judge clean. |
+| after5 `…23-23-06-674Z-after5` | `e59b1556` / `abe9e03` | **3/3** | **D82** (migration 006: escalation enrichment, `escalation_updated`, notification outbox) | The full flow 3/3, judge clean. Each run queued exactly one `escalation_created` outbox row (pending, no amounts or notes) with call_booked true and time "Tomorrow morning". No enrichment happened (no speculative attempt created the escalation first). $0.103 against a $0.15 cap, run with `--stop-on-network-error`, no network errors. |
 
 **Web page round and D78 (2026-10-01, evening):** unit-tested and deployed; **live check pending.**
 
