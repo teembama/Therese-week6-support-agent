@@ -161,6 +161,7 @@ async function main(): Promise<number> {
     check(eR["user_email"] === "amara@lagosledger.example", "spoken email normalised to amara@lagosledger.example", String(eR["user_email"]));
     check(eR["call_booked"] === true && eR["preferred_time_text"] === "tomorrow after 2pm Lagos time" && eR["customer_id"] === "CUS-1001", "call_booked true with the verbatim preferred time; customer from verified state");
     check(!/\b(within|hours?|days?|soon|shortly)\b/i.test(String(e1["follow_up_summary"])), "follow_up_summary promises no timeline");
+    check(!/@|\bby e-?mail\b|tomorrow|2pm/i.test(String(e1["follow_up_summary"])) && e1["preferred_time_noted"] === "tomorrow after 2pm Lagos time", "follow_up_summary has no channel, address or time; the preference is returned separately as noted (D70)", String(e1["follow_up_summary"]));
     const e1again = await call("create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Asked again" }, "success");
     check(e1again["escalation_id"] === e1["escalation_id"] && e1again["duplicate"] === true, "duplicate returns the same escalation");
 

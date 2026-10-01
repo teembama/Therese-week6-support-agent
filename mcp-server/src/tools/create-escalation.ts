@@ -8,7 +8,9 @@ export const name = "create_escalation";
 export const description =
   "Hand the caller over to a RelayPay support specialist. Collect the caller's name and email " +
   "first (and a preferred callback time if they want a call). Creates the escalation and its " +
-  "support ticket. Read follow_up_summary to the caller; never promise a timeline or an outcome.";
+  "support ticket. Tell the caller what follow_up_summary says (a representative will follow up); never say how or when, " +
+  "and never promise an outcome. If preferred_time_noted is set, say it is NOTED as their preferred time " +
+  "(\"I've noted tomorrow morning as your preferred time\"), never as a commitment.";
 
 export const ESCALATION_CATEGORIES = ["compliance", "account", "dispute", "payment", "other"] as const;
 
@@ -31,10 +33,14 @@ export function escalationKeys(conversationId: string, category: string): { tick
 }
 
 /** What the agent tells the caller. No timeline and no outcome (escalation-rules.md). */
-export function followUpSummary(email: string, preferredTime: string | undefined): string {
-  return preferredTime
-    ? `A RelayPay support specialist will follow up with you at ${email}, and your preferred time, "${preferredTime}", has been noted.`
-    : `A RelayPay support specialist will follow up with you by email at ${email}.`;
+/**
+ * What the agent tells the caller (D70): a representative will follow up. No channel, address or
+ * time: the escalation records a callback preference, not a commitment to email or call at a time
+ * (D65). BEFORE eval S7 r3 read "will follow up with you at efua@…" from the old summary. The
+ * caller's preferred time is returned separately (preferred_time_noted), to be confirmed as noted.
+ */
+export function followUpSummary(): string {
+  return "A RelayPay support representative will follow up.";
 }
 
 export const handler = withWriteToolLogging(name, "Create (or return the existing) escalation with its ticket", (args, { db, ctx }) => serialised(async (): Promise<ToolOutcome> => {
@@ -76,7 +82,8 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
       escalation_status: "open",
       call_booked: callBooked,
       duplicate: !e.created,
-      follow_up_summary: followUpSummary(email, input.preferred_time_text),
+      follow_up_summary: followUpSummary(),
+      ...(input.preferred_time_text ? { preferred_time_noted: input.preferred_time_text } : {}),
     },
     resultSummary: `${e.created ? "created" : "existing"} ${e.escalation_id}/${e.ticket_id} ${input.category}; call_booked=${callBooked}; customer=${customerId ?? "unverified"}${note}`,
   };

@@ -79,11 +79,12 @@ describe("create_escalation", () => {
   it("idempotency keys: conversation + category, namespaced apart from plain tickets", () => {
     assert.deepEqual(escalationKeys("c1", "account"), { ticket: "escalation-ticket:c1:account", escalation: "escalation:c1:account" });
   });
-  it("follow-up summary promises no timeline", () => {
-    for (const s of [followUpSummary("a@b.co", undefined), followUpSummary("a@b.co", "tomorrow morning")]) {
-      assert.doesNotMatch(s, /\b(within|hours?|days?|today|tonight|soon|shortly|asap|guarantee)\b/i, s);
-    }
-    assert.match(followUpSummary("a@b.co", "tomorrow morning"), /"tomorrow morning"/);
+  it("follow-up summary: a representative will follow up; no channel, address or time (D70)", () => {
+    const s = followUpSummary();
+    assert.match(s, /will follow up/);
+    assert.doesNotMatch(s, /[^\s@]+@[^\s@]+/, "no email address");
+    assert.doesNotMatch(s, /\bby (e-?mail|phone|call|text)\b|\be-?mail\b|\bphone\b/i, "no channel");
+    assert.doesNotMatch(s, /\b(within|hours?|days?|minutes?|today|tonight|tomorrow|morning|afternoon|evening|soon|shortly|asap|am|pm|guarantee)\b/i, "no time words");
   });
   it("requires name, email, category and reason", () => {
     assert.equal(escalationInput.safeParse({ user_email: "a@b.co", category: "account", reason: "Account restricted" }).success, false);

@@ -1301,6 +1301,21 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `tools.test.ts`: failed → `{ requires_escalation: false, offer_ticket: true }`; review required → compliance.
   - `test:tools` 63/63: failed TXN-9004 and failed PAY-7003 each return offer_ticket with no escalation.
 
+### D70. create_escalation's follow-up text: no channel, address or time (2026-10-01)
+
+- **Found by the system-overview check, and the root cause of a BEFORE-eval failure:**
+  - `followUpSummary` returned "A RelayPay support specialist will follow up with you **by email at** <email>" (or "…**at** <email>, and your preferred time … has been noted").
+  - The tool description told the model to "Read follow_up_summary to the caller".
+  - That contradicted D65's prompt rule (never state the follow-up channel or time) and produced the BEFORE S7 r3 sentence "will follow up with you at efua@…". The runtime filter doesn't catch it: the email is the caller's own words.
+- **Change:**
+  - `follow_up_summary` is now always "A RelayPay support representative will follow up.", with no channel, address or time.
+  - The caller's preferred time is returned separately as `preferred_time_noted`.
+  - The tool description says to tell the caller a representative will follow up, never how or when. A preferred time is confirmed only as **noted** ("I've noted tomorrow morning as your preferred time"), never as a commitment.
+  - The escalation row is unchanged: `user_email`, `call_booked` and `preferred_time_text` are still stored for the specialist.
+- **Tests:**
+  - `tools.test.ts`: the summary says "will follow up" and contains no email address, no channel words ("by email", "e-mail", "phone") and no time words.
+  - `test:tools` 64/64: the real escalation's summary has no "@", "by email" or time, and `preferred_time_noted` equals the caller's words.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
