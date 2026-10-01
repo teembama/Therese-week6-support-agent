@@ -2,6 +2,24 @@
 
 Things that must be done or undone before the project is submitted.
 
+## Tomorrow morning (2026-10-02), before the presentation
+
+- [ ] **Remove the debug structure log** (TEMPORARY, D26/D28). Remove `backend/src/debug-shape.ts`, the `RELAYPAY_DEBUG_REQUEST_SHAPE` handling in `backend/src/server.ts`, its `.env.example` entry, and the debug checks in `scripts/test-endpoint.ts`. Run the unit suites, then redeploy (EU West).
+- [ ] **Check Claude Haiku 4.5's deprecation status** at https://platform.claude.com/docs/en/about-claude/model-deprecations (retirement floor "not sooner than October 15, 2026"). Record the date and status in docs/model-choice.md. If a retirement date falls before or during grading, set `AGENT_MODEL=claude-sonnet-5-5` on Railway.
+- [ ] **Delete the old Vapi public key** in the Vapi dashboard (the user does this). The Railway-origin key, created 2026-09-30, is the one in use.
+- [ ] **Decide on the after3 S7 regression** (docs/testing-evidence.md, After3): fix `create_escalation`'s description so it is called only after the email read-back and the preferred-time question, then rerun S7 ×3 with a cap of at least $0.12.
+
+## After the presentation
+
+- [ ] **Rotate `VAPI_LLM_SECRET`** (D26):
+  1. Generate a new value of at least 32 URL-safe characters.
+  2. Set it on Railway (`railway variable set VAPI_LLM_SECRET --stdin`) and in `.env`.
+  3. Update the Vapi assistant's **Custom LLM URL** (`https://<host>/v/<new>`) and **Server URL** (`https://<host>/v/<new>/vapi/events`).
+  4. Redeploy, then make one test call.
+  5. Old-token requests should now get 404.
+
+## Earlier items (kept for history; the open ones are covered above)
+
 - [ ] **Remove the debug structure log** (TEMPORARY, D26/D28).
   - Remove `backend/src/debug-shape.ts`, the `RELAYPAY_DEBUG_REQUEST_SHAPE` handling in `backend/src/server.ts`, and its entry in `.env.example`.
   - Remove the debug checks in `scripts/test-endpoint.ts`.

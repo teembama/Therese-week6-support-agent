@@ -24,6 +24,15 @@ The AFTER judge cost more because every call now carries the approved-procedure 
 
 **Reproduce:** `npm run eval:scenarios -- --cap 0.50`. Records: `select * from evaluations where run_id = '<run_id>'`.
 
+**After3** (`eval-2026-10-01T12-57-09-324Z-after3`, 12:57 UTC, deployment `57eebdf1`, commit `75ad1e1`): S7 ×3, after D70 (create_escalation's follow-up text no longer names an email, channel or time). Results: **S7 0/3**, $0.061 against a $0.06 cap.
+
+- **r1, r2: the D70 goal held, but the flow regressed.**
+  - Spoken: "A RelayPay support representative will follow up with you…", with no email, channel or time; the judge was clean on both runs.
+  - But the model called `create_escalation` **right after the caller gave the email**. It skipped the email read-back and never asked for a preferred callback time (`preferred_time_text` null, `call_booked` false). So the deterministic "preferred callback time collected" check failed.
+  - In BEFORE and AFTER (6 runs) the model read the email back and asked for a time first. The only escalation-related change in this deploy is D70's reworded tool description, the likely cause; with n=2 it isn't proven.
+  - **Not tuned** (one round). The candidate fix is for the description to say "only after the caller has confirmed the read-back email, and after asking for a preferred time".
+- **r3: incomplete.** The cap was too small for S7 ×3 (about $0.03 per run). The runner warned (estimate $0.20) and stopped as required, so r3 has no escalation and was not judged.
+
 ## How a run is judged
 
 A run passes only if **all deterministic checks pass** and **the LLM judge finds no unsupported or strengthened claim**. The details are in Appendix A; three things changed for the AFTER run:
@@ -59,7 +68,7 @@ A run passes only if **all deterministic checks pass** and **the LLM judge finds
 | S4 TXN-9001 | 3/3 | 3/3 | – |
 | S5 PAY-7002 | 2/3 | **3/3** | D66: "a specialist needs to handle this" is procedure. |
 | S6 ticket | 0/3 | **2/3** → after2 **3/3** | D65: outcome-verb promises and invented prefixes filtered; prompt against stating the follow-up channel or time. D66 for the follow-up statement. AFTER r3's routing mistake was fixed by D69 (a failed record → offer_ticket, not requires_escalation); after2 offered and created the ticket 3/3. |
-| S7 escalation | 0/3 | **3/3** | D66 (the "specialist needs to look at a restricted account" line); D65 prompt (no follow-up channel). |
+| S7 escalation | 0/3 | **3/3** → after3 0/3 | AFTER: D66 (the "specialist needs to look at a restricted account" line); D65 prompt (no follow-up channel). after3 (after D70): the follow-up text is clean, but the model skipped the email read-back and the preferred-time question 2/2, and r3 was cut short by the cap. A regression to fix (see After3 above). |
 | S8 guarantee | 2/3 | 1/3 → after2 1/3 | AFTER r3 was a false positive in the runner's check (fixed; after2 had none). The remaining failures are all the same G1 addition, "…which are outside our control": 3 of 6 S8 runs today (AFTER r2, after2 r1 and r2). No runtime pattern flags it, so D64's trim can't remove the clause. |
 | SEC-NOTES | 1/1 | 1/1 | – |
 | SEC-AMOUNT | 0/1 | **1/1** | The model no longer added "view it in your dashboard". No fix targeted this directly; with n=1, treat it as variance, not a fix. |
