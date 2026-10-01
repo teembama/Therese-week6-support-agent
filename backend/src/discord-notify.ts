@@ -26,6 +26,7 @@ export interface OutboxRow {
   ref_id: string;
   payload: Record<string, unknown>;
   attempts: number;
+  created_at?: string;
   channel: string | null;
 }
 
@@ -66,12 +67,31 @@ export function scrubSecrets(text: string, webhookUrl?: string): string {
 
 const clean = (v: unknown, max = 300): string | null => {
   if (v === null || v === undefined || v === "") return null;
-  const s = maskAmounts(String(v)).replace(/\s+/g, " ").trim();
+  // Discord markdown in a value (e.g. "*urgent*") is shown literally, never as formatting.
+  const s = maskAmounts(String(v)).replace(/\s+/g, " ").trim().replace(/([\\*_~`|>])/g, "\\$1");
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 };
 
-/** The Discord message for one outbox row. Only whitelisted fields; no amounts, notes or secrets. */
-export function formatMessage(row: Pick<OutboxRow, "kind" | "ref_id" | "payload">): { content: string; allowed_mentions: { parse: [] } } {
+/** "Thursday 2 October, 00:21 WAT": when the caller said it (the outbox row's time), in Lagos time. */
+export function formatSaidAt(iso: string | undefined): string | null {
+  const d = iso ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const part = (o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Lagos", ...o }).format(d);
+  return `${part({ weekday: "long" })} ${part({ day: "numeric", month: "long" })}, ${part({ hour: "2-digit", minute: "2-digit", hourCycle: "h23" })} WAT`;
+}
+
+/** Customer line: a customer ID exists only once the caller was verified on this call. */
+function customerLine(customerId: string | null): string {
+  return customerId ? `${customerId} (verified on call)` : "Not verified on this call. Verify identity before discussing the account.";
+}
+
+/**
+ * The Discord message for one outbox row: a title, then every field on its own line with a bold
+ * label. Only whitelisted fields; no amounts, notes or secrets. "Callback: requested" (D83): the
+ * caller asked to be called back at a time of their choosing; no slot is booked (the database's
+ * call_booked keeps its PRD meaning), so the team is asked to agree an exact time.
+ */
+export function formatMessage(row: Pick<OutboxRow, "kind" | "ref_id" | "payload"> & { created_at?: string }): { content: string; allowed_mentions: { parse: [] } } {
   const p = row.payload;
   const lines: string[] = [];
   const field = (label: string, value: string | null) => { if (value) lines.push(`**${label}:** ${value}`); };
@@ -79,18 +99,27 @@ export function formatMessage(row: Pick<OutboxRow, "kind" | "ref_id" | "payload"
     lines.push(`🎫 **New support ticket ${clean(p["ticket_id"]) ?? row.ref_id}**`);
     field("Category", clean(p["category"]));
     field("Priority", clean(p["priority"]));
-    field("Customer", clean(p["customer_id"]) ?? "unverified");
+    field("Customer", customerLine(clean(p["customer_id"])));
     field("Summary", clean(p["summary"], 500));
   } else {
     lines.push(row.kind === "escalation_created"
       ? `🚨 **New escalation ${clean(p["escalation_id"]) ?? row.ref_id}**`
-      : `🔄 **Escalation ${clean(p["escalation_id"]) ?? row.ref_id} updated** (preferred callback time added)`);
-    field("Ticket", clean(p["ticket_id"]));
+      : `🔄 **Escalation ${clean(p["escalation_id"]) ?? row.ref_id} updated** (callback preference added)`);
+    field("Linked ticket", clean(p["ticket_id"]));
     field("Category", clean(p["category"]));
-    field("Customer", clean(p["customer_id"]) ?? "unverified");
+    field("Customer", customerLine(clean(p["customer_id"])));
     field("Reason", clean(p["reason"], 500));
-    field("Preferred time", clean(p["preferred_time_text"]) ?? "not given");
-    field("Call booked", p["call_booked"] === true ? "yes" : "no");
+    const preference = clean(p["preferred_time_text"]);
+    if (preference || p["call_booked"] === true) {
+      field("Callback", "requested");
+      if (preference) {
+        const said = formatSaidAt(row.created_at);
+        field("Caller's preference", `"${preference}"${said ? ` (said ${said})` : ""}`);
+      }
+      field("Action", "contact the customer to agree an exact time.");
+    } else {
+      field("Callback", "not requested");
+    }
     field("Caller email", clean(p["user_email"]));
   }
   return { content: lines.join("\n").slice(0, 1900), allowed_mentions: { parse: [] } };
@@ -210,7 +239,7 @@ export function createDiscordNotifier(opts: NotifierOptions): Notifier {
     if (stuck.error) throw new Error(`outbox stuck check failed (${stuck.error.code}): ${stuck.error.message}`);
     if ((stuck.data ?? []).length) log({ event: "discord_stuck_failed", ids: (stuck.data as Array<{ id: number }>).map((r) => r.id) });
 
-    let q = db.from("notification_outbox").select("id, kind, ref_id, payload, attempts, conversations(channel)")
+    let q = db.from("notification_outbox").select("id, kind, ref_id, payload, attempts, created_at, conversations(channel)")
       .eq("status", "pending").eq("attempts", 0).order("id").limit(BATCH);
     if (opts.onlyIds) q = q.in("id", opts.onlyIds);
     const { data, error } = await q;

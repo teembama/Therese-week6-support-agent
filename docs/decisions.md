@@ -1589,6 +1589,13 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `escalation_created` / `escalation_updated`: escalation ID, linked ticket, category, customer ID, reason (on creation), preferred time, call booked, caller email.
   - Built from a **whitelist** of payload fields, so an unexpected field can't leak. Amounts in free text (summary, reason) are masked as `[amount]`. Mentions are disabled (`allowed_mentions: { parse: [] }`).
   - The webhook URL never appears in a log or in `last_error` (scrubbed); only a Discord webhook URL shape is accepted.
+- **Message wording (revised 2026-10-02; sender formatting only, no agent change):**
+  - Every field is on its own line with a bold label. Discord markdown inside a value is shown literally (escaped).
+  - **Customer:** "CUS-1001 (verified on call)". With no customer ID (not verified): "Not verified on this call. Verify identity before discussing the account."
+  - **Callback** lines replace "Preferred time" and "Call booked":
+    - with a time: `Callback: requested`, then `Caller's preference: "<verbatim>" (said <weekday date, time> WAT)`, then `Action: contact the customer to agree an exact time.` The "said" time is the outbox row's `created_at` in Africa/Lagos.
+    - without: `Callback: not requested`.
+  - **Why "requested", not "booked":** no slot is actually booked; the caller stated a preference. The database's `call_booked` is unchanged and keeps its PRD meaning (a callback was asked for, with a time). Only the message wording differs.
 - **Test conversations are not posted.** Rows from channel `test` conversations (`test:tools`, the eval runner) are marked `sent` with `last_error = 'skipped (not posted): test conversation'`, so only real calls reach the channel. (The status check allows only pending/sent/failed; a separate `skipped` status would need a migration.)
 - **Off switch:** without `DISCORD_WEBHOOK_URL` the sender is off, logs once (`discord_notifier_off`), and rows stay pending.
 - **Tests:** `backend/src/discord-notify.test.ts`, 13 tests in `test:gate` (243/243). They cover:

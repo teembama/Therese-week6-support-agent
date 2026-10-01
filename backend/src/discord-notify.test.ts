@@ -61,9 +61,34 @@ describe("discord message content", () => {
   });
   it("escalation_created / _updated: ID, ticket, category, customer, reason, time, call booked, email", () => {
     const m = formatMessage(row(1));
-    for (const s of ["ESC-1", "TKT-1", "account", "CUS-1", "Account restricted", "Tomorrow morning", "**Call booked:** yes", "efua@accrastack.example"]) assert.ok(m.content.includes(s), s);
+    for (const s of ["ESC-1", "**Linked ticket:** TKT-1", "**Category:** account", "**Reason:** Account restricted", "**Caller email:** efua@accrastack.example"]) assert.ok(m.content.includes(s), s);
     const u = formatMessage({ ...row(2), kind: "escalation_updated" });
     assert.match(u.content, /ESC-2 updated/);
+  });
+  it("callback requested: Callback / Caller's preference (verbatim, said <weekday date, time> WAT) / Action lines", () => {
+    const m = formatMessage({ ...row(1), created_at: "2026-10-01T23:21:00Z" });
+    const lines = m.content.split("\n");
+    assert.deepEqual(lines.slice(5, 8), [
+      "**Callback:** requested",
+      `**Caller's preference:** "Tomorrow morning" (said Friday 2 October, 00:21 WAT)`,
+      "**Action:** contact the customer to agree an exact time.",
+    ]);
+    assert.ok(!/Preferred time|Call booked/.test(m.content), m.content);
+  });
+  it("no time given: only 'Callback: not requested' (no preference or action lines)", () => {
+    const m = formatMessage({ ...row(1), payload: { ...row(1).payload, preferred_time_text: null, call_booked: false } });
+    assert.ok(m.content.includes("**Callback:** not requested"));
+    assert.ok(!/preference|Action/.test(m.content), m.content);
+  });
+  it("customer line: verified -> '<ID> (verified on call)'; unverified -> the verify-first instruction", () => {
+    assert.ok(formatMessage(row(1)).content.includes("**Customer:** CUS-1 (verified on call)"));
+    const t = formatMessage({ kind: "ticket_created", ref_id: "T", payload: { ticket_id: "T", category: "payout", priority: "normal", customer_id: null, summary: "x" } });
+    assert.ok(t.content.includes("**Customer:** Not verified on this call. Verify identity before discussing the account."), t.content);
+  });
+  it("every field is on its own line with a bold label; markdown in a value is shown literally", () => {
+    const m = formatMessage({ ...row(1), payload: { ...row(1).payload, reason: "*urgent* _now_" } });
+    for (const line of m.content.split("\n").slice(1)) assert.match(line, /^\*\*[^*]+:\*\* \S/, line);
+    assert.ok(m.content.includes("\\*urgent\\* \\_now\\_"), m.content);
   });
   it("never includes non-whitelisted fields (amounts, notes) and masks amounts in free text", () => {
     const m = formatMessage({ kind: "ticket_created", ref_id: "T", payload: { ticket_id: "T", summary: "Refund of $1,250.00 and 300 USD pending", amount: 999, support_notes: "SECRET NOTE" } });
