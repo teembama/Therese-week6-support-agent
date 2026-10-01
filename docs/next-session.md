@@ -20,3 +20,6 @@
      - Unconfirmed: whether the streamed goodbye text is fully spoken before the hangup.
    - `endCallFunctionEnabled` is gone from the current spec, so don't use it.
    - Either way, D50's status mapping already counts `assistant-ended-call*` as `completed`.
+6. **`init` latency regression (+630 ms median) after Batch 3C** (docs/latency.md, last section): redeploy the same commit to separate host variance from the MCP bundle change, then fix whichever it is.
+7. **Ticket vs escalation routing on a failed payment** (AFTER eval S6 r3): the "payment category = offer a ticket" rule is prompt-only. Consider enforcing it: on `escalation_category: payment`, create_escalation could be refused with a pointer to create_support_ticket.
+8. **Runner check false positive** (AFTER eval S8 r3): the S8 "no arrival promise" regex needs the backend's denial exemption ("I can't confirm when it will arrive" is not a promise).

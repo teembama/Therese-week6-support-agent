@@ -203,3 +203,13 @@ Call `01a0f455…` from the deployed web page: Railway EU West, Haiku, Soniox ST
 - Turn 1's voice latency (1963 ms) most likely includes the "One moment while I check that." filler being synthesised before the answer. This is an inference and has not been checked against Vapi's per-segment timings.
 - Turn 2 is now a fast-path social reply (D56: `declined_offer` / `goodbye` with no model call). Its model latency should drop to the network overhead alone. Re-measure on the next live call.
 - n = 3. This is one call, not a distribution.
+
+## Regression found in the AFTER eval run (2026-10-01, not fixed)
+
+The scenario eval (docs/testing-evidence.md) measured the same deployed service before and after the Batch 3C fixes, 52 turns each:
+
+- **`init`** (Claude CLI + MCP server start) went from a median of **412 ms** (343–537) to **1043 ms** (840–1756).
+- **`ms_first_token`** went from 1332 ms to **1944 ms**.
+- Retrieval (73 ms) and model time (sdk_duration_ms 1544 → 1504) didn't change.
+
+The fix round changed the MCP server bundle and redeployed onto a new container (`113953b2` → `61844fd9`). The cause, code or host, is **not determined**. First step: redeploy the same commit and re-measure `init`.
