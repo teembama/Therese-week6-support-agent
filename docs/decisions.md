@@ -1329,6 +1329,31 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - a failed write doesn't reject.
   - The backend suite has 195 tests, all passing.
 
+### D72. The escalation flow is enforced by create_escalation's input schema, not description wording (2026-10-01)
+
+- **Measured regression caused by D70:**
+  - S7 passed 3/3 in the AFTER run.
+  - After D70 reworded `create_escalation`'s description (the follow-up text change), the after3 run recorded **0/3**. Both complete runs (r1, r2) called the tool straight after the caller's email, skipping the email read-back and never asking for a preferred time (`preferred_time_text` null). r3 was cut short by the run's cost cap.
+  - The flow had been held in place only by description and prompt wording, and a wording change elsewhere in the same description broke it.
+  - **Lesson:** a flow step that matters must be a precondition the tool checks, not a sentence the model may weigh differently after an unrelated edit.
+- **Change** (`mcp-server/src/tools/create-escalation.ts`):
+  - **New inputs:** `email_confirmed_by_caller: true` (the agent read the email back and the caller confirmed it), and **either** `preferred_time_text` (verbatim) **or** `preferred_time_declined: true`.
+  - **`escalationPreconditions`** checks them in the flow's order, before anything is read or written. A missing or false value returns `invalid_input` with a reason the model can act on, ending "Nothing was written.":
+    - "Read the email back to the caller exactly and get their confirmation first, then call again with email_confirmed_by_caller true."
+    - "Ask the caller for their preferred callback time first, then call again with preferred_time_text … or preferred_time_declined true."
+  - The two fields are optional in the zod schema on purpose, so a missing value gets this actionable message rather than a generic schema error.
+  - **`call_booked`** is true only when `preferred_time_text` is given; a declined time means call_booked false.
+- **Description:** lists the steps in order (name → email → read back and confirm → preferred time → create), says the tool refuses until steps 3 and 4 are done, and keeps D70's "a representative will follow up, never how or when" and "time NOTED, never a commitment".
+- **Prompt:** escalation steps 3–4 now name the flags, and say to do the missing step and call again if the tool refuses.
+- **Tests:**
+  - `tools.test.ts`, 5:
+    - missing time → reason "Ask the caller for their preferred callback time first";
+    - declined → allowed, call_booked false;
+    - time given → allowed, call_booked true;
+    - email not confirmed, missing or false → "Read the email back…", checked before the time;
+    - every reason says nothing was written.
+  - `test:tools` 65/65 against Supabase: both refusals return `invalid_input` with the actionable reason, and no escalation row is written. The existing escalation calls (idempotency, guard after replacement, write cap) now pass the flags.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

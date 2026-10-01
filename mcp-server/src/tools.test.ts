@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { escalationKeys, followUpSummary, inputSchema as escalationInput } from "./tools/create-escalation.js";
+import { callBookedFor, escalationKeys, escalationPreconditions, followUpSummary, inputSchema as escalationInput } from "./tools/create-escalation.js";
 import { inputSchema as ticketInput, ticketIdempotencyKey } from "./tools/create-support-ticket.js";
 import { inputSchema as eventInput } from "./tools/log-conversation-event.js";
 import { accountEscalation } from "./tools/lookup-customer.js";
@@ -116,5 +116,28 @@ describe("logEventBestEffort (D68: an event failure never turns a committed acti
   it("success -> empty note", async () => {
     const db = { rpc: async () => ({ data: 1, error: null }) } as unknown as FakeDb;
     assert.equal(await logEventBestEffort(db, ctx, "escalation_created", "Escalation ESC-1"), "");
+  });
+});
+
+describe("create_escalation flow preconditions (D72)", () => {
+  const base = { email_confirmed_by_caller: true };
+  it("missing preferred time (neither given nor declined) -> invalid_input reason: ask for it first", () => {
+    assert.match(escalationPreconditions({ ...base }) ?? "", /^Ask the caller for their preferred callback time first/);
+    assert.match(escalationPreconditions({ ...base, preferred_time_declined: false }) ?? "", /preferred callback time/);
+  });
+  it("declined preferred time -> allowed, call_booked false", () => {
+    assert.equal(escalationPreconditions({ ...base, preferred_time_declined: true }), null);
+    assert.equal(callBookedFor({}), false);
+  });
+  it("preferred time given -> allowed, call_booked true", () => {
+    assert.equal(escalationPreconditions({ ...base, preferred_time_text: "tomorrow morning" }), null);
+    assert.equal(callBookedFor({ preferred_time_text: "tomorrow morning" }), true);
+  });
+  it("email not confirmed (missing or false) -> invalid_input reason: read it back first, checked before the time", () => {
+    assert.match(escalationPreconditions({ preferred_time_text: "tomorrow morning" }) ?? "", /^Read the email back to the caller/);
+    assert.match(escalationPreconditions({ email_confirmed_by_caller: false, preferred_time_declined: true }) ?? "", /^Read the email back/);
+  });
+  it("the reasons say nothing was written", () => {
+    for (const r of [escalationPreconditions({}), escalationPreconditions(base)]) assert.match(r ?? "", /Nothing was written\.$/);
   });
 });

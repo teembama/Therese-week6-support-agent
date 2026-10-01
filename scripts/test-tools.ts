@@ -154,7 +154,12 @@ async function main(): Promise<number> {
     console.log("\n== Escalation");
     const badEmail = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger", category: "payment", reason: "Payout past its estimated arrival" }, "invalid_input");
     check(badEmail["status"] === "invalid_input" && (await count("escalations")) === 0, "bad email -> invalid_input, nothing written");
-    const e1 = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", preferred_time_text: "tomorrow after 2pm Lagos time" }, "success");
+    // D72: the flow is enforced by the tool; nothing is written until both steps are done.
+    const noTime = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", email_confirmed_by_caller: true }, "invalid_input");
+    const noConfirm = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", preferred_time_text: "tomorrow after 2pm Lagos time" }, "invalid_input");
+    check(noTime["status"] === "invalid_input" && /preferred callback time/.test(JSON.stringify(noTime)) && noConfirm["status"] === "invalid_input" && /Read the email back/.test(JSON.stringify(noConfirm)) && (await count("escalations")) === 0,
+      "no preferred time (given or declined) / email not confirmed -> invalid_input with an actionable reason, nothing written (D72)");
+    const e1 = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", preferred_time_text: "tomorrow after 2pm Lagos time", email_confirmed_by_caller: true }, "success");
     const { data: eRow } = await db.from("escalations").select("user_email, call_booked, preferred_time_text, customer_id, ticket_id").eq("escalation_id", String(e1["escalation_id"])).single();
     const eR = (eRow ?? {}) as Structured;
     check(e1["status"] === "success" && e1["escalation_status"] === "open" && e1["duplicate"] === false && typeof e1["ticket_id"] === "string" && eR["ticket_id"] === e1["ticket_id"], "escalation created with a linked ticket");
@@ -162,7 +167,7 @@ async function main(): Promise<number> {
     check(eR["call_booked"] === true && eR["preferred_time_text"] === "tomorrow after 2pm Lagos time" && eR["customer_id"] === "CUS-1001", "call_booked true with the verbatim preferred time; customer from verified state");
     check(!/\b(within|hours?|days?|soon|shortly)\b/i.test(String(e1["follow_up_summary"])), "follow_up_summary promises no timeline");
     check(!/@|\bby e-?mail\b|tomorrow|2pm/i.test(String(e1["follow_up_summary"])) && e1["preferred_time_noted"] === "tomorrow after 2pm Lagos time", "follow_up_summary has no channel, address or time; the preference is returned separately as noted (D70)", String(e1["follow_up_summary"]));
-    const e1again = await call("create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Asked again" }, "success");
+    const e1again = await call("create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Asked again", email_confirmed_by_caller: true, preferred_time_declined: true }, "success");
     check(e1again["escalation_id"] === e1["escalation_id"] && e1again["duplicate"] === true, "duplicate returns the same escalation");
 
     console.log("\n== Conversation event");
@@ -184,7 +189,7 @@ async function main(): Promise<number> {
     // database guard and prove it, even for a duplicate.
     const deniedCalls: Array<[string, Structured]> = [
       ["create_support_ticket", { category: "payout", summary: "Written after the attempt was replaced", payout_id: "PAY-7001" }],
-      ["create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Written after replacement" }],
+      ["create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Written after replacement", email_confirmed_by_caller: true, preferred_time_declined: true }],
       ["log_conversation_event", { event_type: "other", summary: "Written after replacement" }],
       ["lookup_customer", { contact_name: "Amara", company_name: "Lagos Ledger" }],
     ];
@@ -249,9 +254,9 @@ async function main(): Promise<number> {
     check(c["status"] === "denied" && c["reason"] === "conversation_write_limit", "third ticket -> denied, conversation_write_limit");
     const aAgain = await capCall("create_support_ticket", { category: "other", summary: "Write cap test: first ticket, asked again" });
     check(aAgain["status"] === "success" && aAgain["ticket_id"] === a["ticket_id"] && aAgain["duplicate"] === true, "a repeat of an existing ticket is not capped (returns it)");
-    const e1 = await capCall("create_escalation", { user_name: "Amara Okafor", user_email: "amara@lagosledger.example", category: "payment", reason: "Write cap test: first escalation" });
+    const e1 = await capCall("create_escalation", { user_name: "Amara Okafor", user_email: "amara@lagosledger.example", category: "payment", reason: "Write cap test: first escalation", email_confirmed_by_caller: true, preferred_time_declined: true });
     check(e1["status"] === "success" && e1["duplicate"] === false, "escalation 1 created (its own ticket doesn't count toward the 2)");
-    const e2 = await capCall("create_escalation", { user_name: "Amara Okafor", user_email: "amara@lagosledger.example", category: "account", reason: "Write cap test: second escalation" });
+    const e2 = await capCall("create_escalation", { user_name: "Amara Okafor", user_email: "amara@lagosledger.example", category: "account", reason: "Write cap test: second escalation", email_confirmed_by_caller: true, preferred_time_declined: true });
     check(e2["status"] === "denied" && e2["reason"] === "conversation_write_limit", "second escalation in a different category -> denied, conversation_write_limit");
     const { data: capTickets } = await db.from("support_tickets").select("idempotency_key").eq("conversation_id", capConversation);
     const { data: capEscalations } = await db.from("escalations").select("escalation_id").eq("conversation_id", capConversation);
