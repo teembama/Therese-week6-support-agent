@@ -1373,6 +1373,22 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `goodbyeAllowed` agrees.
   - The backend suite has 201 tests, all passing.
 
+### D74. One account per call: a different identity on a verified call is refused up front (live testing, 2026-10-01)
+
+- **Observed (live call `01a0f816…`, 15:30):**
+  - The caller was verified as Amara (CUS-1001), then said "Actually, I'm Efua from AccraStack", which was transcribed as "**FY from Acrostic**".
+  - `lookup_customer` returned **no_match**: the misheard name matched nobody, so the database's `VERIFIED_CUSTOMER_CONFLICT` backstop was never reached.
+  - The agent then asked for more details. On the next turn it passed `email: "efua"` and got invalid_input, and asked for the full email: as if verifying a second account were possible.
+- **Rule** (`lookup_customer`), checked first, before the one-identifier rule and before any matching:
+  - If the conversation is already verified, the given identifiers are compared with **that** customer (`matchesCustomer`).
+  - **Same customer:** success with the safe projection. It still goes through the guarded, idempotent `set_verified_customer`, so a replaced attempt is refused here like everywhere else (D29). The first version skipped that write; `test:tools`' guard test caught it.
+  - **Anything else** (another customer, a misheard name, a single different identifier, a malformed email or ID): `denied`, reason **`already_verified_other`**. Its message: "This call is already verified for another account. Tell the caller you can only help with one account per call, and offer to connect them with a RelayPay specialist. Do not ask for more details." Nothing about the other customer is returned. An `identity_failed` event is written best-effort.
+  - The database conflict path now returns the same reason, as a backstop.
+- **Tool description and prompt:** on `already_verified_other`, say you can only help with one account per call, offer a specialist, and never ask for more details to verify a second account.
+- **Tests:**
+  - `tools.test.ts`: `matchesCustomer` (the same customer across spellings; Efua/AccraStack, FY/Acrostic and a single "Efua" don't match), and the `already_verified_other` message.
+  - `test:tools` 69/69: after verifying CUS-1001, "Efua"/"AccraStack", the live "FY"/"Acrostic", and a single "Efua" each → `already_verified_other`, with nothing about CUS-1003. Amara again → success. After replacement → `attempt_not_active`.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

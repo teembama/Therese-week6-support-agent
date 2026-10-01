@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import { callBookedFor, escalationKeys, escalationPreconditions, followUpSummary, inputSchema as escalationInput } from "./tools/create-escalation.js";
 import { inputSchema as ticketInput, ticketIdempotencyKey } from "./tools/create-support-ticket.js";
 import { inputSchema as eventInput } from "./tools/log-conversation-event.js";
-import { accountEscalation } from "./tools/lookup-customer.js";
+import { accountEscalation, ALREADY_VERIFIED_OTHER, matchesCustomer } from "./tools/lookup-customer.js";
 import { customerSafeStatus, customerSafeSummary, logEventBestEffort } from "./tools/common.js";
 import { payoutSupportSummary, safeFailureReason } from "./tools/lookup-payout.js";
 import { pastEstimatedArrival, transactionEscalation } from "./tools/lookup-transaction.js";
@@ -139,5 +139,22 @@ describe("create_escalation flow preconditions (D72)", () => {
   });
   it("the reasons say nothing was written", () => {
     for (const r of [escalationPreconditions({}), escalationPreconditions(base)]) assert.match(r ?? "", /Nothing was written\.$/);
+  });
+});
+
+describe("lookup_customer identity matching and the one-account rule (D74)", () => {
+  const amara = { customer_id: "CUS-1001", contact_email: "amara@lagosledger.example", company_name: "LagosLedger", contact_name: "Amara Okafor" };
+  it("every given identifier must match the customer", () => {
+    assert.equal(matchesCustomer(amara, { customerId: null, email: null, company_name: "Lagos Ledger", contact_name: "Amara" }), true);
+    assert.equal(matchesCustomer(amara, { customerId: null, email: null, company_name: "AccraStack", contact_name: "Efua" }), false);
+    assert.equal(matchesCustomer(amara, { customerId: null, email: null, company_name: "Acrostic", contact_name: "FY" }), false);
+    assert.equal(matchesCustomer(amara, { customerId: null, email: null, contact_name: "Efua" }), false);
+    assert.equal(matchesCustomer(amara, { customerId: "CUS-1001", email: "amara@lagosledger.example" }), true);
+  });
+  it("already_verified_other tells the agent: one account per call, offer a specialist, don't ask for more details", () => {
+    assert.equal(ALREADY_VERIFIED_OTHER.reason, "already_verified_other");
+    assert.match(ALREADY_VERIFIED_OTHER.message, /one account per call/);
+    assert.match(ALREADY_VERIFIED_OTHER.message, /specialist/);
+    assert.match(ALREADY_VERIFIED_OTHER.message, /Do not ask for more details/);
   });
 });

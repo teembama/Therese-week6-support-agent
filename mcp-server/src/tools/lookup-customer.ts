@@ -1,7 +1,7 @@
 import { contactNameMatches, guardedRpc, normaliseEmail, normaliseName, normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withWriteToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, logEventBestEffort, parseArgs } from "./common.js";
+import { invalid, logEventBestEffort, parseArgs, verifiedCustomerId } from "./common.js";
 
 export const name = "lookup_customer";
 
@@ -10,8 +10,10 @@ export const description =
   "caller has given (their name, company name, email or customer ID), as soon as they ask about " +
   "their account: this tool decides whether the details are enough, so do not ask for more " +
   "first. If it returns needs_second_identifier, ambiguous or no_match, ask the caller for " +
-  "another identifier. Returns only safe account fields. If verified is false, do not discuss " +
-  "account details. If requires_escalation is true, offer to connect the caller with a specialist.";
+  "another identifier. If it returns already_verified_other, the call is already verified for another account: " +
+  "say you can only help with one account per call and offer to connect the caller with a RelayPay specialist; never " +
+  "ask for more details to verify the second account. Returns only safe account fields. If verified is false, do not " +
+  "discuss account details. If requires_escalation is true, offer to connect the caller with a specialist.";
 
 const optionalText = (max: number, what: string) => z.string().trim().max(max).optional().describe(what);
 
@@ -39,6 +41,47 @@ export function accountEscalation(c: Pick<CustomerRow, "account_status" | "kyc_s
   return { requires_escalation: false };
 }
 
+export interface Identifiers {
+  customerId: string | null;
+  email: string | null;
+  company_name?: string | undefined;
+  contact_name?: string | undefined;
+}
+
+/** True if every identifier given matches this customer (normalised; D39). */
+export function matchesCustomer(c: Pick<CustomerRow, "customer_id" | "contact_email" | "company_name" | "contact_name">, ids: Identifiers): boolean {
+  return (!ids.customerId || c.customer_id === ids.customerId) &&
+    (!ids.email || c.contact_email.toLowerCase() === ids.email) &&
+    (!ids.company_name || normaliseName(c.company_name) === normaliseName(ids.company_name)) &&
+    (!ids.contact_name || contactNameMatches(ids.contact_name, c.contact_name));
+}
+
+/**
+ * D74: on a call already verified as one customer, a different identity is refused up front, one
+ * account per call. Live call 01a0f816… (15:30): verified as Amara, the caller said "Actually,
+ * I'm Efua from AccraStack" (transcribed "FY from Acrostic"); the tool returned no_match and the
+ * agent asked for more details (an email), as if verifying a second account were possible.
+ */
+export const ALREADY_VERIFIED_OTHER = {
+  found: false,
+  verified: false,
+  reason: "already_verified_other",
+  message: "This call is already verified for another account. Tell the caller you can only help with one account per call, and offer to connect them with a RelayPay specialist. Do not ask for more details.",
+} as const;
+
+/** The safe projection of a customer: never support_notes or contact_email (D40). */
+export function safeProjection(c: CustomerRow): Record<string, unknown> {
+  return {
+    customer_id: c.customer_id,
+    company_name: c.company_name,
+    contact_name: c.contact_name,
+    plan: c.plan,
+    account_status: c.account_status,
+    kyc_status: c.kyc_status,
+    ...accountEscalation(c),
+  };
+}
+
 const NOT_VERIFIED_MESSAGE = "The details given do not match one customer record. Do not say which detail was wrong. Ask the caller to check their details, or offer to connect them with RelayPay support.";
 
 export const handler = withWriteToolLogging(name, "Verify identity (two identifiers) and return the safe customer projection", async (args, { db, ctx }): Promise<ToolOutcome> => {
@@ -47,6 +90,33 @@ export const handler = withWriteToolLogging(name, "Verify identity (two identifi
   const input = parsed.data;
 
   const given = Object.entries(input).filter(([, v]) => typeof v === "string" && v.length > 0).map(([k]) => k);
+
+  // D74: already verified -> the same customer again, or one account per call. Checked before the
+  // one-identifier rule and before any matching, so a second identity is never "verified further".
+  const verified = given.length ? await verifiedCustomerId(db, ctx.conversationId) : null;
+  if (verified) {
+    const { data: row, error: readError } = await db.from("customers")
+      .select("customer_id, company_name, contact_name, contact_email, plan, account_status, kyc_status")
+      .eq("customer_id", verified).maybeSingle();
+    if (readError) throw new Error(`customers read failed (${readError.code}): ${readError.message}`);
+    const ids: Identifiers = {
+      customerId: input.customer_id ? normaliseReference(input.customer_id, "CUS") : null,
+      email: input.email ? normaliseEmail(input.email) : null,
+      company_name: input.company_name,
+      contact_name: input.contact_name,
+    };
+    const malformed = (input.customer_id && !ids.customerId) || (input.email && !ids.email);
+    const c = row as CustomerRow | null;
+    if (c && !malformed && matchesCustomer(c, ids)) {
+      // Same customer again: still a guarded (idempotent) write, so a replaced attempt is refused
+      // here like everywhere else (D29); throws AttemptNotActiveError -> denied attempt_not_active.
+      await guardedRpc(db, "set_verified_customer", { p_conversation_id: ctx.conversationId, p_customer_id: c.customer_id }, ctx.attemptId);
+      return { status: "success", result: { found: true, verified: true, ...safeProjection(c) }, resultSummary: `already verified ${c.customer_id} (given: ${given.join(",")})` };
+    }
+    const note = await logEventBestEffort(db, ctx, "identity_failed", "A different identity was given on a call already verified for another customer (one account per call)", { identifiers: given });
+    return { status: "denied", result: { ...ALREADY_VERIFIED_OTHER }, resultSummary: `denied: already_verified_other (verified ${verified}; given: ${given.join(",")})${note}` };
+  }
+
   if (given.length < 2) {
     // Never look anything up with a single identifier: its existence alone is information.
     return {
@@ -72,11 +142,7 @@ export const handler = withWriteToolLogging(name, "Verify identity (two identifi
     .select("customer_id, company_name, contact_name, contact_email, plan, account_status, kyc_status")
     .limit(10_000);
   if (error) throw new Error(`customers read failed (${error.code}): ${error.message}`);
-  const matches = ((data ?? []) as CustomerRow[]).filter((c) =>
-    (!customerId || c.customer_id === customerId) &&
-    (!email || c.contact_email.toLowerCase() === email) &&
-    (!input.company_name || normaliseName(c.company_name) === normaliseName(input.company_name)) &&
-    (!input.contact_name || contactNameMatches(input.contact_name, c.contact_name)));
+  const matches = ((data ?? []) as CustomerRow[]).filter((c) => matchesCustomer(c, { customerId, email, company_name: input.company_name, contact_name: input.contact_name }));
 
   if (matches.length === 0) {
     const note = await logEventBestEffort(db, ctx, "identity_failed", "Identity not verified: the identifiers did not match one customer", { identifiers: given });
@@ -98,7 +164,7 @@ export const handler = withWriteToolLogging(name, "Verify identity (two identifi
     if (err instanceof Error && err.message.includes("VERIFIED_CUSTOMER_CONFLICT")) {
       return {
         status: "denied",
-        result: { found: false, verified: false, reason: "already_verified_other_customer", message: "This call is already verified for a different customer. Offer to connect the caller with RelayPay support." },
+        result: { ...ALREADY_VERIFIED_OTHER }, // the database-level backstop for D74's check above
         resultSummary: "denied: conversation already verified as another customer",
         errorMessage: err.message,
       };
@@ -108,18 +174,7 @@ export const handler = withWriteToolLogging(name, "Verify identity (two identifi
   const note = await logEventBestEffort(db, ctx, "identity_verified", `Caller verified as ${c.customer_id}`, { customer_id: c.customer_id, identifiers: given });
   return {
     status: "success",
-    result: {
-      found: true,
-      verified: true,
-      // Safe projection only: never support_notes or contact_email.
-      customer_id: c.customer_id,
-      company_name: c.company_name,
-      contact_name: c.contact_name,
-      plan: c.plan,
-      account_status: c.account_status,
-      kyc_status: c.kyc_status,
-      ...accountEscalation(c),
-    },
+    result: { found: true, verified: true, ...safeProjection(c) },
     resultSummary: `verified ${c.customer_id} (given: ${given.join(",")})${note}`,
   };
 });

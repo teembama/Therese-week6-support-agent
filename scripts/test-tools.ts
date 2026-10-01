@@ -114,6 +114,16 @@ async function main(): Promise<number> {
     const { data: conv } = await db.from("conversations").select("verified_customer_id").eq("conversation_id", conversationId).single();
     check((conv as Structured | null)?.["verified_customer_id"] === "CUS-1001", "conversations.verified_customer_id = CUS-1001");
 
+    // D74: one account per call. A different identity is refused up front, never "verified further".
+    const efua = await call("lookup_customer", { contact_name: "Efua", company_name: "AccraStack" }, "denied");
+    check(efua["reason"] === "already_verified_other" && !/efua|accra|CUS-1003|active|growth|scale/i.test(JSON.stringify({ ...efua, message: "" })), "verified CUS-1001, then 'Efua from AccraStack' -> denied already_verified_other, nothing about CUS-1003", JSON.stringify(efua));
+    const misheard = await call("lookup_customer", { contact_name: "FY", company_name: "Acrostic" }, "denied");
+    check(misheard["reason"] === "already_verified_other", "live-call transcription 'FY from Acrostic' -> already_verified_other, not no_match (no request for more details)", JSON.stringify(misheard));
+    const single = await call("lookup_customer", { contact_name: "Efua" }, "denied");
+    check(single["reason"] === "already_verified_other", "a single different identifier -> already_verified_other, not needs_second_identifier", JSON.stringify(single));
+    const same = await call("lookup_customer", { contact_name: "Amara", company_name: "Lagos Ledger" }, "success");
+    check(same["verified"] === true && same["customer_id"] === "CUS-1001", "the same customer again -> success (already verified)", JSON.stringify(same));
+
     console.log("\n== After verification: ownership rule (D44)");
     const txnVerified = await call("lookup_transaction", { transaction_id: "txn 9001" }, "success");
     check(txnVerified["found"] === true && noAmounts(txnVerified), "own TXN-9001 -> success, amount and currency still ABSENT");
@@ -207,7 +217,7 @@ async function main(): Promise<number> {
   const { data: events } = await db.from("conversation_events").select("event_type, attempt_id, summary").eq("conversation_id", conversationId).order("id");
   for (const e of events ?? []) console.log(`  ${JSON.stringify(e)}`);
   const types = (events ?? []).map((e) => (e as Structured)["event_type"]).join(",");
-  check(types === "identity_failed,identity_verified,ticket_created,ticket_created,escalation_created,declined_unsupported", "events: identity_failed, identity_verified, 2 tickets, escalation, declined_unsupported", types);
+  check(types === "identity_failed,identity_verified,identity_failed,identity_failed,identity_failed,ticket_created,ticket_created,escalation_created,declined_unsupported", "events: identity_failed, identity_verified, 3 identity_failed (D74 switches), 2 tickets, escalation, declined_unsupported", types);
 
   console.log("\n== tool_calls");
   const { data: calls } = await db.from("tool_calls").select("tool_name, status, attempt_id, result_summary").eq("conversation_id", conversationId).order("id");
