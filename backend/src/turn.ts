@@ -61,7 +61,8 @@ const EMPTY_METRICS: AttemptMetrics = {
 };
 
 const MCP = pickMcpEntry();
-if (ATTACH_MCP && MCP.reason) console.error(`[relaypay] MCP server entry: ${MCP.path} (${MCP.reason})`);
+// Once per process: which MCP entry every turn spawns (bundle vs main.js costs ~300 ms per turn, D41).
+if (ATTACH_MCP) console.log(JSON.stringify({ event: "mcp_entry", kind: MCP.kind, path: MCP.path, ...(MCP.reason ? { reason: MCP.reason } : {}) }));
 const MCP_ENTRY = MCP.path;
 export const MCP_ENTRY_KIND = MCP.kind;
 
