@@ -1102,7 +1102,11 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - the process exited 0 at 3.8 s;
     - `turns_unfinished: 0`.
   - With `RELAYPAY_SHUTDOWN_GRACE_MS=500` and a turn in flight: it exited at 581 ms, reporting `turns_unfinished: 1`. That turn's attempt stays active until the stale sweep closes it (D51).
-- **Real SIGTERM on Linux:** checked on the next redeploy, in the old deployment's logs (`shutdown_started` / `shutdown_complete`).
+- **Real SIGTERM on Linux: verified 2026-10-01.** `railway redeploy` replaced deployment `ffeb53c0`, and its own logs show:
+  - "Stopping Container";
+  - `event="shutdown_started" signal="SIGTERM" turns_in_flight=0 grace_ms=10000` at 10:45:02.951Z;
+  - `event="shutdown_complete" signal="SIGTERM" turns_unfinished=0 ms=0` 1 ms later.
+  - So the handler runs as PID 1 in the container and Railway delivers SIGTERM before stopping it. There was no traffic in flight; the in-flight drain is covered by the local test.
 
 ### D61. A call with no answered turn is `failed` (no_interaction), whatever Vapi's ended reason (Batch 3A item 5, 2026-10-01)
 
