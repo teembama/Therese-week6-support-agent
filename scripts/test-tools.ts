@@ -280,6 +280,73 @@ async function main(): Promise<number> {
   await db.rpc("finish_turn_attempt", { p_attempt_id: capAttempt, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });
   await db.from("conversations").update({ ended_at: new Date().toISOString(), final_status: "completed", summary: "Write cap test run" }).eq("conversation_id", capConversation);
 
+  // ---- Migration 006 (D82): the notification outbox and escalation enrichment, against the live DB.
+  console.log("\n== Notification outbox (migration 006)");
+  type OutboxRow = { kind: string; ref_id: string; status: string; payload: Record<string, unknown> };
+  const outboxOf = async (conv: string) => ((await db.from("notification_outbox").select("kind, ref_id, status, payload").eq("conversation_id", conv).order("id")).data ?? []) as OutboxRow[];
+  const noAmountsOrNotes = (rows: OutboxRow[]) => !rows.some((r) => /amount|currency|support_notes|normal support access/i.test(JSON.stringify(r.payload)));
+  const mainOutbox = await outboxOf(conversationId);
+  const mainTickets = ((await db.from("support_tickets").select("ticket_id, idempotency_key").eq("conversation_id", conversationId)).data ?? []) as Structured[];
+  const plainTicketIds = mainTickets.filter((t) => String(t["idempotency_key"]).startsWith("ticket:")).map((t) => String(t["ticket_id"])).sort();
+  const mainEscalations = ((await db.from("escalations").select("escalation_id").eq("conversation_id", conversationId)).data ?? []) as Structured[];
+  check(JSON.stringify(mainOutbox.filter((r) => r.kind === "ticket_created").map((r) => r.ref_id).sort()) === JSON.stringify(plainTicketIds),
+    `one ticket_created row per plain ticket (${plainTicketIds.length}), none for the duplicate or denied calls`, JSON.stringify(mainOutbox.map((r) => `${r.kind}:${r.ref_id}`)));
+  check(mainOutbox.filter((r) => r.kind === "escalation_created").length === mainEscalations.length && mainEscalations.length === 1,
+    "one escalation_created row for the one escalation (the repeat queued nothing)", JSON.stringify(mainOutbox.map((r) => r.kind)));
+  check(mainOutbox.every((r) => r.status === "pending") && noAmountsOrNotes(mainOutbox), "all pending (no sender yet), no amounts or notes in any payload");
+
+  console.log("\n== Escalation enrichment (migration 006, D82): created without a time, then the time arrives");
+  const enrConversation = `${conversationId}-enr`;
+  const enrAttempt = newAttemptId();
+  await db.rpc("begin_turn_attempt", {
+    p_conversation_id: enrConversation, p_channel: "test", p_caller: "scripts/test-tools.ts", p_turn_index: 0,
+    p_attempt_id: enrAttempt, p_transcript_hash: transcriptHash("enrichment"), p_user_transcript: "enrichment",
+  });
+  const enrClient = new Client({ name: "relaypay-test-tools-enr", version: "0.1.0" });
+  await enrClient.connect(new StdioClientTransport({
+    command: process.execPath,
+    args: [SERVER],
+    env: {
+      ...getDefaultEnvironment(),
+      SUPABASE_URL: process.env["SUPABASE_URL"]!,
+      SUPABASE_SERVICE_ROLE_KEY: process.env["SUPABASE_SERVICE_ROLE_KEY"]!,
+      CONVERSATION_ID: enrConversation,
+      TURN_INDEX: "0",
+      ATTEMPT_ID: enrAttempt,
+    },
+    stderr: "pipe",
+  }));
+  const enrCall = async (args: Structured): Promise<Structured> => {
+    const r = ((await enrClient.callTool({ name: "create_escalation", arguments: args })).structuredContent ?? {}) as Structured;
+    console.log(`  create_escalation(${JSON.stringify(args)})\n    -> ${JSON.stringify(r)}`);
+    return r;
+  };
+  try {
+    const base = { user_name: "Efua Mensah", user_email: "efua at accra stack dot example", category: "account", reason: "Account restricted, caller asked for a specialist", email_confirmed_by_caller: true };
+    const first = await enrCall({ ...base, preferred_time_declined: true });
+    check(first["status"] === "success" && first["duplicate"] === false && first["call_booked"] === false && first["preferred_time_noted"] === undefined, "first call (time declined): created, call_booked false, no time");
+    const second = await enrCall({ ...base, preferred_time_text: "tomorrow morning" });
+    check(second["status"] === "success" && second["escalation_id"] === first["escalation_id"] && second["duplicate"] === true && second["updated"] === true,
+      "second call with a time: the SAME escalation, updated true", JSON.stringify(second));
+    check(second["call_booked"] === true && second["preferred_time_noted"] === "tomorrow morning", "the result reports the stored record: call_booked true, preferred_time_noted 'tomorrow morning'");
+    const { data: enrRows } = await db.from("escalations").select("escalation_id, preferred_time_text, call_booked").eq("conversation_id", enrConversation);
+    check((enrRows ?? []).length === 1 && (enrRows as Structured[])[0]!["preferred_time_text"] === "tomorrow morning" && (enrRows as Structured[])[0]!["call_booked"] === true,
+      "one escalation row: time filled, call_booked true", JSON.stringify(enrRows));
+    const third = await enrCall({ ...base, preferred_time_text: "Friday at 3pm" });
+    check(third["updated"] === undefined && third["preferred_time_noted"] === "tomorrow morning", "a later, different time: not overwritten (updated absent, stored time reported)", JSON.stringify(third));
+    const { data: enrEvents } = await db.from("conversation_events").select("event_type").eq("conversation_id", enrConversation).order("id");
+    check(((enrEvents ?? []) as Structured[]).map((e) => e["event_type"]).join(",") === "escalation_created,escalation_updated", "events: escalation_created, then one escalation_updated", JSON.stringify(enrEvents));
+    const enrOutbox = await outboxOf(enrConversation);
+    check(enrOutbox.map((r) => r.kind).join(",") === "escalation_created,escalation_updated", "outbox: exactly one escalation_created and one escalation_updated", JSON.stringify(enrOutbox.map((r) => r.kind)));
+    const upd = enrOutbox.find((r) => r.kind === "escalation_updated");
+    check(upd?.payload["preferred_time_text"] === "tomorrow morning" && upd?.payload["call_booked"] === true && upd?.payload["user_email"] === "efua@accrastack.example" && noAmountsOrNotes(enrOutbox),
+      "the escalation_updated payload: the new time, call_booked, the caller's email for the team; no amounts or notes", JSON.stringify(upd?.payload));
+  } finally {
+    await enrClient.close();
+  }
+  await db.rpc("finish_turn_attempt", { p_attempt_id: enrAttempt, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });
+  await db.from("conversations").update({ ended_at: new Date().toISOString(), final_status: "completed", summary: "Enrichment test run (migration 006)" }).eq("conversation_id", enrConversation);
+
   // Close whichever attempt is still active (the replacing one, if the guard test ran).
   await db.rpc("finish_turn_attempt", { p_attempt_id: newer ?? attemptId, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });
   await db.from("conversations").update({ ended_at: new Date().toISOString(), final_status: "completed", summary: "Batch 2B tool test run" }).eq("conversation_id", conversationId);
