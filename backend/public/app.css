@@ -124,3 +124,5 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
 }
 .jump-button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .captions { display: grid; }
+/* "Reference: <code>" under an error, for support only (D81). */
+.error-ref { margin: 8px 0 0; font-size: 0.8rem; color: var(--muted); }

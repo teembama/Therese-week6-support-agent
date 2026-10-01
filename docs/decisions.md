@@ -1465,6 +1465,47 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - The backend suite has 218 tests, all passing.
 - **No agent behaviour changed.**
 
+### D81. Page failures by type: user-fixable, network, our side (web page only, 2026-10-01)
+
+- **Why:**
+  - A live call got a `daily-error` 33 s in, mid-call, and the page fell through to generic.
+  - An earlier `start-method-error` ("Signaling connection interrupted by a disconnect") showed generic text too.
+  - Main messages mixed headlines with SDK jargon.
+- **Rule** (`backend/public/call-end.js`). Every failure maps to one group, each with one headline and one next step, and no jargon in the main text:
+  - **User-fixable**, "Microphone problem": microphone blocked, a device error, or the page isn't secure.
+  - **User-fixable**, "Call ended": no audio heard, meaning Vapi's `silence-timed-out` or `…did-not-receive-customer-audio`, or no caller transcript for 20 s or more. Text: "We couldn't hear you, so the call ended. Check your microphone is selected and unmuted, then try again."
+  - **Network**, "Connection problem":
+    - Daily or signalling errors, fetch failures and timeouts;
+    - a `daily-error` during an active call whose details say nothing more specific (the transport);
+    - an ejection with no server-side end reason after the caller had spoken.
+    - Text: "Your connection to the call dropped." mid-call, or "We couldn't connect to the voice service." before it, then "Check your internet connection, reload the page, or try a different network."
+  - **Our side**, "Something on our side isn't working":
+    - `start()` rejected with an HTTP status (4xx/5xx, including credits 402 and auth 401/403);
+    - a component load failure (CSP, bundle, SDK import);
+    - a missing config;
+    - a server-side error ending reason;
+    - anything unknown.
+    - Text: "Please try again later. If it keeps happening, contact RelayPay support."
+  - **Every group** shows a small secondary "Reference: <code>" line (e.g. `daily-error`, `start-method-error-402`, `silence-timed-out`, `ejected-without-reason`) for support. It is never the main message.
+  - **Normal endings are not failures:** the caller hung up, the goodbye phrase, or the 4-minute limit → "Call ended" with a neutral text.
+- **Diagnosis:** every SDK or browser error is logged to the console via `sanitizeForLog`. Keys like token/key/secret/url/room are redacted, and JWT-looking strings and URLs inside values are masked. A transport ejection is logged with `console.info`.
+- **Tests:** `call-end.test.ts`:
+  - the live mid-call daily-error → network "dropped";
+  - start-method-error signalling → network "couldn't connect";
+  - fetch failure → network;
+  - 402/401/403/400/500 → our side, with the status in the reference;
+  - component and unknown → our side;
+  - mic blocked and device → "Microphone problem";
+  - no main text contains jargon;
+  - ejection is an ending (only after start);
+  - normal endings;
+  - three no-audio paths;
+  - ejection without a reason → network;
+  - server error reasons;
+  - console sanitising.
+  - The backend suite has 225 tests, all passing.
+- **No agent behaviour changed.**
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

@@ -4,7 +4,7 @@
 // esm.sh, pinned: the SDK version AND the Daily transport it depends on. The public key and
 // assistant ID come from /config (env on the server), never from the repo.
 
-import { classify, endOutcome, errorCode, isCallOverError } from "/call-end.js";
+import { classifyFailure, describeEnd, failureMessage, isCallOverError, sanitizeForLog } from "/call-end.js";
 import { appendFinal, isNearBottom, speakerLabel, toggleState } from "/captions.js";
 
 const SDK_URL = "https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0";
@@ -13,7 +13,7 @@ const MAX_CALL_MS = 4 * 60_000; // matches the note on the page; the assistant's
 const el = (id) => document.getElementById(id);
 const ui = {
   icon: el("state-icon"), label: el("state-label"), status: el("status"), timer: el("timer"),
-  error: el("error"), errorTitle: el("error-title"), errorSteps: el("error-steps"),
+  error: el("error"), errorTitle: el("error-title"), errorSteps: el("error-steps"), errorRef: el("error-ref"),
   start: el("start"), end: el("end"),
   captions: el("captions"), captionsLines: el("captions-lines"), captionsToggle: el("captions-toggle"), captionsJump: el("captions-jump"),
 };
@@ -28,7 +28,7 @@ let tick = null;
 let warned = false;
 // D76: no caller speech was ever transcribed in this call (so a silent end means "we couldn't hear you").
 let heardCaller = false;
-// D76: Daily reports Vapi ending the call as an error ("ejection"); the end is explained at call-end.
+// D76/D81: Daily reports the call ending as an error ("ejection"); the end is explained at call-end.
 let callOverByVapi = false;
 let explainTimer = null;
 // Set when the browser blocks something by Content Security Policy (e.g. the Daily bundle).
@@ -43,16 +43,19 @@ function setState(state, label, detail) {
   ui.status.textContent = detail;
 }
 
-function showError(title, steps, code) {
-  ui.errorTitle.textContent = title;
-  const items = code ? [...steps, `Error code for support: ${code}`] : steps;
-  ui.errorSteps.replaceChildren(...items.map((s) => Object.assign(document.createElement("li"), { textContent: s })));
+function showError(headline, lines, code) {
+  ui.errorTitle.textContent = headline;
+  ui.errorSteps.replaceChildren(...lines.map((line) => Object.assign(document.createElement("li"), { textContent: line })));
+  // The reference is for support only, never the main message (D81).
+  ui.errorRef.textContent = code ? `Reference: ${code}` : "";
+  ui.errorRef.hidden = !code;
   ui.error.hidden = false;
 }
 
 function clearError() {
   ui.error.hidden = true;
   ui.errorSteps.replaceChildren();
+  ui.errorRef.hidden = true;
 }
 
 function setButtons({ start, end, startText }) {
@@ -61,56 +64,15 @@ function setButtons({ start, end, startText }) {
   if (startText) ui.start.textContent = startText;
 }
 
-// ---- Errors, in plain English with something the caller can do.
-const ERRORS = {
-  micBlocked: ["Microphone access is blocked.", [
-    "Click the lock or site-settings icon next to the address bar and set Microphone to Allow.",
-    "Then reload this page and press Start call again.",
-  ]],
-  noDevice: ["We couldn't use your microphone or speakers.", [
-    "Use your computer's built-in microphone and speakers (disconnect or turn off Bluetooth headsets).",
-    "Close other apps that may be using the microphone, such as Zoom, Teams, WhatsApp or other browser tabs.",
-    "Reload the page and try again.",
-  ]],
-  insecure: ["Microphone access needs a secure page.", [
-    "Open this page over https (the address should start with https://).",
-  ]],
-  network: ["We couldn't connect the call.", [
-    "Check that you're online.",
-    "Some office, school or public Wi-Fi networks block voice calls. Try another network or your phone's hotspot.",
-  ]],
-  notAllowed: ["This page isn't allowed to start calls from this address.", [
-    "Open the page from its official address. If it keeps happening, tell the RelayPay team.",
-  ]],
-  notConfigured: ["Voice calls aren't set up on this server yet.", [
-    "Please try again later.",
-  ]],
-  component: ["The call couldn't start because the voice component failed to load.", [
-    "This is a problem on our side, not your microphone or network.",
-    "Please try again later.",
-  ]],
-  // D76 (live call 01a0f839…, silence-timed-out: the page said "Something went wrong… daily-error").
-  noAudio: ["We couldn't hear you, so the call ended.", [
-    "Check your microphone is selected and unmuted, then try again.",
-    "If you use a headset or Bluetooth device, try your computer's built-in microphone instead.",
-  ]],
-  generic: ["Something went wrong with the call.", [
-    "Reload the page and try again.",
-  ]],
-};
-
-
-
-
-/** How the call ended, in plain words, with a next step where the caller can do something. */
+/** How the call ended: a normal ending ("Call ended") or a failure in one of the three groups (D81). */
 function explainEnd() {
   if (explainTimer) clearTimeout(explainTimer);
   explainTimer = null;
   stopTimer();
   const seconds = callStartedAt ? (Date.now() - callStartedAt) / 1000 : 0;
   inCall = false;
-  const outcome = endOutcome({ endedByUser, lastEndedReason, heardCaller, seconds });
-  return outcome.kind === "error" ? fail(outcome.error) : showEnded(outcome.text);
+  const end = describeEnd({ endedByUser, lastEndedReason, heardCaller, seconds, ejected: callOverByVapi });
+  return end.kind === "failure" ? fail(end.failure, "in-call") : showEnded(end.text);
 }
 
 function showEnded(text) {
@@ -161,18 +123,24 @@ function toggleCaptions() {
   ui.captionsToggle.setAttribute("aria-expanded", next.expanded);
 }
 
-function fail(kind, err) {
-  const [title, steps] = ERRORS[kind] ?? ERRORS.generic;
-  // Only the truly unknown case shows a code, so support can tell errors apart.
-  const code = kind === "generic" ? errorCode(err) : null;
+/** Show a classified failure: its group's headline and next step, plus a small reference line. */
+function fail(failure, phase = callStartedAt ? "in-call" : "starting") {
+  const { headline, lines } = failureMessage(failure, phase);
   stopTimer();
   if (inCall && vapi) {
     try { vapi.stop(); } catch { /* already stopped */ }
   }
   inCall = false;
-  setState("error", "Error", title);
-  showError(title, steps, code);
+  setState("error", headline, lines[0]);
+  showError(headline, lines, failure.code);
   setButtons({ start: Boolean(vapi && assistantId), end: false, startText: "Try again" });
+}
+
+/** Log an SDK or browser error for diagnosis (secrets redacted), then classify it. */
+function failFromError(err) {
+  console.error("[relaypay] call error", sanitizeForLog(err));
+  const phase = callStartedAt ? "in-call" : "starting";
+  fail(classifyFailure(err, { phase, cspBlocked }), phase);
 }
 
 // ---- Call timer and the 4-minute guard.
@@ -234,12 +202,13 @@ function attach(v) {
   });
   v.on("error", (e) => {
     if (isCallOverError(e, Boolean(callStartedAt))) {
-      // The call is ending on Vapi's side; call-end (or this fallback) explains how.
+      // The call is ending (Vapi's reason, or a drop); call-end (or this fallback) explains how.
+      console.info("[relaypay] call ended by the transport", sanitizeForLog(e));
       callOverByVapi = true;
       if (!explainTimer) explainTimer = setTimeout(() => { if (ui.error.hidden) explainEnd(); }, 1500);
       return;
     }
-    fail(classify(e, cspBlocked), e);
+    failFromError(e);
   });
 }
 
@@ -255,21 +224,21 @@ async function startCall() {
   explainTimer = null;
   clearCaptions();
   setButtons({ start: false, end: false });
-  if (!navigator.mediaDevices?.getUserMedia) return fail("insecure");
+  if (!navigator.mediaDevices?.getUserMedia) return fail({ group: "user", kind: "insecure", code: "insecure-page" }, "starting");
   setState("mic", "Requesting microphone", "Allow microphone access when your browser asks.");
   try {
     // Ask first ourselves, so a blocked or missing microphone gets a precise message.
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((t) => t.stop());
   } catch (err) {
-    return fail(classify(err, cspBlocked), err);
+    return failFromError(err);
   }
   setState("connecting", "Connecting", "Connecting you to RelayPay support…");
   setButtons({ start: false, end: true });
   try {
     await vapi.start(assistantId);
   } catch (err) {
-    fail(classify(err, cspBlocked), err);
+    failFromError(err);
   }
 }
 
@@ -293,17 +262,18 @@ async function init() {
   let config;
   try {
     const res = await fetch("/config", { cache: "no-store" });
-    if (!res.ok) return fail("notConfigured");
+    if (!res.ok) return fail({ group: "ourSide", kind: "unknown", code: `config-${res.status}` }, "starting");
     config = await res.json();
   } catch {
-    return fail("network");
+    return fail({ group: "network", kind: "network", code: "config-unreachable" }, "starting");
   }
-  if (!config?.vapiPublicKey || !config?.vapiAssistantId) return fail("notConfigured");
+  if (!config?.vapiPublicKey || !config?.vapiAssistantId) return fail({ group: "ourSide", kind: "unknown", code: "not-configured" }, "starting");
   let Vapi;
   try {
     Vapi = (await import(SDK_URL)).default;
-  } catch {
-    return fail("component");
+  } catch (err) {
+    console.error("[relaypay] voice component failed to load", sanitizeForLog(err));
+    return fail({ group: "ourSide", kind: "component", code: "sdk-load-failed" }, "starting");
   }
   assistantId = config.vapiAssistantId;
   vapi = new Vapi(config.vapiPublicKey);
