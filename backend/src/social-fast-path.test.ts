@@ -83,3 +83,26 @@ describe("goodbyeAllowed (the gate's guard on a model-chosen goodbye)", () => {
     assert.equal(goodbyeAllowed("No.", null), false);
   });
 });
+
+describe("the LAST question decides goodbye vs declined_offer (D73, live call 01a0f80f…)", () => {
+  const WEATHER = "I can only help with RelayPay account and payment questions. Is there anything else I can help you with regarding RelayPay?";
+  it("live: after a model-written 'anything else…?' line, 'No. Thank you.' -> goodbye", () => {
+    assert.equal(matchSocial("No. Thank you.", WEATHER), "goodbye");
+  });
+  it("an offer followed by 'anything else?' -> the last question wins: goodbye", () => {
+    assert.equal(matchSocial("No, thanks.", "I can log a ticket if you'd like. Otherwise, is there anything else I can help with?"), "goodbye");
+    assert.equal(matchSocial("No.", "Done. I've logged a support ticket for transaction TXN-9004, and our support team will follow up with you. Is there anything else I can help you with?"), "goodbye");
+  });
+  it("'anything else?' followed by an offer -> the offer is the last question: declined_offer", () => {
+    assert.equal(matchSocial("No, thank you.", "Is there anything else I can help you with? Or would you like me to log a ticket?"), "declined_offer");
+  });
+  it("an offer as the last question -> declined_offer, as before", () => {
+    assert.equal(matchSocial("No, thank you.", "Your payout is processing. Would you like me to log a ticket so the team can look into it?"), "declined_offer");
+  });
+  it("'anything else' that isn't an offer to help (a detail question) -> not goodbye", () => {
+    assert.equal(matchSocial("No.", "Is there anything else about this transaction you remember, like the date?"), "declined_offer");
+  });
+  it("goodbyeAllowed follows the same rule", () => {
+    assert.equal(goodbyeAllowed("No. Thank you.", WEATHER), true);
+  });
+});

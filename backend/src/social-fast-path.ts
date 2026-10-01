@@ -53,8 +53,19 @@ const DECLINE_IN_CONTEXT = new RegExp(`^(?:(?:${THANKS_RE}) )?(?:${alt(DECLINE_A
 /** The fixed lines that ask "anything else?"; only after one of these can a decline be a goodbye. */
 const ANYTHING_ELSE_LINES = new Set([normalise(SOCIAL_LINES.thanks), normalise(SOCIAL_LINES.declined_offer)]);
 
+/**
+ * The previous line's LAST question asked whether there's anything else (D73). Not only the fixed
+ * lines: live call 01a0f80f… declined the weather with "…Is there anything else I can help you
+ * with regarding RelayPay?", and "No. Thank you." got "anything else?" again (declined_offer)
+ * because that model-written line wasn't an exact fixed line. An offer earlier in the same line
+ * doesn't matter; the last question does.
+ */
 function askedAnythingElse(previousAgentLine: string | null): boolean {
-  return previousAgentLine !== null && ANYTHING_ELSE_LINES.has(normalise(previousAgentLine));
+  if (previousAgentLine === null) return false;
+  if (ANYTHING_ELSE_LINES.has(normalise(previousAgentLine))) return true;
+  const questions = previousAgentLine.split(/(?<=[.!?])\s*/).filter((q) => q.trim().endsWith("?"));
+  const last = questions[questions.length - 1];
+  return last !== undefined && /\banything else\b/i.test(last) && /\b(help|assist|do for you)\b/i.test(last);
 }
 
 /** The agent's line asked a question or made an offer (a ticket, a callback, a specialist). */

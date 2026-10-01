@@ -1354,6 +1354,25 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - every reason says nothing was written.
   - `test:tools` 65/65 against Supabase: both refusals return `invalid_input` with the actionable reason, and no escalation row is written. The existing escalation calls (idempotency, guard after replacement, write cap) now pass the flags.
 
+### D73. The previous line's LAST question decides goodbye vs declined_offer (live testing, 2026-10-01)
+
+- **Observed (live call `01a0f80f…`, 15:22):**
+  - The weather decline was model text: "I can only help with RelayPay account and payment questions. **Is there anything else I can help you with regarding RelayPay?**"
+  - The caller said "No. Thank you." and got "No problem. Is there anything else I can help you with?" (`declined_offer`), so it asked "anything else?" twice.
+  - Only the *fixed* "anything else?" lines counted as anything-else context (D35/D56). This model-written line didn't, but it ended in "?", so the decline was treated as declining an offer.
+- **Rule** (`askedAnythingElse`, used by the fast path and by `goodbyeAllowed`):
+  - The anything-else context holds if the previous line is a fixed anything-else line, **or** its **last question** contains "anything else" and an offer of help (help, assist, do for you).
+  - So "…I can log a ticket if you'd like. Is there anything else I can help with?" → a decline is a goodbye.
+  - But "Is there anything else I can help you with? Or would you like me to log a ticket?" → the offer is the last question → declined_offer.
+- **Tests:** `social-fast-path.test.ts`, 7:
+  - the live weather line → goodbye;
+  - an offer followed by anything-else → goodbye, including the live ticket confirmation line;
+  - anything-else followed by an offer → declined_offer;
+  - an offer last → declined_offer;
+  - "anything else about this transaction…" (not an offer of help) → not goodbye;
+  - `goodbyeAllowed` agrees.
+  - The backend suite has 201 tests, all passing.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
