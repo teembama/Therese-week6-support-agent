@@ -1389,6 +1389,20 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `tools.test.ts`: `matchesCustomer` (the same customer across spellings; Efua/AccraStack, FY/Acrostic and a single "Efua" don't match), and the `already_verified_other` message.
   - `test:tools` 69/69: after verifying CUS-1001, "Efua"/"AccraStack", the live "FY"/"Acrostic", and a single "Efua" each → `already_verified_other`, with nothing about CUS-1003. Amara again → success. After replacement → `attempt_not_active`.
 
+### D75. The filler is flushed as a complete sentence (live testing, 2026-10-01)
+
+- **Observed:** the caller hears "One moment while I check that." only once the answer seems ready.
+- **Measured (read-only, today's live calls):**
+  - **Server-side** (Railway turn marks, 14 tool turns): the filler fires at the `tool_use` content-block **start**, already as intended (turn.ts). Request → filler p50 **1257 ms**; filler → first answer sentence p50 **1449 ms** (n=13). So the backend sent the filler about 1.4 s before the answer.
+  - **Vapi side** (`vapi_metrics.performance_metrics`, 4 calls whose turns align): tool turns had turn latency p50 **3938 ms** and **voiceLatency p50 1854 ms**. Turns without a tool: 2637 / 392 ms. Social fast-path turns: 995 / 377 ms.
+  - The extra ~1.4 s of voice latency on tool turns matches the server-side gap between filler and answer. Vapi wasn't voicing the filler until the answer arrived.
+- **Cause (inferred, not confirmed in Vapi's docs):**
+  - `SseStream.content` sent each piece without a trailing space, and put a leading space on the *next* piece.
+  - So the filler went out as "One moment while I check that." with nothing after the full stop until the answer's " Your payout…" arrived. Vapi's sentence chunker couldn't see the boundary and held it.
+- **Change:** every content piece is a complete sentence and is sent with its **trailing** space ("One moment while I check that. "), never a leading space on the next. It is still written to the response immediately.
+- **Tests:** `sse.test.ts`, 2: the filler is written at once as exactly "One moment while I check that. "; later sentences carry their own trailing space, and the joined text is unchanged. The backend suite has 203 tests, all passing.
+- **After:** measured on the next live call's Vapi `voiceLatency` for tool turns, recorded below when available.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

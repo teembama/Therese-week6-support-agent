@@ -59,7 +59,12 @@ export class SseStream {
    */
   content(text: string): void {
     if (this.isEnded || !text) return;
-    const piece = this.sentContent && !/^\s/.test(text) ? ` ${text}` : text;
+    // Each piece is a complete sentence: send it with its TRAILING space, so Vapi's chunker sees
+    // the sentence boundary now, instead of a leading space on the next piece. Live calls
+    // (2026-10-01): the filler "One moment while I check that." went out ~1.2 s before the answer
+    // but was voiced with it (tool-turn voiceLatency p50 1854 ms vs 392 ms on other turns): with
+    // nothing after its full stop, the sentence looked unfinished until the next chunk (D75).
+    const piece = /\s$/.test(text) ? text : `${text} `;
     this.chunk({ content: piece }, null);
     this.sentContent = true;
   }
