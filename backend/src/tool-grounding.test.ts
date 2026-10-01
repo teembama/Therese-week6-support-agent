@@ -265,3 +265,31 @@ describe("full filter on decline, clarify and escalate (D58, audit G2/G3)", () =
     assert.deepEqual(f.check("Delays can happen due to bank processing times."), []);
   });
 });
+
+describe("outcome verbs without 'will' and invented reference prefixes (D65, BEFORE eval)", () => {
+  const S6 = "My invoice payment failed and I need someone to look at it.";
+  it("S6 r1: '...and get your payment sorted' is an outcome promise; 'will follow up' stays allowed (D41)", () => {
+    const r = run(["[[type=escalate; kb=none; tool=none]] I've logged a support ticket for you. ", "The RelayPay support team will follow up on the beneficiary details and get your payment sorted. ", "A representative will follow up."], observed([]), S6);
+    assert.deepEqual(r.spoken, ["I've logged a support ticket for you.", "A representative will follow up."]);
+    assert.equal(r.filtered[0]!.flags[0]!.kind, "outcome_promise");
+  });
+  it("other outcome verbs: get this resolved/fixed, taken care of, sort it out", () => {
+    const f = new SentenceFilter([], "", { mode: "full", nonAnswer: true });
+    for (const s of ["The team will get this resolved for you.", "We'll get it fixed.", "It will be taken care of.", "They can sort it out for you."]) {
+      assert.ok(f.check(s).some((x) => x.kind === "outcome_promise"), s);
+    }
+    assert.deepEqual(f.check("A RelayPay support representative will follow up with you."), []);
+  });
+  it("S6 r3: 'start with INV or TXN followed by four numbers' -> invented INV prefix flagged", () => {
+    const f = new SentenceFilter([], S6, { mode: "full", nonAnswer: true });
+    const flags = f.check("It typically starts with INV or TXN followed by four numbers.");
+    assert.deepEqual(flags.map((x) => x.term), ["inv prefix"]);
+    assert.deepEqual(flags.map((x) => x.kind), ["unsupported_specific"]);
+    assert.deepEqual(f.check("It starts with TXN or PAY followed by four digits, like TXN-9001."), []);
+    assert.ok(f.check("A reference like REF-1234 would help.").some((x) => x.term === "ref prefix"));
+  });
+  it("'customer ID' is not a prefix; CUS is a real identifier format (through the gate, as a clarify reply)", () => {
+    const r = run(["[[type=clarify; kb=none; tool=none]] Your customer ID starts with CUS followed by four digits. ", "Could you tell me yours?"]);
+    assert.equal(r.filtered.length, 0, JSON.stringify(r.filtered));
+  });
+});

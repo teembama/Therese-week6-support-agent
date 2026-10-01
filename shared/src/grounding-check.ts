@@ -102,6 +102,11 @@ const OUTCOME_PROMISES: readonly RegExp[] = [
   /\b(?:usually|typically|normally|generally)\s+(?:gets?\s+|are\s+|is\s+)?(?:resolved|lifted|approved|refunded|cleared|released)\b/,
   /\b(?:i|we)\s+promise\b/,
   /\bguarantee(?:d|s)?\b/,
+  // Outcome verbs without "will" (D65; BEFORE eval S6: "...follow up on the beneficiary details
+  // and get your payment sorted"). "A representative will follow up" stays allowed (D41).
+  /\bget(?:ting)?\s+(?:(?:your|the|this|that|it|everything|things)\s+)?(?:\w+\s+)?(?:sorted|resolved|fixed|cleared up)\b/,
+  /\b(?:taken|take|takes|taking)\s+care\s+of\b/,
+  /\bsort(?:s|ing)?\s+(?:it|this|that|things|everything)\s+out\b/,
 ];
 const TIMELINE_PROMISES: readonly RegExp[] = [
   /\bright away\b/,
@@ -210,6 +215,23 @@ function withoutReferenceFormats(s: string): string {
     .replace(/\b(?:exactly\s+)?\d+[\s-]?(?:digits?|numbers?)\b/g, " ");
 }
 
+// ---- Reference formats (D65): real prefixes only. BEFORE eval S6 r3: "references typically start
+// with INV or TXN followed by four numbers" (INV doesn't exist). The tool spec's references are
+// TXN-#### and PAY-####; CUS-#### is the customer ID format lookup_customer accepts.
+const REAL_PREFIXES = new Set(["TXN", "PAY", "CUS"]);
+
+/** Invented prefixes in a sentence that shows or describes a reference format (raw text, case-sensitive). */
+function inventedPrefixesIn(raw: string): string[] {
+  const out = new Set<string>();
+  // "INV-1234" anywhere is a reference-shaped token.
+  for (const m of raw.matchAll(/\b([A-Z]{2,5})-\d{2,}\b/g)) if (!REAL_PREFIXES.has(m[1]!)) out.add(m[1]!);
+  // "starts with X or Y followed by four numbers": all-caps tokens between "starts with" (or "like",
+  // "prefix") and "followed by" are prefixes.
+  const m = /\b(?:start|starts|starting|begin|begins|like|such as|prefix(?:ed)?)\b(.{0,60}?)\bfollowed by\b[^.?!]*\b(?:digits?|numbers?)\b/i.exec(raw);
+  if (m) for (const t of m[1]!.matchAll(/\b([A-Z]{2,5})\b/g)) if (!REAL_PREFIXES.has(t[1]!) && t[1] !== "ID") out.add(t[1]!);
+  return [...out];
+}
+
 /** Words never spoken unless the caller used them first (D45). */
 const INTERNAL_TERMS = ["compliance"];
 
@@ -264,6 +286,7 @@ export class SentenceFilter {
     // D45: every spoken type. Compliance matters are for specialists; the word itself invites
     // "explaining compliance decisions" (escalation-rules.md). Allowed only as an echo.
     for (const t of INTERNAL_TERMS) if (has(s, t) && !has(this.caller, t)) flags.push({ kind: "internal_term", term: t, sentence });
+    for (const p of inventedPrefixesIn(sentence)) if (!has(this.caller, p.toLowerCase())) flags.push({ kind: "unsupported_specific", term: `${p.toLowerCase()} prefix`, sentence });
     if (this.mode === "promises") return flags;
     const checked = this.nonAnswer ? withoutReferenceFormats(s) : s;
     for (const w of strengtheningIn(checked, this.source)) {

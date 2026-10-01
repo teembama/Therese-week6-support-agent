@@ -1198,6 +1198,29 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - a number range is never split;
   - a lead that fails on its own → dropped.
 
+### D65. Outcome verbs without "will", real reference prefixes only, and no follow-up channel or time (Batch 3C fixes 2a–2c, 2026-10-01)
+
+- **Observed (BEFORE eval run):**
+  - S6 r1: "…will follow up on the beneficiary details **and get your payment sorted**". This is an outcome promise the patterns missed, because "get … sorted" isn't next to "will".
+  - S6 r3: "references typically start with **INV** or TXN followed by four numbers". INV is an invented prefix. D58's format exemption skips a format's numbers but checked nothing about its prefixes.
+  - S7 r3: "will follow up with you **at efua@…**". This states the follow-up channel; the escalation records a callback preference only.
+- **2a. Outcome promises** (`OUTCOME_PROMISES`, every spoken type): "get (your/the/this/it…) (payment…) sorted / resolved / fixed / cleared up", "take(n) care of", "sort it/this/that out".
+  - The D41 allowance stands: "a representative will follow up" is required by the escalation rules and is not flagged (unit test).
+- **2b. Reference prefixes:**
+  - A reference-shaped token `XXX-dd…`, or an all-caps token in a "starts with X or Y followed by N digits/numbers" description, must be TXN, PAY or CUS. Anything else is flagged `unsupported_specific` ("inv prefix").
+  - **CUS is allowed as well as TXN and PAY.** It is the customer-ID format `lookup_customer` accepts (assets/mcp-tool-requirements.md), and clarify replies legitimately describe it. Flagging it would drop correct sentences.
+  - "ID" (as in "customer ID") is never a prefix.
+- **2c. Prompt:**
+  - Escalation step 5 now says to confirm a representative will follow up, but never HOW (email, phone, callback to an address or number) or WHEN, beyond the caller's noted preference.
+  - The ticket rule says the same, and adds: never say they will fix, sort out or resolve it.
+- **Tests:** `tool-grounding.test.ts`, 4 tests:
+  - the S6 r1 sentence is filtered while "A representative will follow up." is spoken;
+  - four other outcome verbs;
+  - the S6 r3 INV sentence is flagged, the TXN/PAY format is spoken, and REF-1234 is flagged;
+  - "customer ID … CUS followed by four digits" is spoken.
+  - The backend suite has 188 tests, all passing.
+- **Replay** of the 149 stored decline/clarify/escalate replies (351 sentences): the new checks add **0** flags. Four "your payout" flags in that replay are an artifact: the replay has no tool records, while at runtime the payout record allows the noun.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
