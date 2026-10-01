@@ -24,6 +24,7 @@ import { channelFor, EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BOD
 import { Admission } from "./admission.js";
 import { startStaleSweeper } from "./stale-sweep.js";
 import { createDiscordNotifier, type Notifier } from "./discord-notify.js";
+import { createRateLimiter, handleRecords, matchRecordsRoute, RECORDS_RATE_LIMIT_PER_MINUTE } from "./records.js";
 import { debugDetails, shapeOf } from "./debug-shape.js";
 import { sentences } from "./gate.js";
 import { SseStream } from "./sse.js";
@@ -32,7 +33,7 @@ import { matchRoute, MIN_TOKEN_LENGTH, redactPath, sha256 } from "./routing.js";
 import { parseVapiBody } from "./vapi.js";
 import { classifyEvent, recordEndOfCall } from "./vapi-events.js";
 import { retryOnce } from "./bounded.js";
-import { handleCspReport, handlePublic, isPublicRoute } from "./web.js";
+import { handleCspReport, handlePublic, isPublicRoute, SECURITY_HEADERS } from "./web.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -288,6 +289,7 @@ function main(): void {
     process.exit(1);
   });
   const db = createServiceClient();
+  const recordsAllow = createRateLimiter(RECORDS_RATE_LIMIT_PER_MINUTE);
   const port = Number(process.env["PORT"] || 8787);
 
   const server = createServer((req, res) => {
@@ -297,6 +299,14 @@ function main(): void {
       pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     } catch {
       /* malformed request target: treat as unknown path */
+    }
+    // The page's "Your references" panel (D84): read-only, scoped to one call, rate-limited.
+    const recordsCallId = matchRecordsRoute(req.method, pathname);
+    if (recordsCallId !== null) {
+      handleRecords(req, res, db, recordsCallId, { allow: recordsAllow, log, headers: SECURITY_HEADERS }).catch(() => {
+        if (!res.headersSent) sendJson(res, 503, { error: "records unavailable" });
+      });
+      return;
     }
     // Public routes (D52): the voice page, its assets, /config (public Vapi IDs) and /health.
     if (isPublicRoute(req.method, pathname)) {

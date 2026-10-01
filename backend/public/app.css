@@ -124,5 +124,30 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
 }
 .jump-button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .captions { display: grid; }
+/* Screen-reader-only text (the references panel's announcements and button context). */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* "Your references" (D84): tickets and escalations created on this call, each with a Copy button. */
+.records { border: 1px solid var(--teal); border-radius: 12px; padding: 12px 14px; display: grid; gap: 8px; }
+.records h2 { margin: 0; font-size: 1rem; color: var(--primary); }
+.records-hint { margin: 0; font-size: 0.85rem; color: var(--muted); }
+.records-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.records-list li {
+  display: flex; gap: 12px; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-radius: 10px; background: var(--bg);
+}
+.record-title { margin: 0; font-weight: 650; color: var(--primary); font-variant-numeric: tabular-nums; }
+.record-detail { margin: 2px 0 0; font-size: 0.9rem; color: var(--muted); }
+.copy-button {
+  flex: none; min-height: 40px; min-width: 76px; padding: 0 14px; border-radius: 10px; cursor: pointer;
+  border: 2px solid var(--teal); background: var(--surface); color: var(--teal); font: inherit; font-weight: 650; font-size: 0.9rem;
+}
+.copy-button:hover { background: var(--teal); color: #fff; }
+.copy-button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 420px) { .records-list li { flex-wrap: wrap; } .copy-button { width: 100%; } }
+
 /* "Reference: <code>" under an error, for support only (D81). */
 .error-ref { margin: 8px 0 0; font-size: 0.8rem; color: var(--muted); }

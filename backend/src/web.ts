@@ -17,6 +17,7 @@ const FILES: Record<string, { file: string; type: string }> = {
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/call-end.js": { file: "call-end.js", type: "text/javascript; charset=utf-8" },
   "/captions.js": { file: "captions.js", type: "text/javascript; charset=utf-8" },
+  "/records.js": { file: "records.js", type: "text/javascript; charset=utf-8" },
   "/app.css": { file: "app.css", type: "text/css; charset=utf-8" },
   "/favicon.svg": { file: "favicon.svg", type: "image/svg+xml" },
 };
@@ -40,7 +41,7 @@ export const CONTENT_SECURITY_POLICY = [
   "report-uri /csp-report",
 ].join("; ");
 
-const SECURITY_HEADERS = {
+export const SECURITY_HEADERS: Record<string, string> = {
   "Content-Security-Policy": CONTENT_SECURITY_POLICY,
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",

@@ -1619,6 +1619,33 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - **Customer email confirmations:** the caller gets an email with the ticket or escalation reference (outbox kind `customer_confirmation`, and a verified sender domain).
   - **Authenticated login sessions:** a logged-in page would carry the customer's identity into the call, replacing the weak voice identity (F1/F2). See `docs/limitations.md`.
 
+### D84. On-screen "Your references" panel (web page and a read-only endpoint, 2026-10-02)
+
+- **No agent behaviour change:** the prompt, tools, gate and filter are untouched.
+- **Endpoint `GET /calls/:callId/records`** (`backend/src/records.ts`), read-only:
+  - **Scoped to one call.** `conversation_id` is Vapi's `call.id`, which only the caller's page has (an unguessable UUID returned by `vapi.start()`). Only UUID-shaped IDs reach the database, so `eval-…` and `test-tools-…` conversations can't be read through it.
+  - **Returns only references:**
+    - tickets `{reference, category (label), follow_up: "A RelayPay support representative will follow up."}`;
+    - escalations `{reference, linked_ticket, callback_preference (as noted, or null)}`.
+    - An escalation's own ticket appears as its linked ticket, not as a second entry.
+  - **Whitelisted output:** no customer ID, name, email, amount, summary, reason, priority or status, whatever the rows hold.
+  - **Unknown or malformed call ID:** 200 with the same empty shape (no existence leak). A malformed ID never reaches the database.
+  - **Rate limit:** 60 requests per minute per client IP (first `X-Forwarded-For` hop), then 429. Polling every 3s uses 20.
+  - **Logging:** a 10-character SHA-256 prefix of the call ID, never the ID.
+  - `Cache-Control: no-store` and the page's security headers.
+- **Page** (`backend/public/records.js`, pure and unit-tested; wired in `app.js`):
+  - Polls every 3s during the call and once 2s after it ends.
+  - The panel appears with the first record and stays until reload. References from earlier calls on the same page are kept. Nothing is stored.
+  - Each entry has a Copy button. A ticket copies "RelayPay ticket TKT-…: <category>. A RelayPay support representative will follow up."; an escalation copies its reference, linked ticket and callback preference.
+  - The button shows "Copied" for 2s ("Copy failed" if the clipboard is unavailable). It's a native button, with the entry's name as screen-reader text.
+  - A polite aria-live region announces new references and copies.
+  - Brand styling: teal accent, primary titles, full-width buttons on narrow screens.
+- **Tests:**
+  - `records.test.ts`: scoping, the linked ticket not duplicated, no sensitive fields, unknown and malformed IDs, route matching, the rate limiter, and HTTP 200/429 with the hash-only log.
+  - `records-panel.test.ts`: merge and dedupe, malformed responses, copy text, visible lines, the announcement, the poll interval and URL encoding, and the markup.
+  - `test:gate` 261/261.
+- **Live check pending:** it relies on `vapi.start()` resolving with the call object (`call.id`). If it doesn't, the panel stays hidden; nothing else is affected.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

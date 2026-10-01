@@ -6,6 +6,7 @@
 
 import { classifyFailure, describeEnd, failureMessage, isCallOverError, sanitizeForLog } from "/call-end.js";
 import { appendFinal, isNearBottom, speakerLabel, toggleState } from "/captions.js";
+import { announcement, copyText, describeEntry, mergeRecords, POLL_MS, recordsUrl } from "/records.js";
 
 const SDK_URL = "https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0";
 const MAX_CALL_MS = 4 * 60_000; // matches the note on the page; the assistant's own limit should be 240 s too
@@ -16,6 +17,7 @@ const ui = {
   error: el("error"), errorTitle: el("error-title"), errorSteps: el("error-steps"), errorRef: el("error-ref"),
   start: el("start"), end: el("end"),
   captions: el("captions"), captionsLines: el("captions-lines"), captionsToggle: el("captions-toggle"), captionsJump: el("captions-jump"),
+  records: el("records"), recordsList: el("records-list"), recordsLive: el("records-live"),
 };
 
 let vapi = null;
@@ -123,6 +125,70 @@ function toggleCaptions() {
   ui.captionsToggle.setAttribute("aria-expanded", next.expanded);
 }
 
+// ---- "Your references" (D84): tickets and escalations created on this call. Polled every 3s
+// during the call and once after it ends; the panel appears with the first record and stays until
+// reload (references from earlier calls on this page are kept). Nothing is stored.
+let callId = null;
+let recordEntries = [];
+let recordsTimer = null;
+async function fetchRecords(id) {
+  try {
+    const res = await fetch(recordsUrl(id), { cache: "no-store" });
+    if (!res.ok) return;
+    const { entries, added } = mergeRecords(recordEntries, await res.json());
+    if (!added.length) return;
+    recordEntries = entries;
+    for (const entry of added) ui.recordsList.append(recordItem(entry));
+    ui.records.hidden = false;
+    ui.recordsLive.textContent = announcement(added);
+  } catch {
+    /* the panel is a convenience: a failed poll is retried by the next one */
+  }
+}
+function recordItem(entry) {
+  const { title, detail } = describeEntry(entry);
+  const li = document.createElement("li");
+  const text = document.createElement("div");
+  text.append(
+    Object.assign(document.createElement("p"), { className: "record-title", textContent: title }),
+    Object.assign(document.createElement("p"), { className: "record-detail", textContent: detail }),
+  );
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-button";
+  const label = document.createElement("span");
+  label.textContent = "Copy";
+  button.append(label, Object.assign(document.createElement("span"), { className: "visually-hidden", textContent: ` ${title}` }));
+  let reset = null;
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(copyText(entry));
+      label.textContent = "Copied";
+      ui.recordsLive.textContent = `Copied ${title}.`;
+    } catch {
+      label.textContent = "Copy failed";
+      ui.recordsLive.textContent = `Couldn't copy. The reference is ${entry.reference}.`;
+    }
+    if (reset) clearTimeout(reset);
+    reset = setTimeout(() => { label.textContent = "Copy"; }, 2000);
+  });
+  li.append(text, button);
+  return li;
+}
+function startRecordsPolling() {
+  if (!callId || recordsTimer) return;
+  const id = callId;
+  recordsTimer = setInterval(() => void fetchRecords(id), POLL_MS);
+}
+/** Stop polling; one last read shortly after the call ends (the final turn's writes land then). */
+function stopRecordsPolling() {
+  if (recordsTimer) clearInterval(recordsTimer);
+  recordsTimer = null;
+  const id = callId;
+  callId = null;
+  if (id) setTimeout(() => void fetchRecords(id), 2000);
+}
+
 /** Show a classified failure: its group's headline and next step, plus a small reference line. */
 function fail(failure, phase = callStartedAt ? "in-call" : "starting") {
   const { headline, lines } = failureMessage(failure, phase);
@@ -131,6 +197,7 @@ function fail(failure, phase = callStartedAt ? "in-call" : "starting") {
     try { vapi.stop(); } catch { /* already stopped */ }
   }
   inCall = false;
+  stopRecordsPolling();
   setState("error", headline, lines[0]);
   showError(headline, lines, failure.code);
   setButtons({ start: Boolean(vapi && assistantId), end: false, startText: "Try again" });
@@ -177,6 +244,7 @@ function attach(v) {
     ui.captions.hidden = false;
     setState("listening", "Live: listening", "Go ahead and speak.");
     startTimer();
+    startRecordsPolling();
     ui.end.focus();
   });
   v.on("speech-start", () => setState("speaking", "Live: RelayPay is speaking", "You can interrupt at any time."));
@@ -191,6 +259,7 @@ function attach(v) {
     }
   });
   v.on("call-end", () => {
+    stopRecordsPolling();
     const wasInCall = inCall || callOverByVapi;
     if (!ui.error.hidden) { inCall = false; stopTimer(); return; } // an error already explained what happened
     if (!wasInCall) {
@@ -236,7 +305,10 @@ async function startCall() {
   setState("connecting", "Connecting", "Connecting you to RelayPay support…");
   setButtons({ start: false, end: true });
   try {
-    await vapi.start(assistantId);
+    // The call's ID (an unguessable UUID; also our conversation ID) scopes the references panel.
+    const call = await vapi.start(assistantId);
+    callId = typeof call?.id === "string" ? call.id : null;
+    if (inCall) startRecordsPolling();
   } catch (err) {
     failFromError(err);
   }
