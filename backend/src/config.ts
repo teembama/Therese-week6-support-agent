@@ -112,6 +112,8 @@ export const MAX_BODY_BYTES = 1_000_000;
 
 /** abandon_stale_conversations() cadence (D51). Test knob RELAYPAY_STALE_SWEEP_MS; default 5 minutes. */
 export const STALE_SWEEP_INTERVAL_MS = envMs("RELAYPAY_STALE_SWEEP_MS", 5 * 60_000);
+/** Discord sender sweep for pending outbox rows (D83). Test knob RELAYPAY_DISCORD_SWEEP_MS; default 60s. */
+export const DISCORD_SWEEP_INTERVAL_MS = envMs("RELAYPAY_DISCORD_SWEEP_MS", 60_000);
 
 /** Vapi server messages: an end-of-call report carries the whole transcript and messages. */
 export const EVENTS_MAX_BODY_BYTES = 10_000_000;

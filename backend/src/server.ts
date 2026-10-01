@@ -20,9 +20,10 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServiceClient, newAttemptId, summarize, transcriptHash, type Db, type LogContext } from "@relaypay/shared";
-import { channelFor, EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, MAX_CONCURRENT_TURNS, SHUTDOWN_GRACE_MS, STALE_SWEEP_INTERVAL_MS } from "./config.js";
+import { channelFor, EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, MAX_CONCURRENT_TURNS, SHUTDOWN_GRACE_MS, STALE_SWEEP_INTERVAL_MS, DISCORD_SWEEP_INTERVAL_MS } from "./config.js";
 import { Admission } from "./admission.js";
 import { startStaleSweeper } from "./stale-sweep.js";
+import { createDiscordNotifier, type Notifier } from "./discord-notify.js";
 import { debugDetails, shapeOf } from "./debug-shape.js";
 import { sentences } from "./gate.js";
 import { SseStream } from "./sse.js";
@@ -106,6 +107,8 @@ const admission = new Admission(MAX_CONCURRENT_TURNS);
 
 /** Every turn started in this process that hasn't fully finished (row, totals): what a shutdown waits for. */
 const unfinished = new Set<Promise<void>>();
+/** Discord sender (D83); off until the server is listening (and when no webhook URL is set). */
+let notifier: Pick<Notifier, "kick"> = { kick: () => undefined };
 
 /** An entry a genuine retry may join: same transcript, and not already ended silently. */
 function joinable(entry: InflightEntry | undefined, hash: string): boolean {
@@ -221,6 +224,8 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
   // Keep the entry until the turn is persisted, so a retry that arrives before then joins this
   // run; once the row exists, retries are replayed from the database.
   void handle.persisted.then(release);
+  // Team notifications (D83): the turn's tool writes have committed; post any new outbox rows.
+  void handle.persisted.then(() => notifier.kick(), () => notifier.kick());
   await handle.done.finally(release);
 }
 
@@ -360,6 +365,7 @@ function main(): void {
   server.listen(port, () => {
     log({ event: "listening", port, node: process.version, max_concurrent_turns: MAX_CONCURRENT_TURNS });
     startStaleSweeper(db, STALE_SWEEP_INTERVAL_MS, log);
+    notifier = createDiscordNotifier({ db, webhookUrl: process.env["DISCORD_WEBHOOK_URL"], log, intervalMs: DISCORD_SWEEP_INTERVAL_MS, timer: true });
   });
 }
 
