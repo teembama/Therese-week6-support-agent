@@ -7,7 +7,7 @@ Things that must be done or undone before the project is submitted.
 - [ ] **Remove the debug structure log** (TEMPORARY, D26/D28). Remove `backend/src/debug-shape.ts`, the `RELAYPAY_DEBUG_REQUEST_SHAPE` handling in `backend/src/server.ts`, its `.env.example` entry, and the debug checks in `scripts/test-endpoint.ts`. Run the unit suites, then redeploy (EU West).
 - [ ] **Check Claude Haiku 4.5's deprecation status** at https://platform.claude.com/docs/en/about-claude/model-deprecations (retirement floor "not sooner than October 15, 2026"). Record the date and status in docs/model-choice.md. If a retirement date falls before or during grading, set `AGENT_MODEL=claude-sonnet-5-5` on Railway.
 - [ ] **Delete the old Vapi public key** in the Vapi dashboard (the user does this). The Railway-origin key, created 2026-09-30, is the one in use.
-- [ ] **Decide on the after3 S7 regression** (docs/testing-evidence.md, After3): fix `create_escalation`'s description so it is called only after the email read-back and the preferred-time question, then rerun S7 ×3 with a cap of at least $0.12.
+- [x] **Fixed on 2026-10-01 (D72, after4 S7 3/3):** ~~Decide on the after3 S7 regression~~ (docs/testing-evidence.md, After3): fix `create_escalation`'s description so it is called only after the email read-back and the preferred-time question, then rerun S7 ×3 with a cap of at least $0.12.
 
 ## After the presentation
 

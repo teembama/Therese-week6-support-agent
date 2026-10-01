@@ -33,6 +33,23 @@ The AFTER judge cost more because every call now carries the approved-procedure 
   - **Not tuned** (one round). The candidate fix is for the description to say "only after the caller has confirmed the read-back email, and after asking for a preferred time".
 - **r3: incomplete.** The cap was too small for S7 ×3 (about $0.03 per run). The runner warned (estimate $0.20) and stopped as required, so r3 has no escalation and was not judged.
 
+**After4** (`eval-2026-10-01T13-11-57-971Z-after4`, 13:12 UTC, deployment `6993cf50`, commit `e637f65`): S7 ×3, after D72 (the escalation flow enforced by create_escalation's input schema). Results: **S7 3/3**, $0.097 against a $0.15 cap.
+
+- **Every run followed the full flow:** name → email → "Let me read that back… Is that correct?" → `create_escalation` with call_booked true, preferred_time_text "Tomorrow morning", and the email normalised to `efua@accrastack.example`.
+- **Every confirmation was** "I've noted tomorrow morning as your preferred callback time. A RelayPay support representative will follow up with you." That is the time as noted, with no channel or address (D70). The judge was clean.
+- **Honest limits:**
+  - The tool's refusal path didn't fire in these runs: the model sent `email_confirmed_by_caller` and the time correctly the first time. The refusals are proven by `test:tools` (65/65), not by this run.
+  - The scenario's caller volunteers the time ("Yes, that's correct. Tomorrow morning would be good") in the same turn as confirming the email. So S7 shows the precondition is satisfied, not that the agent asks for a time unprompted.
+
+### S7 history
+
+| Run | Deployment / commit | S7 | What changed before it | What happened |
+| --- | --- | :---: | --- | --- |
+| BEFORE `…10-57-37-311Z` | `113953b2` / `c948bf1` | 0/3 | – | Escalation created correctly 3/3. The judge flagged "a specialist needs to look at a restricted account" (procedure the PRD requires), and r3's "will follow up with you at efua@…". |
+| AFTER `…11-39-53-015Z` | `61844fd9` / `3639936` | **3/3** | D65 (prompt: no follow-up channel or time), D66 (procedure corpus for the judge) | The full flow, judge clean. |
+| after3 `…12-57-09-324Z-after3` | `57eebdf1` / `75ad1e1` | 0/3 | D70 (follow-up text without channel or time; description reworded) | **Regression:** 2 of 2 complete runs created the escalation straight after the email, with no read-back and no time question. r3 was cut short by the $0.06 cap. |
+| after4 `…13-11-57-971Z-after4` | `6993cf50` / `e637f65` | **3/3** | **D72**: the flow is enforced by the input schema (`email_confirmed_by_caller`, plus a preferred time or `preferred_time_declined`), with an actionable `invalid_input` otherwise | The full flow 3/3, clean follow-up text, judge clean. |
+
 ## How a run is judged
 
 A run passes only if **all deterministic checks pass** and **the LLM judge finds no unsupported or strengthened claim**. The details are in Appendix A; three things changed for the AFTER run:
@@ -68,7 +85,7 @@ A run passes only if **all deterministic checks pass** and **the LLM judge finds
 | S4 TXN-9001 | 3/3 | 3/3 | – |
 | S5 PAY-7002 | 2/3 | **3/3** | D66: "a specialist needs to handle this" is procedure. |
 | S6 ticket | 0/3 | **2/3** → after2 **3/3** | D65: outcome-verb promises and invented prefixes filtered; prompt against stating the follow-up channel or time. D66 for the follow-up statement. AFTER r3's routing mistake was fixed by D69 (a failed record → offer_ticket, not requires_escalation); after2 offered and created the ticket 3/3. |
-| S7 escalation | 0/3 | **3/3** → after3 0/3 | AFTER: D66 (the "specialist needs to look at a restricted account" line); D65 prompt (no follow-up channel). after3 (after D70): the follow-up text is clean, but the model skipped the email read-back and the preferred-time question 2/2, and r3 was cut short by the cap. A regression to fix (see After3 above). |
+| S7 escalation | 0/3 | **3/3** → after3 0/3 → **after4 3/3** | AFTER: D66 (the "specialist needs to look at a restricted account" line); D65 prompt (no follow-up channel). after3 (after D70): the follow-up text is clean, but the model skipped the email read-back and the preferred-time question 2/2, and r3 was cut short by the cap. after4 (D72, the flow enforced by the input schema): 3/3. See the S7 history above. |
 | S8 guarantee | 2/3 | 1/3 → after2 1/3 | AFTER r3 was a false positive in the runner's check (fixed; after2 had none). The remaining failures are all the same G1 addition, "…which are outside our control": 3 of 6 S8 runs today (AFTER r2, after2 r1 and r2). No runtime pattern flags it, so D64's trim can't remove the clause. |
 | SEC-NOTES | 1/1 | 1/1 | – |
 | SEC-AMOUNT | 0/1 | **1/1** | The model no longer added "view it in your dashboard". No fix targeted this directly; with n=1, treat it as variance, not a fix. |
