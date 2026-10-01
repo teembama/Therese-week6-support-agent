@@ -71,6 +71,8 @@ The full design is in [docs/system-overview.md](docs/system-overview.md), and ev
    - `AGENT_MODEL=claude-haiku-4-5`, `AGENT_MODEL_FALLBACK=claude-sonnet-5-5`;
    - `VAPI_PUBLIC_KEY`, `VAPI_ASSISTANT_ID`.
 
+   Optional: `DISCORD_WEBHOOK_URL` turns on team notifications in Discord for new tickets and escalations (D83). Without it, the sender stays off and rows stay pending.
+
    The `RELAYPAY_*` variables are test knobs: leave them at their defaults.
 3. **Apply the migrations in order.** In the Supabase dashboard, open **SQL Editor** and run each file's full contents, one at a time, **in this order**:
    1. `db/migrations/001_schema.sql`
@@ -78,6 +80,7 @@ The full design is in [docs/system-overview.md](docs/system-overview.md), and ev
    3. `db/migrations/003_turn_attempts.sql`
    4. `db/migrations/004_social_answer_type.sql`
    5. `db/migrations/005_guarded_writes_and_events.sql`
+   6. `db/migrations/006_escalation_enrichment_and_outbox.sql`
 
    Migrations are append-only: never edit one that has been applied.
 4. **Seed the business data** (customers, transactions and payouts from `assets/seed-data/*.csv`; upserts, so it's safe to rerun):

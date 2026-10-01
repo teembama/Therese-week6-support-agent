@@ -1569,6 +1569,49 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `test:tools` 69/69 against Supabase **still on 005** (backward compatible).
 - **Not yet applied to Supabase:** the user applies 006 in the SQL editor. After that, `test:tools` and a live S7 should be run again.
 
+### D83. Discord team notifications: the outbox sender (Part C step 3, 2026-10-02)
+
+- **What:** `backend/src/discord-notify.ts` posts `notification_outbox` rows (D82) to `DISCORD_WEBHOOK_URL`. No migration: it uses 006's columns as they are.
+- **When:**
+  - Kicked after each turn is persisted (the tool's ticket or escalation transaction has committed by then).
+  - Swept every 60s (`RELAYPAY_DISCORD_SWEEP_MS`) and on startup, for anything still pending.
+  - Fire-and-forget; every error is caught and logged. It never blocks or fails a ticket, escalation or turn.
+- **No double send:**
+  - A row is claimed by a compare-and-set on `attempts` (one `UPDATE … WHERE status = 'pending' AND attempts = n`) before each post, so two sweeps or two replicas (e.g. during a deploy's overlap) never both post it.
+  - A sweep only picks up unclaimed rows (`attempts = 0`).
+  - A row left mid-send by a crash (pending, `attempts > 0`, older than 10 minutes) is marked failed with "interrupted mid-send; not retried" rather than posted again: a possible miss is better than a double post.
+- **Delivery:**
+  - Marked `sent` with `sent_at` only on a 2xx (`?wait=true`, so Discord confirms the message).
+  - One retry: after a 429 it waits Discord's `retry_after` (body, else the `Retry-After` header; capped at 30s), otherwise 2s. Then `failed` with `last_error`.
+  - Each post has a 10s timeout.
+- **Content:**
+  - `ticket_created`: ID, category, priority, customer ID, summary.
+  - `escalation_created` / `escalation_updated`: escalation ID, linked ticket, category, customer ID, reason (on creation), preferred time, call booked, caller email.
+  - Built from a **whitelist** of payload fields, so an unexpected field can't leak. Amounts in free text (summary, reason) are masked as `[amount]`. Mentions are disabled (`allowed_mentions: { parse: [] }`).
+  - The webhook URL never appears in a log or in `last_error` (scrubbed); only a Discord webhook URL shape is accepted.
+- **Test conversations are not posted.** Rows from channel `test` conversations (`test:tools`, the eval runner) are marked `sent` with `last_error = 'skipped (not posted): test conversation'`, so only real calls reach the channel. (The status check allows only pending/sent/failed; a separate `skipped` status would need a migration.)
+- **Off switch:** without `DISCORD_WEBHOOK_URL` the sender is off, logs once (`discord_notifier_off`), and rows stay pending.
+- **Tests:** `backend/src/discord-notify.test.ts`, 13 tests in `test:gate` (243/243). They cover:
+  - message content per kind;
+  - no amounts or notes (non-whitelisted fields, amounts masked);
+  - URL scrubbing and shape check;
+  - `retry_after` parsing;
+  - sent on 2xx;
+  - one retry, then failed;
+  - 429 wait and its cap;
+  - concurrent sweeps and two notifiers posting each row exactly once;
+  - claimed rows not resent and stuck rows failed;
+  - test rows skipped;
+  - the off switch;
+  - a database error never escaping.
+- **Live (2026-10-02):**
+  - `DISCORD_WEBHOOK_URL` was set by the user in the Railway dashboard. It was never printed.
+  - The 10 pre-sender test rows were marked not posted first.
+  - ONE row (id 9, `escalation_created` ESC-75639CEF from S7 after5) was sent from a local one-off. Discord returned 2xx, and the row is `sent` with `sent_at`, after 1 attempt.
+- **Future work:**
+  - **Customer email confirmations:** the caller gets an email with the ticket or escalation reference (outbox kind `customer_confirmation`, and a verified sender domain).
+  - **Authenticated login sessions:** a logged-in page would carry the customer's identity into the call, replacing the weak voice identity (F1/F2). See `docs/limitations.md`.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
