@@ -5,6 +5,7 @@
 // assistant ID come from /config (env on the server), never from the repo.
 
 import { classify, endOutcome, errorCode, isCallOverError } from "/call-end.js";
+import { toggleState } from "/captions.js";
 
 const SDK_URL = "https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0";
 const MAX_CALL_MS = 4 * 60_000; // matches the note on the page; the assistant's own limit should be 240 s too
@@ -136,10 +137,10 @@ function addCaption(role, text) {
   while (ui.captionsLines.children.length > MAX_CAPTION_LINES) ui.captionsLines.firstElementChild.remove();
 }
 function toggleCaptions() {
-  const show = ui.captionsLines.hidden;
-  ui.captionsLines.hidden = !show;
-  ui.captionsToggle.textContent = show ? "Hide captions" : "Show captions";
-  ui.captionsToggle.setAttribute("aria-expanded", String(show));
+  const next = toggleState(!ui.captionsLines.hidden);
+  ui.captionsLines.hidden = !next.visible;
+  ui.captionsToggle.textContent = next.label;
+  ui.captionsToggle.setAttribute("aria-expanded", next.expanded);
 }
 
 function fail(kind, err) {

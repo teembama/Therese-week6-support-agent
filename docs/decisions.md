@@ -1434,6 +1434,18 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - **Style:** the brand palette (primary blue for RelayPay, muted for the caller, teal link-style toggle).
 - Checked locally: the page, `/app.js` and `/call-end.js` return 200 with the right types, and the panel markup is served. Live behaviour is to be confirmed on the next call.
 
+### D79. Captions toggle fixed: [hidden] always wins (web page only, 2026-10-01)
+
+- **Bug:** "Hide captions" changed the button label and `aria-expanded` but hid nothing. The list had `hidden` set, but `.captions-lines { display: grid }` in app.css overrides the browser's default `[hidden] { display: none }`.
+- **Change:**
+  - app.css has a global `[hidden] { display: none !important; }`, which also protects the error box and the other panels from the same trap.
+  - The toggle's state (visibility, label, `aria-expanded`) comes from a pure `toggleState` in the new `backend/public/captions.js`, served at `/captions.js`.
+- **Tests:** `backend/src/captions.test.ts`:
+  - `toggleState` both ways;
+  - app.css contains the `[hidden]` rule;
+  - the page's toggle starts as "Hide captions" with `aria-expanded="true"` and `aria-controls="captions-lines"`.
+- **No agent behaviour changed.**
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
