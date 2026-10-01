@@ -321,12 +321,25 @@ async function postTurn(callId: string, callerTurns: string[], agentTurns: strin
     messages.push({ role: "user", content: c });
     if (agentTurns[i] !== undefined) messages.push({ role: "assistant", content: agentTurns[i] });
   });
-  const t0 = performance.now();
-  const res = await fetch(`${BASE_URL}/v/${process.env["VAPI_LLM_SECRET"]}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "relaypay-agent", stream: true, call: { id: callId }, messages }),
-  });
+  // This laptop's DNS fails intermittently (ENOTFOUND). Retry ONLY connect-level failures: the
+  // request never reached the server, so a retry can't run the turn twice.
+  let res: Response | null = null;
+  let t0 = 0;
+  for (let attempt = 1; !res; attempt++) {
+    t0 = performance.now();
+    try {
+      res = await fetch(`${BASE_URL}/v/${process.env["VAPI_LLM_SECRET"]}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "relaypay-agent", stream: true, call: { id: callId }, messages }),
+      });
+    } catch (err) {
+      const code = String((err as { cause?: { code?: string } }).cause?.code ?? "");
+      if (attempt >= 5 || !["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"].includes(code)) throw err;
+      console.log(`   (network: ${code}, retrying the request in ${attempt * 3}s)`);
+      await new Promise((r) => setTimeout(r, attempt * 3_000));
+    }
+  }
   let buffer = "";
   const parts: string[] = [];
   let msFirstContent: number | null = null, msFirstAnswer: number | null = null;
@@ -574,7 +587,20 @@ async function main(): Promise<number> {
   for (const [sc, rep] of selected) {
     if (spend.total >= CAP_USD) { console.log(`cap reached ($${spend.total.toFixed(4)}): stopping before ${sc.id} r${rep}`); break; }
     console.log(`\n== ${sc.id} r${rep}: ${sc.title}`);
-    const run = await runScenario(db, sc, rep);
+    let run: RunData;
+    try {
+      run = await runScenario(db, sc, rep);
+    } catch (err) {
+      // A run that can't complete is a FAILED run with the error recorded, never skipped silently.
+      const message = `run_error: ${(err as Error).message.slice(0, 300)}`;
+      console.log(`   -> FAIL  ${message}`);
+      const conversationId = `${RUN_ID}-${sc.id.toLowerCase()}-r${rep}`;
+      const empty: RunData = { scenario: sc, rep, conversationId, turns: [], tickets: [], escalations: [], events: [], capped: false };
+      results.push({ run: empty, checks: [[false, message]], judgments: [], passed: false, failedChecks: [message], judgeFlags: [] });
+      const { data: exists } = await db.from("conversations").select("conversation_id").eq("conversation_id", conversationId).maybeSingle();
+      if (!NO_WRITE) await db.from("evaluations").insert({ run_id: RUN_ID, conversation_id: exists ? conversationId : null, scenario: `${sc.id} ${sc.title}`, expected: sc.expected, actual: "(run did not complete)", passed: false, notes: message });
+      continue;
+    }
     for (const t of run.turns) console.log(`   t${t.index} [${t.answerType}] ${t.tools.map((c) => `${c.tool}:${c.status}`).join(" ") || "no tools"} | ${t.spoken.slice(0, 160)}`);
     const toolEvidence = await replayToolEvidence(db, run);
     const judgments: Evaluated["judgments"] = [];
