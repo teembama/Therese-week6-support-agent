@@ -129,6 +129,11 @@ export const SOCIAL_LINES = {
   declined_offer: "No problem. Is there anything else I can help you with?",
 } as const;
 
+/** Conversation ids from our test and eval scripts are recorded as channel 'test', never 'voice'. */
+export function channelFor(conversationId: string): "test" | "voice" {
+  return conversationId.startsWith("test-") || conversationId.startsWith("eval-") ? "test" : "voice";
+}
+
 /** Spoken when the gate blocks a reply. */
 export const SAFE_DECLINE_LINE =
   "I'm sorry, I can't confirm that from our support information. I can connect you with a RelayPay support specialist if you'd like.";

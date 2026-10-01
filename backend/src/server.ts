@@ -20,7 +20,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServiceClient, newAttemptId, summarize, transcriptHash, type Db, type LogContext } from "@relaypay/shared";
-import { EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, MAX_CONCURRENT_TURNS, SHUTDOWN_GRACE_MS, STALE_SWEEP_INTERVAL_MS } from "./config.js";
+import { channelFor, EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, MAX_CONCURRENT_TURNS, SHUTDOWN_GRACE_MS, STALE_SWEEP_INTERVAL_MS } from "./config.js";
 import { Admission } from "./admission.js";
 import { startStaleSweeper } from "./stale-sweep.js";
 import { debugDetails, shapeOf } from "./debug-shape.js";
@@ -189,7 +189,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
     {
       db,
       ctx,
-      channel: ctx.conversationId.startsWith("test-") ? "test" : "voice",
+      channel: channelFor(ctx.conversationId),
       caller: turn.caller,
       userText: turn.userText,
       history: turn.history,

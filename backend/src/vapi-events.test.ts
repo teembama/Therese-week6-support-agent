@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { channelFor } from "./config.js";
 import { buildSummary, classifyEvent, finalStatusFor, isAnswered, vapiMetricsFrom } from "./vapi-events.js";
 
 // Recorded shape (ServerMessageEndOfCallReport, https://api.vapi.ai/api-json); values made up.
@@ -79,5 +80,13 @@ describe("classifyEvent", () => {
     assert.deepEqual(classifyEvent({ message: { type: "status-update", status: "in-progress" } }), { kind: "ignored", type: "status-update" });
     assert.equal(classifyEvent(null).kind, "ignored");
     assert.equal(classifyEvent({ message: { type: "end-of-call-report", call: {} } }).kind, "ignored");
+  });
+});
+
+describe("channelFor", () => {
+  it("test- and eval- conversations are channel 'test'; Vapi call ids are 'voice'", () => {
+    assert.equal(channelFor("test-agent-x"), "test");
+    assert.equal(channelFor("eval-2026-10-01-s1-r1"), "test");
+    assert.equal(channelFor("01a0f455-5eaa-7007-ae47-d1b6dc28065c"), "voice");
   });
 });

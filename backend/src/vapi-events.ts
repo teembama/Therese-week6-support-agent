@@ -11,6 +11,7 @@
 //   performanceMetrics: { turnLatencies[], modelLatencyAverage, ... } } } }.
 
 import type { Db } from "@relaypay/shared";
+import { channelFor } from "./config.js";
 
 export type FinalStatus = "completed" | "failed";
 
@@ -143,7 +144,7 @@ export async function recordEndOfCall(db: Db, conversationId: string, message: R
   let created = false;
   if (!existing) {
     const { error } = await db.from("conversations").upsert(
-      { conversation_id: conversationId, channel: conversationId.startsWith("test-") ? "test" : "voice", ...(startedAt ? { started_at: startedAt } : {}) },
+      { conversation_id: conversationId, channel: channelFor(conversationId), ...(startedAt ? { started_at: startedAt } : {}) },
       { onConflict: "conversation_id", ignoreDuplicates: true },
     );
     if (error) throw new Error(`conversation insert failed (${error.code}): ${error.message}`);
