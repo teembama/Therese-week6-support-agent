@@ -238,7 +238,7 @@ const INTERNAL_TERMS = ["compliance"];
 export type FilterMode = "full" | "promises";
 
 export interface SentenceFilterOptions {
-  /** "full": every blocking check (answer, escalate). "promises": outcome/timeline promises only (clarify, decline). */
+  /** "full": every blocking check (the gate uses it for every non-social reply, D58). "promises": outcome/timeline promises and internal terms only (kept for direct callers and tests). */
   mode?: FilterMode;
   /** Successful tool results observed in this attempt (JSON text); evidence like chunks (D41). */
   records?: readonly string[];

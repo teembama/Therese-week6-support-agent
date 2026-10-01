@@ -277,7 +277,7 @@ function main(): void {
     if (store) speakFallback(store.res, store.model);
   });
   // After an uncaught exception process state can't be trusted: log and exit(1), relying on the
-  // host's automatic restart (Fly.io restarts crashed machines; locally, restart by hand).
+  // host's automatic restart (Railway restarts on failure, railway.json; locally, restart by hand).
   process.on("uncaughtException", (err) => {
     log({ event: "uncaught_exception", request_identified: Boolean(requestContext.getStore()), ...errorDetails(err) });
     process.exit(1);

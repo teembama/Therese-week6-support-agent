@@ -2,8 +2,9 @@
 // with fixture outputs (gate.test.ts).
 //
 // Rules:
-// - Nothing is spoken until a valid header [[type=answer|clarify|decline; kb=<ids|none>]] has
-//   been parsed at the very start of an assistant message, complete within HEADER_WINDOW_CHARS.
+// - Nothing is spoken until a valid header has been parsed at the very start of an assistant
+//   message, complete within HEADER_WINDOW_CHARS: [[type=answer|clarify|decline|escalate;
+//   kb=<ids|none>; tool=<name|none>]] or [[type=social; intent=...]].
 // - type=answer needs at least one cited kb id in this turn's IN-MEMORY retrieved set.
 // - Text in a message without a valid header is never spoken. If such a message ends the turn,
 //   the turn is blocked: the caller hears SAFE_DECLINE_LINE, answer_type 'blocked'.
@@ -15,21 +16,23 @@
 // spoken if it had no valid header. If it had a valid header and a sentence was already spoken
 // when the tool_use block started, output from that message stops at once and the turn records
 // a gate_violation with exactly what had been sent (the SDK delivers events in order, so
-// nothing after the tool_use start is ever written). With the current agent config there are
-// no tools, so this path cannot occur in production today (docs/decisions.md D23).
+// nothing after the tool_use start is ever written). The six MCP tools make this reachable; the
+// turn continues and the next message must earn its own header (D47).
 //
 // Tool-backed answers (D41): the header is [[type=...; kb=<ids|none>; tool=<name|none>]]. A
 // type=answer needs a cited chunk from this attempt's retrieval OR a named grounding tool that the
 // BACKEND saw return status success in this attempt (GateEvidence.tools); the model's claim alone
 // never counts. type=escalate (the escalation flow) needs neither.
 //
-// Runtime sentence filter (D37, D41): when the gate is given the turn's evidence, every sentence is
-// checked before it is released. answer and escalate get the full SentenceFilter (strengthening
-// words, invented attribution, unsupported numbers, outcome/timeline promises, and record
-// statuses/dates when a tool result is in the evidence); clarify and decline get the promise
-// checks only. Evidence = cited chunks + successful tool results of this attempt + the caller's
-// words. A flagged sentence is dropped, not spoken; if a message's every sentence is dropped, the
-// turn is blocked and the caller hears SAFE_DECLINE_LINE.
+// Runtime sentence filter (D37, D41, D58): when the gate is given the turn's evidence, every
+// sentence of every non-social reply is checked before it is released, with the full
+// SentenceFilter (strengthening words, invented attribution, unsupported numbers, outcome and
+// timeline promises, invented reference prefixes, "compliance", and record statuses/dates when a
+// tool result is in the evidence). Evidence = cited chunks (answers only) + successful tool results
+// of this attempt + the caller's words; decline, clarify and escalate also get the
+// speculative-diagnosis check. A flagged sentence is repaired (D62), trimmed to its leading clause
+// (D64), or dropped. If a message's every sentence is dropped, the turn is blocked and the caller
+// hears SAFE_DECLINE_LINE. A decline with no evidence at all is replaced by SAFE_DECLINE_LINE (D67).
 
 import { performance } from "node:perf_hooks";
 import { SentenceFilter, type GroundingFlag, type SentenceFilterOptions } from "@relaypay/shared";

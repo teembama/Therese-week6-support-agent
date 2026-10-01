@@ -99,7 +99,7 @@ The full design is in [docs/system-overview.md](docs/system-overview.md), and ev
    ```
    Check it: `curl http://localhost:8787/health` → `{"status":"ok"}`.
 
-   The voice page at `http://localhost:8787/` needs Vapi to reach your backend, which a laptop isn't reachable for. Either expose it through a tunnel and set Vapi's URL to the tunnel (see Troubleshooting), or use the deployed service.
+   The voice page at `http://localhost:8787/` only works if Vapi can reach your backend over the internet, and a laptop on a home or office network usually isn't reachable from outside. Either expose it through a tunnel and point Vapi's URLs at the tunnel (see Troubleshooting), or use the deployed service.
 
 ## Run the MCP server standalone (MCP Inspector)
 
