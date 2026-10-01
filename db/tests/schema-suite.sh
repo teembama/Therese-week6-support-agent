@@ -19,7 +19,7 @@ eq "$(q "select count(*) from customers")" 5 "customers loaded"
 eq "$(q "select count(*) from transactions")" 5 "transactions loaded"
 eq "$(q "select count(*) from payouts")" 3 "payouts loaded"
 eq "$(q "select estimated_arrival is null from transactions where transaction_id='TXN-9003'")" t "empty CSV cell -> NULL"
-eq "$(q "select count(*) filter (where relrowsecurity) || '/' || count(*) from pg_class where relnamespace='public'::regnamespace and relkind='r'")" 13/13 "RLS enabled on every table (incl. turn_attempts, conversation_events)"
+eq "$(q "select count(*) filter (where relrowsecurity) || '/' || count(*) from pg_class where relnamespace='public'::regnamespace and relkind='r'")" 14/14 "RLS enabled on every table (incl. turn_attempts, conversation_events, notification_outbox)"
 eq "$(q "select count(*) from pg_policies where schemaname='public'")" 0 "no RLS policies"
 
 echo "--- constraint rejections"
@@ -219,6 +219,52 @@ eq "$(q "select final_status from conversations where conversation_id='call-idle
 eq "$(q "select ended_at = (select started_at from turn_attempts where attempt_id='ATT-IDLE') from conversations where conversation_id='call-idle'")" t "ended_at = last activity (the attempt start)"
 eq "$(q "select status||'|'||status_reason from turn_attempts where attempt_id='ATT-IDLE'")" "failed|stale" "its still-active attempt -> failed (stale)"
 eq "$(SR "select abandon_stale_conversations()")" 0 "second run marks nothing"
+
+echo "--- migration 006: escalation enrichment and the notification outbox (D82)"
+pg -c "insert into conversations(conversation_id,channel) values ('call-enr','voice')"
+pg -c "insert into turn_attempts(attempt_id,conversation_id,turn_index,transcript_hash) values ('ATT-SPEC','call-enr',3,'h-spec')"
+ENR="select ticket_id||'|'||escalation_id||'|'||created||'|'||updated from create_escalation_with_ticket(
+  p_attempt_id => ATT, p_conversation_id => 'call-enr', p_ticket_idempotency_key => 'tk-enr', p_escalation_idempotency_key => 'esc-enr',
+  p_category => 'account', p_ticket_summary => 'Account restricted', p_reason => 'Account restriction',
+  p_user_name => 'Amara Okafor', p_user_email => 'amara@lagosledger.example', p_call_booked => BOOKED, p_preferred_time_text => TIME)"
+call_enr() { SR "$(echo "$ENR" | sed "s/ATT/'$1'/; s/BOOKED/$2/; s/TIME/$3/")"; }
+E1=$(call_enr ATT-SPEC false null)
+eq "${E1##*|}" false "speculative attempt creates the escalation without a time (updated=false)"
+eq "$(echo "$E1" | cut -d'|' -f3)" true "speculative attempt: created=true"
+eq "$(q "select coalesce(preferred_time_text,'NULL')||'|'||call_booked from escalations where idempotency_key='esc-enr'")" "NULL|false" "stored without a time, call_booked false"
+# The speculative attempt is replaced; the full attempt carries the time.
+pg -c "update turn_attempts set status='replaced', ended_at=now() where attempt_id='ATT-SPEC'"
+pg -c "insert into turn_attempts(attempt_id,conversation_id,turn_index,transcript_hash) values ('ATT-FULL','call-enr',3,'h-full')"
+E2=$(call_enr ATT-FULL true "'tomorrow morning'")
+eq "$(echo "$E2" | cut -d'|' -f1-2)" "$(echo "$E1" | cut -d'|' -f1-2)" "full attempt returns the SAME ticket and escalation"
+eq "$(echo "$E2" | cut -d'|' -f3-4)" "false|true" "full attempt: created=false, updated=true"
+eq "$(q "select count(*) from escalations where idempotency_key='esc-enr'")" 1 "still exactly one escalation row"
+eq "$(q "select preferred_time_text||'|'||call_booked from escalations where idempotency_key='esc-enr'")" "tomorrow morning|true" "missing time filled, call_booked true"
+E3=$(call_enr ATT-FULL true "'Friday 3pm'")
+eq "$(echo "$E3" | cut -d'|' -f3-4)" "false|false" "a later, different time: updated=false"
+eq "$(q "select preferred_time_text from escalations where idempotency_key='esc-enr'")" "tomorrow morning" "a set time is never overwritten"
+pg -c "insert into turn_attempts(attempt_id,conversation_id,turn_index,transcript_hash) values ('ATT-BLANK','call-enr',4,'h-b')"
+E4=$(SR "$(echo "$ENR" | sed "s/ATT/'ATT-BLANK'/; s/BOOKED/true/; s/TIME/'   '/; s/'esc-enr'/'esc-blank'/; s/'tk-enr'/'tk-blank'/")")
+eq "$(q "select coalesce(preferred_time_text,'NULL')||'|'||call_booked from escalations where idempotency_key='esc-blank'")" "NULL|false" "a blank time is stored as NULL, call_booked false"
+pg -c "update turn_attempts set status='replaced', ended_at=now() where attempt_id='ATT-FULL'"
+has_code "$(perr "set role service_role; select * from create_escalation_with_ticket(p_attempt_id => 'ATT-FULL', p_conversation_id => 'call-enr', p_ticket_idempotency_key => 'tk-blank', p_escalation_idempotency_key => 'esc-blank', p_category => 'account', p_ticket_summary => 's', p_reason => 'r', p_user_name => 'A', p_user_email => 'a@b.co', p_call_booked => true, p_preferred_time_text => 'tonight')")" "P0001: ATTEMPT_NOT_ACTIVE" "enrichment by a replaced attempt is denied by the guard"
+eq "$(q "select coalesce(preferred_time_text,'NULL') from escalations where idempotency_key='esc-blank'")" "NULL" "denied enrichment changed nothing"
+# Outbox.
+eq "$(q "select string_agg(kind, ',' order by id) from notification_outbox where conversation_id='call-enr'")" "escalation_created,escalation_updated,escalation_created" "outbox: created, updated (once), created (blank-time escalation)"
+eq "$(q "select payload->>'preferred_time_text' from notification_outbox where kind='escalation_updated' and conversation_id='call-enr'")" "tomorrow morning" "the update notification carries the new time"
+eq "$(q "select count(*) from notification_outbox where payload::text ~* 'amount|currency|support_notes'")" 0 "no amounts or notes in any payload"
+eq "$(q "select status||'|'||attempts from notification_outbox where kind='escalation_updated' and conversation_id='call-enr'")" "pending|0" "queued as pending (no sender in 006)"
+pg -c "insert into turn_attempts(attempt_id,conversation_id,turn_index,transcript_hash) values ('ATT-TK6','call-enr',5,'h-tk6')"
+TK6="select created from create_support_ticket_guarded('ATT-TK6','call-enr',null,'TXN-9004',null,'payment','Payment failed, beneficiary details','tk6')"
+eq "$(SR "$TK6")|$(SR "$TK6")" "t|f" "ticket: created, then the repeat returns it"
+eq "$(q "select count(*)||'|'||max(payload->>'priority') from notification_outbox where kind='ticket_created' and conversation_id='call-enr'")" "1|high" "exactly one ticket_created notification (priority high for failed TXN-9004)"
+neg "insert into notification_outbox(conversation_id,kind,ref_id,dedupe_key,payload) select conversation_id,kind,ref_id,dedupe_key,payload from notification_outbox where kind='ticket_created' and conversation_id='call-enr'" "duplicate dedupe_key"
+neg "insert into notification_outbox(conversation_id,kind,ref_id,dedupe_key,payload) values ('call-enr','sms_sent','x','k-x','{}')" "unknown notification kind"
+neg "insert into notification_outbox(conversation_id,kind,ref_id,dedupe_key,payload,status) values ('call-enr','ticket_created','x','k-y','{}','sent')" "status sent without sent_at"
+eq "$(q "select relrowsecurity from pg_class where relname='notification_outbox'")" t "RLS enabled on notification_outbox"
+eq "$(q "select has_table_privilege('anon','notification_outbox','select')")|$(q "select has_table_privilege('authenticated','notification_outbox','select')")" "f|f" "anon/authenticated have no SELECT on the outbox"
+eq "$(q "select has_function_privilege('anon','queue_notification(text,text,text,text,jsonb)','execute')")|$(q "select has_function_privilege('service_role','queue_notification(text,text,text,text,jsonb)','execute')")" "f|t" "only service_role executes queue_notification"
+eq "$(SR "select log_conversation_event_guarded('ATT-TK6','call-enr',5,'escalation_updated','Escalation enriched',jsonb_build_object('field','preferred_time_text')) is not null")" t "event type escalation_updated accepted"
 
 # Privileges on every new or replaced function.
 for fn in "check_attempt_scope(text,text,integer)" "create_support_ticket_guarded(text,text,text,text,text,text,text,text)" "create_escalation_with_ticket(text,text,text,text,text,text,text,text,text,text,text,text,boolean,text)" "set_verified_customer(text,text,text)" "log_conversation_event_guarded(text,text,integer,text,text,jsonb)" "begin_turn_attempt(text,text,text,integer,text,text,text)" "abandon_stale_conversations(integer)"; do

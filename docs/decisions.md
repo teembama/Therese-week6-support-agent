@@ -1526,6 +1526,49 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `social-fast-path.test.ts`: "No thanks." / "No, thank you." after the off-topic line → goodbye.
   - The backend suite has 230 tests, all passing.
 
+### D82. Escalation enrichment and the notification outbox (migration 006; Part C step 1, 2026-10-01)
+
+- **Observed (live call `01a0f833…`, 16:02):**
+  - The caller gave "tomorrow morning", and the `create_escalation` call carried `preferred_time_text: "tomorrow morning"`.
+  - But the stored escalation ESC-F215353A has `preferred_time_text = null`, `call_booked = false`. The tool returned "existing": an earlier, speculative attempt of the same turn had already created the escalation without the time (same idempotency key).
+  - Idempotency correctly prevented a duplicate escalation, but the later, fuller call's information was lost.
+- **Principle:**
+  - Speculative attempts can perform writes before they're replaced (Vapi sends partial transcripts; D28). The attempt guard only stops writes *after* replacement.
+  - **Idempotency prevents duplicates; enrichment prevents information loss.**
+- **Change** (`db/migrations/006_escalation_enrichment_and_outbox.sql`):
+  1. **`create_escalation_with_ticket` v3** (same arguments, now also returns `updated`).
+     - When the escalation already exists, it locks the row (`FOR UPDATE`) and fills **only missing fields** from this call: `preferred_time_text` when null, with `call_booked = true` alongside it. A blank time counts as missing.
+     - A set value is **never overwritten**.
+     - Still inside the attempt guard: a replaced attempt can't enrich.
+     - `user_email` is `NOT NULL`, so it is never missing and never enriched. A new escalation is stored with `call_booked` true only when a time is given (D72).
+  2. **`conversation_events.event_type`** gains `escalation_updated`.
+  3. **`notification_outbox`** for team notifications.
+     - One row per ticket created, escalation created and escalation updated, written by the same database function in **the same transaction** as the record, so it exists exactly when the record committed.
+     - `dedupe_key` is unique (`escalation_created:ESC-…`, `escalation_updated:ESC-…:preferred_time`, `ticket_created:TKT-…`): a repeat never queues a second message.
+     - The payload comes only from the ticket or escalation row: IDs, category, priority, customer ID, reason or summary, preferred time, and the caller's email for escalations. **No amounts or support notes.**
+     - Status is pending, sent or failed, with attempts, last error and `sent_at`.
+     - RLS on; no access for anon or authenticated; `queue_notification()` is service_role only.
+     - **The Discord sender is not built**: rows stay pending.
+- **MCP** (`create_escalation`):
+  - Reads `updated`. A missing flag counts as false, so the code is compatible with 005 and 006.
+  - On an existing escalation it reports the **stored** `call_booked` and `preferred_time_noted`.
+  - On enrichment it logs `escalation_updated` best-effort (D68).
+- **Tests** (throwaway local Postgres, every migration applied in order; `npm run db:test`): `schema-suite.sh` **156/156** (25 new for 006):
+  - a speculative attempt creates without a time → the full attempt with "tomorrow morning" → the same ticket and escalation, created=false, updated=true, still one row, time filled, call_booked true;
+  - a later, different time → updated=false and not overwritten;
+  - a blank time is stored as NULL;
+  - a replaced attempt's enrichment is denied (ATTEMPT_NOT_ACTIVE) and changes nothing;
+  - outbox kinds in order: created, updated once, created;
+  - the update payload carries the time;
+  - no amounts or notes in any payload;
+  - one ticket_created notification for a created-then-repeated ticket;
+  - duplicate dedupe_key, unknown kind and sent-without-`sent_at` rejected;
+  - outbox RLS and privileges;
+  - `escalation_updated` accepted as an event type.
+  - `race.sh` 5/5 against v3.
+  - `test:tools` 69/69 against Supabase **still on 005** (backward compatible).
+- **Not yet applied to Supabase:** the user applies 006 in the SQL editor. After that, `test:tools` and a live S7 should be run again.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

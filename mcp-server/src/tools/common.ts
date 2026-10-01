@@ -34,7 +34,7 @@ export async function verifiedCustomerId(db: Db, conversationId: string): Promis
 
 export type EventType =
   | "identity_verified" | "identity_failed" | "identity_ambiguous" | "lookup_performed" | "clarification_requested"
-  | "escalation_created" | "ticket_created" | "declined_unsupported" | "gate_blocked" | "other";
+  | "escalation_created" | "escalation_updated" | "ticket_created" | "declined_unsupported" | "gate_blocked" | "other";
 
 /** Guarded event write (log_conversation_event_guarded); throws AttemptNotActiveError when superseded. */
 export async function logEvent(db: Db, ctx: LogContext, eventType: EventType, summary: string, metadata: Record<string, unknown> = {}): Promise<number> {

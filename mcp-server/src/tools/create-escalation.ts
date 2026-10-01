@@ -33,6 +33,8 @@ interface EscalationRow {
   ticket_id: string;
   escalation_id: string;
   created: boolean;
+  /** Migration 006 (D82): missing fields of an existing escalation were filled. Absent before 006. */
+  updated?: boolean;
 }
 
 export function escalationKeys(conversationId: string, category: string): { ticket: string; escalation: string } {
@@ -101,20 +103,36 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
   }, ctx.attemptId);
   const e = rows[0];
   if (!e) throw new Error("create_escalation_with_ticket returned no row");
-  const note = !e.created ? "" : await logEventBestEffort(db, ctx, "escalation_created", `Escalation ${e.escalation_id} (${input.category}) with ticket ${e.ticket_id}`, {
-      escalation_id: e.escalation_id, ticket_id: e.ticket_id, category: input.category, call_booked: callBooked,
-    });
+  const updated = e.updated === true;
+  // An existing escalation (D82): report what is STORED (a set time is never overwritten; a missing
+  // one may just have been filled), not this call's inputs.
+  let stored = { call_booked: callBooked, preferred_time_text: input.preferred_time_text ?? null };
+  if (!e.created) {
+    const { data: row, error: readError } = await db.from("escalations").select("call_booked, preferred_time_text").eq("escalation_id", e.escalation_id).maybeSingle();
+    if (readError) throw new Error(`escalations read failed (${readError.code}): ${readError.message}`);
+    if (row) stored = row as typeof stored;
+  }
+  const note = e.created
+    ? await logEventBestEffort(db, ctx, "escalation_created", `Escalation ${e.escalation_id} (${input.category}) with ticket ${e.ticket_id}`, {
+        escalation_id: e.escalation_id, ticket_id: e.ticket_id, category: input.category, call_booked: callBooked,
+      })
+    : updated
+      ? await logEventBestEffort(db, ctx, "escalation_updated", `Escalation ${e.escalation_id}: preferred callback time added`, {
+          escalation_id: e.escalation_id, ticket_id: e.ticket_id, fields: ["preferred_time_text", "call_booked"],
+        })
+      : "";
   return {
     status: "success",
     result: {
       escalation_id: e.escalation_id,
       ticket_id: e.ticket_id,
       escalation_status: "open",
-      call_booked: callBooked,
+      call_booked: stored.call_booked,
       duplicate: !e.created,
+      ...(updated ? { updated: true } : {}),
       follow_up_summary: followUpSummary(),
-      ...(input.preferred_time_text ? { preferred_time_noted: input.preferred_time_text } : {}),
+      ...(stored.preferred_time_text ? { preferred_time_noted: stored.preferred_time_text } : {}),
     },
-    resultSummary: `${e.created ? "created" : "existing"} ${e.escalation_id}/${e.ticket_id} ${input.category}; call_booked=${callBooked}; customer=${customerId ?? "unverified"}${note}`,
+    resultSummary: `${e.created ? "created" : updated ? "existing, enriched" : "existing"} ${e.escalation_id}/${e.ticket_id} ${input.category}; call_booked=${stored.call_booked}; customer=${customerId ?? "unverified"}${note}`,
   };
 }));
