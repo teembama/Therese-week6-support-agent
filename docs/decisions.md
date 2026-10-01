@@ -1264,6 +1264,25 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `test:endpoint`'s weather check asserts only `answer_type = decline`, which still holds.
 - **With fix 4a** (the synonyms), ROB-OVERSEAS itself now retrieves the fees chunk, so it is answered rather than declined. This rule covers the paraphrases that synonyms don't reach.
 
+### D68. Event writes are best-effort; an evidence-replay failure is evidence_error (Batch 3C fix 5; the fix for the observed audit M5 pattern, 2026-10-01)
+
+- **Observed (BEFORE eval, SEC-OTHER):** in the evidence replay, `lookup_customer` committed the verification (`set_verified_customer`). Then the `identity_verified` event write failed (`fetch failed`, 12.4 s), and the tool returned **`error`**.
+  - The conversation stayed verified; the next replayed call says "conversation verified as CUS-1001".
+  - This is audit finding M5, observed for real: a business action that succeeded, reported as a failure. In a live call the agent would have told the caller verification failed.
+- **MCP fix** (`logEventBestEffort` in `mcp-server/src/tools/common.ts`):
+  - The events that *record* an action already committed, or an outcome, are now best-effort: `identity_verified`, `identity_failed`, `identity_ambiguous`, `ticket_created` and `escalation_created`.
+  - A failed write is logged to stderr (`[relaypay-mcp] event … not recorded`) and appended to the tool call's `result_summary` (`; event_write_failed (<type>): <message>`). The tool's status and result are unchanged.
+  - **Not changed:** the `log_conversation_event` tool keeps the strict write, because there the event *is* the action.
+  - **Trade-off:** an event can now be missing while its ticket, escalation or verification exists. The `tool_calls` note shows it, and the business rows stay the source of truth.
+- **Runner fix** (`scripts/eval-scenarios.ts`):
+  - A replay fails when a lookup throws, or when the **replayed status differs from the status the agent got**.
+  - On failure the replay is retried once in a fresh evidence conversation (`…-retry`).
+  - If it fails again, the run is `evidence_error`: not judged, not a pass, with the reason in `evaluations.notes`.
+- **Tests:**
+  - `mcp-server/src/tools.test.ts`, 3: a "fetch failed" error object → note, no throw; a thrown error → note; success → empty note.
+  - `test:tools` 61/61 against Supabase: events are still written on the normal path.
+  - The runner change is exercised by the AFTER eval run; it has no unit test of its own.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

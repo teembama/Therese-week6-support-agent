@@ -1,7 +1,7 @@
 import { guardedRpc, normaliseEmail } from "@relaypay/shared";
 import * as z from "zod";
 import { withWriteToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, logEvent, parseArgs, serialised, verifiedCustomerId, writeLimitOutcome, writeLimitReached } from "./common.js";
+import { invalid, logEventBestEffort, parseArgs, serialised, verifiedCustomerId, writeLimitOutcome, writeLimitReached } from "./common.js";
 
 export const name = "create_escalation";
 
@@ -65,11 +65,9 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
   }, ctx.attemptId);
   const e = rows[0];
   if (!e) throw new Error("create_escalation_with_ticket returned no row");
-  if (e.created) {
-    await logEvent(db, ctx, "escalation_created", `Escalation ${e.escalation_id} (${input.category}) with ticket ${e.ticket_id}`, {
+  const note = !e.created ? "" : await logEventBestEffort(db, ctx, "escalation_created", `Escalation ${e.escalation_id} (${input.category}) with ticket ${e.ticket_id}`, {
       escalation_id: e.escalation_id, ticket_id: e.ticket_id, category: input.category, call_booked: callBooked,
     });
-  }
   return {
     status: "success",
     result: {
@@ -80,6 +78,6 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
       duplicate: !e.created,
       follow_up_summary: followUpSummary(email, input.preferred_time_text),
     },
-    resultSummary: `${e.created ? "created" : "existing"} ${e.escalation_id}/${e.ticket_id} ${input.category}; call_booked=${callBooked}; customer=${customerId ?? "unverified"}`,
+    resultSummary: `${e.created ? "created" : "existing"} ${e.escalation_id}/${e.ticket_id} ${input.category}; call_booked=${callBooked}; customer=${customerId ?? "unverified"}${note}`,
   };
 }));

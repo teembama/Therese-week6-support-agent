@@ -1,7 +1,7 @@
 // Helpers shared by the Batch 2B tools. conversation_id / turn_index / attempt_id always come
 // from ctx (the spawn environment, D9), never from tool input.
 
-import { guardedRpc, type Db, type LogContext } from "@relaypay/shared";
+import { guardedRpc, summarize, type Db, type LogContext } from "@relaypay/shared";
 import type * as z from "zod";
 import type { ToolOutcome } from "../tool-logging.js";
 
@@ -45,6 +45,25 @@ export async function logEvent(db: Db, ctx: LogContext, eventType: EventType, su
     p_summary: summary.slice(0, 500),
     p_metadata: metadata,
   }, ctx.attemptId);
+}
+
+/**
+ * Best-effort event write (D68), for the events that RECORD a business action that already
+ * committed (verification, ticket, escalation) or an outcome (identity failed). A failed event
+ * write must never turn that action into a tool error: BEFORE eval (2026-10-01) saw the
+ * verification commit, then the identity_verified write fail (fetch failed, 12.4 s), and the tool
+ * report `error` - the model would tell the caller verification failed although it succeeded
+ * (audit M5). The failure goes to stderr and is returned as a note for the tool_calls row.
+ */
+export async function logEventBestEffort(db: Db, ctx: LogContext, eventType: EventType, summary: string, metadata: Record<string, unknown> = {}): Promise<string> {
+  try {
+    await logEvent(db, ctx, eventType, summary, metadata);
+    return "";
+  } catch (err) {
+    const message = summarize(err instanceof Error ? err.message : String(err), 200);
+    console.error(`[relaypay-mcp] event ${eventType} not recorded for ${ctx.conversationId}#${ctx.turnIndex}: ${message}`);
+    return `; event_write_failed (${eventType}): ${message}`;
+  }
 }
 
 // ---- Per-conversation write cap (decision 2, D43): at most 2 plain tickets and 1 escalation per

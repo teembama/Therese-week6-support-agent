@@ -1,7 +1,7 @@
 import { guardedRpc, normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withWriteToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, logEvent, notAvailable, parseArgs, serialised, verifiedCustomerId, writeLimitOutcome, writeLimitReached } from "./common.js";
+import { invalid, logEventBestEffort, notAvailable, parseArgs, serialised, verifiedCustomerId, writeLimitOutcome, writeLimitReached } from "./common.js";
 
 export const name = "create_support_ticket";
 
@@ -78,14 +78,12 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
   }, ctx.attemptId);
   const t = rows[0];
   if (!t) throw new Error("create_support_ticket_guarded returned no row");
-  if (t.created) {
-    await logEvent(db, ctx, "ticket_created", `Ticket ${t.ticket_id} (${input.category}, ${t.priority})`, {
+  const note = !t.created ? "" : await logEventBestEffort(db, ctx, "ticket_created", `Ticket ${t.ticket_id} (${input.category}, ${t.priority})`, {
       ticket_id: t.ticket_id, category: input.category, priority: t.priority, transaction_id: transactionId, payout_id: payoutId,
     });
-  }
   return {
     status: "success",
     result: { ticket_id: t.ticket_id, ticket_status: t.status, priority: t.priority, duplicate: !t.created },
-    resultSummary: `${t.created ? "created" : "existing"} ${t.ticket_id} ${input.category}/${t.priority}; customer=${customerId ?? "unverified"}`,
+    resultSummary: `${t.created ? "created" : "existing"} ${t.ticket_id} ${input.category}/${t.priority}; customer=${customerId ?? "unverified"}${note}`,
   };
 }));

@@ -414,10 +414,10 @@ async function chunkTexts(db: Db, ids: string[]): Promise<string[]> {
 }
 
 /** Replays the run's tool calls in order; returns, per turn, the tool results as the agent saw them. */
-async function replayToolEvidence(db: Db, r: RunData): Promise<string[][]> {
+async function replayToolEvidence(db: Db, r: RunData, suffix = ""): Promise<string[][]> {
   const perTurn: string[][] = r.turns.map(() => []);
   if (!r.turns.some((t) => t.tools.length)) return perTurn;
-  const evId = `eval-ev-${r.conversationId.slice(5)}`;
+  const evId = `eval-ev-${r.conversationId.slice(5)}${suffix}`;
   const attemptId = newAttemptId();
   const { error } = await db.rpc("begin_turn_attempt", {
     p_conversation_id: evId, p_channel: "test", p_caller: "scripts/eval-scenarios.ts (evidence replay)", p_turn_index: 0,
@@ -437,6 +437,9 @@ async function replayToolEvidence(db: Db, r: RunData): Promise<string[][]> {
           try { args = JSON.parse(c.input) as Row; } catch { /* truncated input */ }
           if (!args) { perTurn[t.index]!.push(`[tool ${c.tool} -> ${c.status}] (input not replayable) ${c.result}`); continue; }
           const res = await client.callTool({ name: c.tool, arguments: args });
+          const replayed = String((res.structuredContent as Row | undefined)?.["status"] ?? "");
+          // The replay must reproduce what the agent got; otherwise the evidence is wrong (D68).
+          if (replayed !== c.status) throw new Error(`replay of ${c.tool} returned ${replayed || "nothing"}, the agent got ${c.status}`);
           perTurn[t.index]!.push(`[tool ${c.tool} -> ${c.status}] ${JSON.stringify(res.structuredContent ?? {})}`);
         } else {
           perTurn[t.index]!.push(`[tool ${c.tool} -> ${c.status}] ${c.result}`);
@@ -629,15 +632,28 @@ async function main(): Promise<number> {
       continue;
     }
     for (const t of run.turns) console.log(`   t${t.index} [${t.answerType}] ${t.tools.map((c) => `${c.tool}:${c.status}`).join(" ") || "no tools"} | ${t.spoken.slice(0, 160)}`);
-    const toolEvidence = await replayToolEvidence(db, run);
+    // Evidence replay, retried once in a fresh evidence conversation (D68). If it still fails, the
+    // run is evidence_error: not judged, and not a pass.
+    let toolEvidence: string[][] | null = null;
+    let evidenceError = "";
+    for (const suffix of ["", "-retry"]) {
+      try {
+        toolEvidence = await replayToolEvidence(db, run, suffix);
+        break;
+      } catch (err) {
+        evidenceError = `evidence_error: ${(err as Error).message.slice(0, 200)}`;
+        console.log(`   (${evidenceError}${suffix ? "" : "; retrying once"})`);
+      }
+    }
     const judgments: Evaluated["judgments"] = [];
-    for (const t of run.turns) {
+    for (const t of toolEvidence ? run.turns : []) {
       const chunks = await chunkTexts(db, t.kbIds);
       const callerWords = run.turns.slice(0, t.index + 1).map((x) => `[caller] ${x.caller}`);
       const evidence = [...chunks, ...(toolEvidence[t.index] ?? []), ...callerWords].join("\n\n");
       judgments.push({ turn: t.index, result: await judge(t.spoken, evidence) });
     }
     const checks = [...sc.checks(run), ...commonChecks(run)];
+    if (!toolEvidence) checks.push([false, `${evidenceError} (not judged)`]);
     if (run.capped) checks.push([false, "incomplete: cost cap reached mid-conversation"]);
     const failedChecks = checks.filter(([ok]) => !ok).map(([, l]) => l);
     const judgeFlags = judgments.flatMap(({ turn, result }) => [

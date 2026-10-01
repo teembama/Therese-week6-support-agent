@@ -6,7 +6,7 @@ import { escalationKeys, followUpSummary, inputSchema as escalationInput } from 
 import { inputSchema as ticketInput, ticketIdempotencyKey } from "./tools/create-support-ticket.js";
 import { inputSchema as eventInput } from "./tools/log-conversation-event.js";
 import { accountEscalation } from "./tools/lookup-customer.js";
-import { customerSafeStatus, customerSafeSummary } from "./tools/common.js";
+import { customerSafeStatus, customerSafeSummary, logEventBestEffort } from "./tools/common.js";
 import { payoutSupportSummary, safeFailureReason } from "./tools/lookup-payout.js";
 import { pastEstimatedArrival, transactionEscalation } from "./tools/lookup-transaction.js";
 
@@ -96,5 +96,23 @@ describe("log_conversation_event", () => {
       assert.equal(eventInput.safeParse({ event_type: t, summary: "x" }).success, false, t);
     }
     assert.equal(eventInput.safeParse({ event_type: "declined_unsupported", summary: "Asked about crypto" }).success, true);
+  });
+});
+
+describe("logEventBestEffort (D68: an event failure never turns a committed action into a tool error)", () => {
+  const ctx = { conversationId: "test-conv", turnIndex: 0, attemptId: "ATT-TEST" };
+  type FakeDb = Parameters<typeof logEventBestEffort>[0];
+  it("BEFORE-eval M5 shape: the event RPC reports 'fetch failed' -> a note, no throw", async () => {
+    const db = { rpc: async () => ({ data: null, error: { code: "", message: "TypeError: fetch failed" } }) } as unknown as FakeDb;
+    const note = await logEventBestEffort(db, ctx, "identity_verified", "Caller verified as CUS-1001");
+    assert.match(note, /^; event_write_failed \(identity_verified\): .*fetch failed/);
+  });
+  it("the RPC itself throws -> a note, no throw", async () => {
+    const db = { rpc: async () => { throw new TypeError("fetch failed"); } } as unknown as FakeDb;
+    assert.match(await logEventBestEffort(db, ctx, "ticket_created", "Ticket TKT-1"), /event_write_failed \(ticket_created\)/);
+  });
+  it("success -> empty note", async () => {
+    const db = { rpc: async () => ({ data: 1, error: null }) } as unknown as FakeDb;
+    assert.equal(await logEventBestEffort(db, ctx, "escalation_created", "Escalation ESC-1"), "");
   });
 });

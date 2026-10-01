@@ -1,7 +1,7 @@
 import { contactNameMatches, guardedRpc, normaliseEmail, normaliseName, normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withWriteToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { invalid, logEvent, parseArgs } from "./common.js";
+import { invalid, logEventBestEffort, parseArgs } from "./common.js";
 
 export const name = "lookup_customer";
 
@@ -79,15 +79,15 @@ export const handler = withWriteToolLogging(name, "Verify identity (two identifi
     (!input.contact_name || contactNameMatches(input.contact_name, c.contact_name)));
 
   if (matches.length === 0) {
-    await logEvent(db, ctx, "identity_failed", "Identity not verified: the identifiers did not match one customer", { identifiers: given });
-    return { status: "not_found", result: { found: false, verified: false, reason: "no_match", message: NOT_VERIFIED_MESSAGE }, resultSummary: `no_match (given: ${given.join(",")})` };
+    const note = await logEventBestEffort(db, ctx, "identity_failed", "Identity not verified: the identifiers did not match one customer", { identifiers: given });
+    return { status: "not_found", result: { found: false, verified: false, reason: "no_match", message: NOT_VERIFIED_MESSAGE }, resultSummary: `no_match (given: ${given.join(",")})${note}` };
   }
   if (matches.length > 1) {
-    await logEvent(db, ctx, "identity_ambiguous", "Identity not verified: the identifiers match more than one customer", { identifiers: given, candidates: matches.length });
+    const note = await logEventBestEffort(db, ctx, "identity_ambiguous", "Identity not verified: the identifiers match more than one customer", { identifiers: given, candidates: matches.length });
     return {
       status: "denied",
       result: { found: false, verified: false, reason: "ambiguous", message: "The details match more than one customer. Ask for another identifier, such as the customer ID or account email." },
-      resultSummary: `ambiguous: ${matches.length} candidates (given: ${given.join(",")})`,
+      resultSummary: `ambiguous: ${matches.length} candidates (given: ${given.join(",")})${note}`,
     };
   }
 
@@ -105,7 +105,7 @@ export const handler = withWriteToolLogging(name, "Verify identity (two identifi
     }
     throw err;
   }
-  await logEvent(db, ctx, "identity_verified", `Caller verified as ${c.customer_id}`, { customer_id: c.customer_id, identifiers: given });
+  const note = await logEventBestEffort(db, ctx, "identity_verified", `Caller verified as ${c.customer_id}`, { customer_id: c.customer_id, identifiers: given });
   return {
     status: "success",
     result: {
@@ -120,6 +120,6 @@ export const handler = withWriteToolLogging(name, "Verify identity (two identifi
       kyc_status: c.kyc_status,
       ...accountEscalation(c),
     },
-    resultSummary: `verified ${c.customer_id} (given: ${given.join(",")})`,
+    resultSummary: `verified ${c.customer_id} (given: ${given.join(",")})${note}`,
   };
 });
