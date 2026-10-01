@@ -1121,7 +1121,12 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `final_status` would change on **1**: the 18:46 voice call `01a0f3a3…` (`silence-timed-out`), from `completed` to `failed`.
   - The other 5 are already `failed`: two `test-ep-…` with `pipeline-error-custom-llm-llm-failed`, and three voice calls with `…did-not-receive-customer-audio`.
   - All 6 summaries would gain the no-interaction sentence.
-  - **Not yet applied:** waiting for the user's go-ahead.
+  - **Data correction applied 2026-10-01 10:43 UTC**, on the user's explicit approval ("Item 5: apply"):
+    - **6 rows** in `conversations` were updated: `final_status = 'failed'` and " No interaction: no answered turn." appended to `summary`.
+    - Nothing else was touched (no other columns, tables or rows).
+    - The script re-selected the targets first (webhook-closed, 0 answered turns), and they matched the preview exactly. Each PATCH returned 1 row.
+    - The rows: `01a0f3a3-ffa3-7bb3-b798-dc9b8f6dc6e8` (status **completed → failed**), plus summary-only changes on the five already-failed rows: `01a0f395-4c08-7bbb-a739-0c5517a58a4e`, `01a0f396-098d-766b-909f-bb0a07d4518f`, `01a0f396-32ce-7997-ba5e-026b6d456e97`, `test-ep-2026-09-30T13-38-43-891Z-webhook-no-turns`, `test-ep-2026-09-30T13-51-35-605Z-webhook-no-turns`.
+    - **Why:** so these historical rows follow the same rule (D61) as every call recorded from now on.
 
 ### D62. Attribution repair: drop an invented "your" when the rest is verbatim evidence (Batch 3A item 6, 2026-10-01)
 
