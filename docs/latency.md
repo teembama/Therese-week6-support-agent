@@ -204,7 +204,27 @@ Call `01a0f455…` from the deployed web page: Railway EU West, Haiku, Soniox ST
 - Turn 2 is now a fast-path social reply (D56: `declined_offer` / `goodbye` with no model call). Its model latency should drop to the network overhead alone. Re-measure on the next live call.
 - n = 3. This is one call, not a distribution.
 
-## Regression found in the AFTER eval run (2026-10-01, not fixed)
+## The init regression in the AFTER eval run: before, after and cause (2026-10-01)
+
+| Deployment | Code | `init` p50 (CLI + MCP start) | First token p50 | Sample |
+| --- | --- | ---: | ---: | --- |
+| `113953b2` (BEFORE eval) | `c948bf1` | **412 ms** (343–537) | 1332 ms | 52 eval turns, mixed types |
+| `61844fd9` (AFTER eval) | `3639936` (fixes D64–D68) | **1043 ms** (840–1756) | 1944 ms | 52 eval turns, mixed types |
+| `328f527e` (re-measure) | `8d23e32` (+ mcp_entry log, D69) | **456 ms** (407–557) | **1431 ms** (p95 2274) | 10 KB-only runs (`test:deployed --kb-runs 10`) |
+
+- **Hypothesis tested: rejected.** The hypothesis was that file timestamps in the Docker build made the bundle look older than the compiled code, so the slower unbundled `main.js` was spawned.
+  - The backend now logs the entry file once per process (`event="mcp_entry"`).
+  - Both deployments since (`77d59c10`, `328f527e`) log `kind="bundle" path="/app/mcp-server/dist/bundle/server.mjs"`.
+  - Neither earlier deployment logged the main.js fallback line, which is printed whenever the fallback happens.
+  - So the bundle was used throughout, and the timestamp rule was not replaced.
+  - Inspecting the container's files directly (`railway ssh`) would need an SSH key added to the Railway account; that wasn't done.
+- **Cause: the container, not the code.** The same MCP bundle code on a fresh container measures `init` at 456 ms, against 412 ms before the fixes. Only `61844fd9` was slow.
+  - Retrieval and model time were unchanged throughout, so the +630 ms was host or container variance in process start.
+  - **Risk that remains:** Railway can place a deployment on a slower host, and per-turn process spawn (D24) makes that visible on every turn.
+  - Re-measure after each deploy (`test:deployed --kb-runs 10`). A long-lived MCP process (D24) would remove the dependency.
+- The original note follows.
+
+### Original note: regression found in the AFTER eval run (2026-10-01)
 
 The scenario eval (docs/testing-evidence.md) measured the same deployed service before and after the Batch 3C fixes, 52 turns each:
 
