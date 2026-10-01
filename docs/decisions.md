@@ -1241,6 +1241,29 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - So a product claim can never be "supported" by the procedure files, even if the judge mislabels the block it quotes.
 - **Not changed:** product and policy facts still need the turn's chunks or tool results. Example: SEC-AMOUNT's "you can view the amount in your dashboard" is still a fact claim.
 
+### D67. Evidence-free decline: the backend speaks the fixed safe-decline line (Batch 3C fix 4b, 2026-10-01)
+
+- **Observed (BEFORE eval, ROB-OVERSEAS):** "What's it cost to pay someone overseas?" retrieved **zero** chunks. The model declined, but in the same reply stated policy from memory: "…RelayPay displays the applicable fees before you confirm any transaction…".
+  - The statement is true, but nothing in the attempt supported it. With no evidence, the gate only checked the sentence for promises and patterns.
+- **Rule** (`StreamingGate`, at header validation):
+  - It fires when **all three** hold: `type=decline`, **this attempt retrieved no qualifying chunk** (the retrieved set is empty), and **no tool returned success**. A called but denied or failed tool doesn't count as evidence.
+  - Then the backend speaks `SAFE_DECLINE_LINE` and discards the model's text, as for social replies.
+  - Logged as note `decline_fixed_line` and log event `decline_fixed_line`.
+  - Only decline is replaced. An evidence-free clarify is still the model's own question.
+- **Tests:** `tool-grounding.test.ts`, 5:
+  - the BEFORE-eval ROB-OVERSEAS reply → the fixed line, no fee policy;
+  - a denied tool → still the fixed line;
+  - with a retrieved chunk → the model's decline as before;
+  - with a successful tool → as before;
+  - an evidence-free clarify → unchanged.
+  - The backend suite has 193 tests, all passing.
+- **Impact on stored declines (read-only):**
+  - 19 of the 51 stored declines that have a retrieval log meet the condition. One is the ROB-OVERSEAS case.
+  - The other 18 are off-topic declines (mostly weather) in which the model described RelayPay's products from memory ("cross-border payments, invoicing, contractor payouts…"). Those are also unsupported claims, and they now get the fixed line.
+  - That is safe but less natural for an off-topic question. Accepted: the fixed line still offers a specialist.
+  - `test:endpoint`'s weather check asserts only `answer_type = decline`, which still holds.
+- **With fix 4a** (the synonyms), ROB-OVERSEAS itself now retrieves the fees chunk, so it is answered rather than declined. This rule covers the paraphrases that synonyms don't reach.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

@@ -293,3 +293,40 @@ describe("outcome verbs without 'will' and invented reference prefixes (D65, BEF
     assert.equal(r.filtered.length, 0, JSON.stringify(r.filtered));
   });
 });
+
+describe("evidence-free decline -> fixed safe-decline line (D67)", () => {
+  const SAFE = "I'm sorry, I can't confirm that from our support information. I can connect you with a RelayPay support specialist if you'd like.";
+  const OVERSEAS = "[[type=decline; kb=none; tool=none]] I can't share specific costs over the phone, but RelayPay displays the applicable fees before you confirm any transaction, so you'll see what it costs. Would you like me to connect you with a RelayPay specialist?";
+  const gateWith = (retrieved: Set<string>, tools: ObservedTools) => {
+    const g = new StreamingGate(retrieved, undefined, { chunks: CHUNKS, callerText: "What's it cost to pay someone overseas?", tools });
+    g.start();
+    const spoken = g.text(OVERSEAS);
+    const end = g.end("end_turn");
+    if (end.kind === "final") spoken.push(...end.speak);
+    return { spoken, end, fixed: g.fixedDeclines };
+  };
+  it("BEFORE-eval ROB-OVERSEAS (zero chunks retrieved, no tool): the fixed line, no fee policy from memory", () => {
+    const r = gateWith(new Set(), observed([]));
+    assert.deepEqual(r.spoken, [SAFE]);
+    assert.equal(r.end.kind, "final");
+    assert.equal(r.fixed, 1);
+  });
+  it("a tool that was called but didn't succeed is not evidence: still the fixed line", () => {
+    const r = gateWith(new Set(), observed([["lookup_transaction", "denied"]]));
+    assert.deepEqual(r.spoken, [SAFE]);
+  });
+  it("with a retrieved chunk, the model's decline is spoken (through the filter) as before", () => {
+    const r = gateWith(RETRIEVED, observed([]));
+    assert.notDeepEqual(r.spoken, [SAFE]);
+    assert.equal(r.fixed, 0);
+  });
+  it("with a successful tool result, the model's decline is spoken as before", () => {
+    const r = gateWith(new Set(), observed([["lookup_transaction", "success", TXN_9001]]));
+    assert.equal(r.fixed, 0);
+  });
+  it("only decline is replaced: an evidence-free clarify is still the model's question", () => {
+    const g = new StreamingGate(new Set(), undefined, { chunks: CHUNKS, callerText: "What fees does", tools: observed([]) });
+    g.start();
+    assert.deepEqual(g.text("[[type=clarify; kb=none; tool=none]] Could you tell me what you're looking to send? "), ["Could you tell me what you're looking to send?"]);
+  });
+});

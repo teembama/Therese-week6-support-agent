@@ -399,6 +399,12 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         console.log(JSON.stringify({ event: "grounding_filtered", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: ctx.attemptId, checks, excerpt }));
       }
       // D62: spoken in repaired form ("your" removed); the note keeps both versions.
+      // D67: an evidence-free decline replaced by the fixed safe-decline line.
+      for (let n = gate?.fixedDeclines ?? 0; n > 0; n--) {
+        notes.push("decline_fixed_line: no qualifying chunk and no successful tool this attempt; model text discarded");
+        console.log(JSON.stringify({ event: "decline_fixed_line", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: ctx.attemptId }));
+      }
+      if (gate) gate.fixedDeclines = 0;
       // D64: or spoken with a flagged trailing clause cut (grounding_trimmed).
       for (const { kind, sentence, repaired, flags } of gate?.takeRepaired() ?? []) {
         notes.push(`grounding_${kind}: ${flags.map((x) => `${x.kind}(${x.term})`).join(",")}: ${summarize(sentence, 200)} -> ${summarize(repaired, 200)}`);

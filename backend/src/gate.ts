@@ -33,7 +33,7 @@
 
 import { performance } from "node:perf_hooks";
 import { SentenceFilter, type GroundingFlag, type SentenceFilterOptions } from "@relaypay/shared";
-import { HEADER_WINDOW_CHARS, LOOKUP_TOOL_NAMES, MCP_TOOL_PREFIX, SOCIAL_LINES } from "./config.js";
+import { HEADER_WINDOW_CHARS, LOOKUP_TOOL_NAMES, MCP_TOOL_PREFIX, SAFE_DECLINE_LINE, SOCIAL_LINES } from "./config.js";
 
 export type ReplyType = "answer" | "clarify" | "decline" | "escalate" | "social";
 
@@ -245,6 +245,10 @@ export class StreamingGate {
   private stoppedByTool = false;
   private verdict: Extract<HeaderVerdict, { ok: true }> | null = null;
   private socialIntent: SocialIntent | null = null;
+  /** D67: this message's decline had no evidence; the fixed safe-decline line was spoken instead. */
+  private fixedDecline = false;
+  /** Evidence-free declines replaced by the fixed line in this turn (for logging). */
+  fixedDeclines = 0;
   private filter: SentenceFilter | null = null;
   private filteredInMessage = 0;
   private filtered: FilteredSentence[] = [];
@@ -281,6 +285,7 @@ export class StreamingGate {
     this.stoppedByTool = false;
     this.verdict = null;
     this.socialIntent = null;
+    this.fixedDecline = false;
     this.filter = null;
     this.filteredInMessage = 0;
   }
@@ -289,7 +294,7 @@ export class StreamingGate {
   text(delta: string): string[] {
     this.raw += delta;
     if (this.stoppedByTool || this.headerState === "invalid") return [];
-    if (this.socialIntent) return []; // social: the fixed line was already spoken; model text is discarded
+    if (this.socialIntent || this.fixedDecline) return []; // a fixed line was already spoken; model text is discarded
     if (this.headerState === "pending") {
       const lead = this.raw.trimStart();
       if (lead.length > 0 && !lead.startsWith("[")) return this.invalidate("text before header");
@@ -313,6 +318,15 @@ export class StreamingGate {
         const line = socialLine(intent);
         this.spokenInMessage.push(line);
         return [line];
+      }
+      // D67: a decline with NO evidence this attempt (no qualifying chunk retrieved, no tool
+      // succeeded) has nothing to say beyond "can't confirm": speak the fixed line and discard the
+      // model's text, which otherwise restates policy from memory (BEFORE eval ROB-OVERSEAS).
+      if (header.type === "decline" && this.retrievedIds.size === 0 && (this.evidence?.tools?.records() ?? []).length === 0) {
+        this.fixedDecline = true;
+        this.fixedDeclines++;
+        this.spokenInMessage.push(SAFE_DECLINE_LINE);
+        return [SAFE_DECLINE_LINE];
       }
       if (this.evidence) {
         const records = this.evidence.tools?.records() ?? [];
@@ -345,7 +359,7 @@ export class StreamingGate {
     if (this.headerState !== "valid" || !this.verdict) {
       return { kind: "blocked", reason: this.invalidReason || "missing, malformed or late header", raw: this.raw.trim() };
     }
-    const speak = this.socialIntent ? [] : this.drain(true);
+    const speak = this.socialIntent || this.fixedDecline ? [] : this.drain(true);
     if (this.spokenInMessage.length === 0) {
       const reason = this.filteredInMessage ? `every sentence dropped by the grounding filter (${this.filteredInMessage})` : "empty reply after header";
       return { kind: "blocked", reason, raw: this.raw.trim() };
