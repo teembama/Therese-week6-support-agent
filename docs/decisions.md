@@ -1583,6 +1583,9 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - User-verified after applying: the old 13-argument `create_escalation_with_ticket` is gone (`to_regprocedure(...) is null` = true).
   - EXECUTE on `check_attempt_scope`, `create_support_ticket_guarded`, `create_escalation_with_ticket` (v2), `set_verified_customer`, `log_conversation_event_guarded`, `begin_turn_attempt` and `abandon_stale_conversations` is held by `service_role` and not by `anon`.
   - RLS is true on `conversation_events`.
+- 006 applied to Supabase from commit 015702d on 2026-10-01. The file is wrapped in `begin;` … `commit;`, like 001–005.
+  - User-verified after applying: RLS is true on `notification_outbox`.
+  - EXECUTE on `queue_notification`, `create_support_ticket_guarded` and `create_escalation_with_ticket` (v3) is held by `service_role` and not by `anon`.
 
 ## Task 1 findings, classified
 
