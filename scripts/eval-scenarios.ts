@@ -21,7 +21,7 @@
 // Usage: npm run eval:scenarios -- [--base-url https://<domain>] [--cap 1.00] [--prd-reps 3]
 //          [--only S1,S7,SEC-NOTES] [--estimate-only] [--no-write] [--out <results.json>]
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
@@ -459,6 +459,7 @@ async function replayToolEvidence(db: Db, r: RunData): Promise<string[][]> {
 const Judgment = z.object({
   claims: z.array(z.object({
     claim: z.string().min(1),
+    kind: z.enum(["fact", "procedural"]),
     label: z.enum(["supported", "unsupported", "strengthened"]),
     quote: z.string().nullable(),
   })),
@@ -475,9 +476,10 @@ const JUDGE_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["claim", "label", "quote"],
+        required: ["claim", "kind", "label", "quote"],
         properties: {
           claim: { type: "string" },
+          kind: { type: "string", enum: ["fact", "procedural"] },
           label: { type: "string", enum: ["supported", "unsupported", "strengthened"] },
           quote: { type: ["string", "null"] },
         },
@@ -499,7 +501,28 @@ Label each claim:
 
 For supported and strengthened claims, "quote" must be an exact, contiguous span copied character for character from the EVIDENCE (not from the reply) that supports the claim, at most 200 characters. For unsupported claims, quote is null.
 Caller words count as evidence only for what the caller said about themselves (their name, email, preferred time, what they asked for), never for facts about RelayPay.
-If the reply has no factual claims, return an empty claims list.`;
+If the reply has no factual claims, return an empty claims list.
+
+Two kinds of claim (D66):
+- "procedural": what the agent will do, who follows up, what a specialist handles, what the caller should provide (for example a reference's format). These may be supported by the APPROVED PROCEDURE block as well as by the turn's evidence.
+- "fact": everything else, including product and policy facts (fees, timelines, features, what the dashboard shows) and facts about the caller's records or account. These must be supported by the turn's chunks, tool results or caller words, NEVER by the approved procedure.
+Quote from the block that supports the claim.`;
+
+// Approved procedure corpus (D66): the PRD's own rules for what the agent does, so the judge
+// doesn't flag procedure the PRD requires. Procedural claims only; code enforces that a fact's
+// quote comes from the turn's evidence, never from here.
+function procedureCorpus(): string {
+  const prompt = readFileSync(resolve(REPO, "backend", "src", "prompt.ts"), "utf8");
+  const refRule = /A reference is the prefix and exactly four digits\./.exec(prompt)?.[0] ?? "";
+  return [
+    "[assets/escalation-rules.md]\n" + readFileSync(resolve(REPO, "assets", "escalation-rules.md"), "utf8"),
+    "[assets/support-decision-rules.md]\n" + readFileSync(resolve(REPO, "assets", "support-decision-rules.md"), "utf8"),
+    // The tool spec (assets/mcp-tool-requirements.md) gives no reference format; the agent's
+    // tool-input rule is the system prompt's, quoted verbatim, with the seed's examples.
+    `[reference formats: backend/src/prompt.ts tool-input rule]\nTransaction references look like TXN-9001 and payout references like PAY-7002. ${refRule}`,
+  ].join("\n\n");
+}
+let PROCEDURE = "";
 
 // Created on first use: main() loads .env (ANTHROPIC_API_KEY) before any judge call.
 let anthropic: Anthropic | null = null;
@@ -533,7 +556,7 @@ async function judge(reply: string, evidence: string): Promise<JudgeResult> {
       // thinking off (between_tools) and a strict JSON schema keep the judgment repeatable.
       thinking: { type: "between_tools" },
       output_config: { format: { type: "json_schema", schema: JUDGE_SCHEMA } },
-      messages: [{ role: "user", content: `<evidence>\n${evidence}\n</evidence>\n\n<spoken_reply>\n${text}\n</spoken_reply>` }],
+      messages: [{ role: "user", content: `<approved_procedure>\n${PROCEDURE}\n</approved_procedure>\n\n<evidence>\n${evidence}\n</evidence>\n\n<spoken_reply>\n${text}\n</spoken_reply>` }],
     } as unknown as Anthropic.MessageCreateParamsNonStreaming);
     spend.judge += res.usage.input_tokens * JUDGE_IN_PER_TOK + res.usage.output_tokens * JUDGE_OUT_PER_TOK;
     raw = res.content.filter((b) => b.type === "text").map((b) => (b as Anthropic.TextBlock).text).join("");
@@ -548,10 +571,13 @@ async function judge(reply: string, evidence: string): Promise<JudgeResult> {
     return { status: "judge_error", claims: [], error: `malformed judgment: ${(err as Error).message.slice(0, 200)}` };
   }
   const ev = norm(evidence);
+  const proc = norm(PROCEDURE);
   return {
     status: "ok",
     claims: parsed.claims.map((c) => {
-      const verified = c.label !== "unsupported" && c.quote !== null && c.quote.trim().length > 0 && ev.includes(norm(c.quote));
+      // A fact must quote the turn's evidence; a procedural claim may also quote the procedure (D66).
+      const q = c.quote === null ? "" : norm(c.quote);
+      const verified = c.label !== "unsupported" && q.length > 0 && (ev.includes(q) || (c.kind === "procedural" && proc.includes(q)));
       return { ...c, verified, effective: c.label === "unsupported" || !verified ? "unsupported" : c.label };
     }),
   };
@@ -571,6 +597,7 @@ interface Evaluated {
 async function main(): Promise<number> {
   process.loadEnvFile(resolve(REPO, ".env"));
   const db = createServiceClient();
+  PROCEDURE = procedureCorpus();
   const plan: Array<[Scenario, number]> = [];
   for (const sc of PRD) for (let i = 1; i <= PRD_REPS; i++) plan.push([sc, i]);
   for (const sc of [...SECURITY, ...ROBUSTNESS]) plan.push([sc, 1]);

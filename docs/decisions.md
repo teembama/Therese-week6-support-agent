@@ -1221,6 +1221,26 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - The backend suite has 188 tests, all passing.
 - **Replay** of the 149 stored decline/clarify/escalate replies (351 sentences): the new checks add **0** flags. Four "your payout" flags in that replay are an artifact: the replay has no tool records, while at runtime the payout record allows the noun.
 
+### D66. Judge evidence: an approved-procedure corpus, for procedural statements only (Batch 3C fix 3, 2026-10-01)
+
+- **Why:** in the BEFORE run, the judge flagged statements the PRD *requires* the agent to make, because its evidence was only the turn's chunks, tool results and caller words. Examples:
+  - "A RelayPay specialist needs to look at a restricted account" (S7 ×3; escalation-rules.md: "Tell the user that a RelayPay specialist needs to help");
+  - "the support team will follow up" (S6);
+  - "references start with TXN or PAY followed by four digits" (S2 ×2).
+  - **Flagging these measured the wrong thing.** They are procedure, not product claims, and the PRD's escalation and decision rules mandate them.
+- **Change** (`scripts/eval-scenarios.ts`):
+  - The judge also receives `<approved_procedure>`, made of:
+    - `assets/escalation-rules.md`;
+    - `assets/support-decision-rules.md`;
+    - the reference formats.
+  - The tool spec gives no reference format, so the formats block holds the system prompt's tool-input rule, quoted verbatim ("A reference is the prefix and exactly four digits."), plus a sentence built from the seed IDs: "Transaction references look like TXN-9001 and payout references like PAY-7002."
+- **Enforcing the split in code, not only in the prompt:**
+  - The judge now tags each claim `procedural` (what the agent will do, who follows up, what a specialist handles, what the caller should provide) or `fact` (product and policy facts, fees, timelines, features, the caller's records).
+  - A **fact**'s quote must be found verbatim in the turn's evidence.
+  - A **procedural** claim's quote may also come from the procedure corpus.
+  - So a product claim can never be "supported" by the procedure files, even if the judge mislabels the block it quotes.
+- **Not changed:** product and policy facts still need the turn's chunks or tool results. Example: SEC-AMOUNT's "you can view the amount in your dashboard" is still a fact claim.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
