@@ -154,3 +154,44 @@ describe("attribution repair (D62)", () => {
     assert.equal(f.repairAttribution(s, f.check(s)), "Banking partners affect international timing.");
   });
 });
+
+describe("clause trimming (D64)", () => {
+  const LIVE_S1 = "RelayPay displays the applicable fees before you confirm a transaction, so you'll see exactly what applies to your payment.";
+  it("the live S1 sentence: the flagged trailing clause is cut and the supported lead is spoken", () => {
+    const evidence: GateEvidence = { chunks: CHUNKS, callerText: "What fees does RelayPay charge for international payments?" };
+    const g = new StreamingGate(RETRIEVED, undefined, evidence);
+    g.start();
+    const spoken = g.text(`[[type=answer; kb=${FEES}]] Fees vary based on transaction type, corridor, and payment method. ${LIVE_S1} `);
+    const outcome = g.end("end_turn");
+    if (outcome.kind === "final") spoken.push(...outcome.speak);
+    assert.deepEqual(spoken, ["Fees vary based on transaction type, corridor, and payment method.", "RelayPay displays the applicable fees before you confirm a transaction."]);
+    assert.deepEqual(g.takeFiltered(), []);
+    const logged = g.takeRepaired();
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0]!.kind, "trimmed");
+    assert.equal(logged[0]!.sentence, LIVE_S1);
+  });
+  const f = new SentenceFilter([CHUNKS.get(FEES)!, CHUNKS.get(PAYOUTS)!], "");
+  it("never trims a flag in the leading clause (dropped as before)", () => {
+    const s = "RelayPay always displays fees before confirmation, so you can plan ahead.";
+    assert.equal(f.trimTrailingClause(s, f.check(s)), null);
+  });
+  it("trims after ', which' and ' — ' as well", () => {
+    const a = "Fees vary based on transaction type, corridor, and payment method, which means you'll always pay the lowest rate.";
+    assert.equal(f.trimTrailingClause(a, f.check(a)), "Fees vary based on transaction type, corridor, and payment method.");
+    const b = "International payouts usually take 2 to 5 business days — guaranteed for every corridor.";
+    assert.equal(f.trimTrailingClause(b, f.check(b)), "International payouts usually take 2 to 5 business days.");
+  });
+  it("no connector -> null (dropped as before)", () => {
+    const s = "RelayPay displays exactly the fees you will pay.";
+    assert.equal(f.trimTrailingClause(s, f.check(s)), null);
+  });
+  it("never splits inside a number range", () => {
+    const s = "Payouts take 2 — 9 business days.";
+    assert.equal(f.trimTrailingClause(s, f.check(s)), null);
+  });
+  it("a lead that still fails a check on its own is not spoken", () => {
+    const s = "Payouts to Kenya take 3 days, so you'll get it exactly on time.";
+    assert.equal(f.trimTrailingClause(s, f.check(s)), null);
+  });
+});

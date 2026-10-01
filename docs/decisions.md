@@ -1176,6 +1176,27 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - **Latency (estimate, not measured):** the judge must see the whole answer before any of it is spoken. That adds one direct model round trip, roughly **0.6–1.2 s**, on top of the deployed KB first-token p50 of 1.33 s (latency.md). It would also cancel sentence streaming, which the latency work depends on.
     - The added latency is the reason for rejecting it; the cost is acceptable. Revisit it if the offline judge shows these claims happen often.
 
+### D64. Clause-level trimming in the runtime filter (Batch 3C fix 1, 2026-10-01)
+
+- **Observed (BEFORE eval run `eval-2026-10-01T10-57-37-311Z`):** S1 failed 3/3.
+  - Haiku joins the required fact and an embellishment in one sentence: "RelayPay displays the applicable fees before you confirm a transaction, **so you'll see exactly what applies to your payment**."
+  - The filter drops whole sentences, so the scenario's required fact ("shown before confirmation") was never spoken.
+- **Rule** (`SentenceFilter.trimTrailingClause`, used by the gate after the D62 repair):
+  - It applies when **every** flag of a sentence sits in a trailing clause introduced by ", so", ", so that", ", which", ", meaning" or " — ", and the leading clause passes **every** check on its own.
+  - Then the leading clause is spoken, ending with a full stop, and logged as `grounding_trimmed` (note and log line, like D62).
+  - The latest qualifying cut wins, to keep as much of the sentence as possible.
+  - A flag in the leading clause is never trimmed away. The cut never falls inside a number range ("2 — 9") or after a reference prefix.
+  - The lead must have at least 3 words. Otherwise the sentence is dropped as before.
+- **Replay (read-only):** all 56 stored `grounding_filtered` sentences that were complete in their notes, replayed with their turn's cited chunks and the caller's words. **52 would now be trimmed, 4 still dropped.**
+  - The 52 are two patterns only: the S1 fees sentence → "RelayPay displays the applicable fees before you confirm a transaction." (50), and the S8 sentence → "Payment timelines depend on external banking systems and regulatory checks." (2).
+  - Every trimmed lead is verbatim chunk wording. There were no unintended trims.
+- **Tests:** `sentence-filter.test.ts`, 6 tests:
+  - the live S1 sentence through the gate → trimmed and logged;
+  - a flag in the lead → dropped;
+  - ", which" and " — " cuts;
+  - no connector → dropped;
+  - a number range is never split;
+  - a lead that fails on its own → dropped.
 
 ## Migration log
 

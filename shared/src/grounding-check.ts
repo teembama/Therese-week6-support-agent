@@ -303,6 +303,32 @@ export class SentenceFilter {
     out = out.charAt(0).toUpperCase() + out.slice(1);
     return this.check(out).length ? null : out;
   }
+
+  /**
+   * Clause trimming (D64): when every flag sits in a trailing clause introduced by a connector
+   * (", so", ", so that", ", which", ", meaning", " — ") and the leading clause passes every check
+   * on its own, return the leading clause ending with a full stop; otherwise null (dropped as
+   * before). A flag in the leading clause is never trimmed away, and the cut never falls inside a
+   * number or a reference. Live S1 (eval 2026-10-01): "RelayPay displays the applicable fees
+   * before you confirm a transaction, so you'll see exactly what applies to your payment."
+   * -> "RelayPay displays the applicable fees before you confirm a transaction."
+   */
+  trimTrailingClause(sentence: string, flags: readonly GroundingFlag[]): string | null {
+    if (!flags.length) return null;
+    const cuts = [...sentence.matchAll(/,\s+(?:so that|so|which|meaning)\b|\s+[—–]\s+/gi)].map((m) => m.index!);
+    // Latest cut first: keep as much of the sentence as possible.
+    for (const cut of cuts.reverse()) {
+      const lead = sentence.slice(0, cut).replace(/[\s,;:]+$/, "");
+      const trail = sentence.slice(cut);
+      if (/\d$/.test(lead) && /^[\s,—–-]*\d/.test(trail)) continue; // inside a number ("2 — 5")
+      if (/\b(?:txn|pay|cus)[\s-]*$/i.test(lead)) continue; // inside a reference
+      const t = normalise(trail);
+      if (!flags.every((f) => t.includes(normalise(f.term)))) continue; // a flag sits in the lead
+      const out = `${lead}.`;
+      if (lead.split(/\s+/).length >= 3 && this.check(out).length === 0) return out;
+    }
+    return null;
+  }
 }
 
 export function checkGrounding(answer: string, citedChunks: string[], callerText = ""): GroundingFlag[] {

@@ -219,6 +219,8 @@ export interface FilteredSentence {
 
 /** A sentence spoken in repaired form (D62): the model's text, what was spoken, and why. */
 export interface RepairedSentence {
+  /** "repaired": an invented "your" removed (D62); "trimmed": a flagged trailing clause cut (D64). */
+  kind: "repaired" | "trimmed";
   sentence: string;
   repaired: string;
   flags: GroundingFlag[];
@@ -369,8 +371,13 @@ export class StreamingGate {
     if (!flags.length) return sentence;
     const repaired = this.filter.repairAttribution(sentence, flags);
     if (repaired) {
-      this.repaired.push({ sentence, repaired, flags });
+      this.repaired.push({ kind: "repaired", sentence, repaired, flags });
       return repaired;
+    }
+    const trimmed = this.filter.trimTrailingClause(sentence, flags);
+    if (trimmed) {
+      this.repaired.push({ kind: "trimmed", sentence, repaired: trimmed, flags });
+      return trimmed;
     }
     this.filtered.push({ sentence, flags });
     this.filteredInMessage++;
