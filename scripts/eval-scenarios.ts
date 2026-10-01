@@ -19,7 +19,7 @@
 // returns exactly what the agent saw; write tools are represented by the rows they wrote.
 //
 // Usage: npm run eval:scenarios -- [--base-url https://<domain>] [--cap 1.00] [--prd-reps 3]
-//          [--only S1,S7,SEC-NOTES] [--label after2] [--estimate-only] [--no-write] [--out <results.json>]
+//          [--only S1,S7,SEC-NOTES] [--label after2] [--estimate-only] [--no-write] [--stop-on-network-error] [--out <results.json>]
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -41,6 +41,9 @@ const OUT = argValue("--out");
 const ESTIMATE_ONLY = process.argv.includes("--estimate-only");
 /** Smoke tests: run and judge, but write no evaluations rows. */
 const NO_WRITE = process.argv.includes("--no-write");
+/** Abort the whole run on a network failure (DNS, connect), instead of recording it and moving on. */
+const STOP_ON_NETWORK = process.argv.includes("--stop-on-network-error");
+const isNetworkError = (err: unknown) => /fetch failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|UND_ERR_CONNECT_TIMEOUT|ConnectTimeout/i.test(`${(err as Error)?.message ?? ""} ${String((err as { cause?: { code?: string } })?.cause?.code ?? "")}`);
 /** --label after2 -> run_id eval-<timestamp>-after2 (a named run in the evidence doc). */
 const LABEL = argValue("--label")?.replace(/[^a-z0-9-]/gi, "");
 const RUN_ID = `eval-${new Date().toISOString().replace(/[:.]/g, "-")}${LABEL ? `-${LABEL}` : ""}`;
@@ -641,6 +644,10 @@ async function main(): Promise<number> {
       // A run that can't complete is a FAILED run with the error recorded, never skipped silently.
       const message = `run_error: ${(err as Error).message.slice(0, 300)}`;
       console.log(`   -> FAIL  ${message}`);
+      if (STOP_ON_NETWORK && isNetworkError(err)) {
+        console.log(`   network failure: stopping the whole run now (--stop-on-network-error); spend so far $${spend.total.toFixed(4)}`);
+        break;
+      }
       const conversationId = `${RUN_ID}-${sc.id.toLowerCase()}-r${rep}`;
       const empty: RunData = { scenario: sc, rep, conversationId, turns: [], tickets: [], escalations: [], events: [], capped: false };
       results.push({ run: empty, checks: [[false, message]], judgments: [], passed: false, failedChecks: [message], judgeFlags: [] });
