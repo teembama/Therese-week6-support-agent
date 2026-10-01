@@ -14,12 +14,15 @@
     "test-deployed": "tsx test-deployed.ts",
     "test-endpoint": "tsx test-endpoint.ts",
     "eval-grounding": "tsx eval-grounding.ts",
-    "test-capacity": "tsx test-capacity.ts"
+    "test-capacity": "tsx test-capacity.ts",
+    "eval-scenarios": "tsx eval-scenarios.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.129.0",
     "@modelcontextprotocol/client": "^2.2.0",
+    "@relaypay/shared": "*",
     "@supabase/supabase-js": "^2.109.0",
     "csv-parse": "^7.0.3",
-    "@relaypay/shared": "*"
+    "zod": "^4.6.5"
   }
 }
