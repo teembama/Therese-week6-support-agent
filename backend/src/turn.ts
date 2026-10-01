@@ -16,7 +16,7 @@ import type { ChildProcess } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { logRetrievalResult, newAttemptId, rankKnowledge, summarize, type Db, type KbChunk, type LogContext } from "@relaypay/shared";
+import { guardedRpc, logRetrievalResult, newAttemptId, rankKnowledge, summarize, type Db, type KbChunk, type LogContext } from "@relaypay/shared";
 import type { Refusal, Slot } from "./admission.js";
 import { cliEnv, mcpEnv } from "./child-env.js";
 import { pickMcpEntry } from "./mcp-entry.js";
@@ -157,6 +157,26 @@ function usageFrom(result: SDKResultMessage | null) {
   };
 }
 
+/**
+ * gate_blocked event (D71): a conversation_events row whenever the gate blocks a reply, so the
+ * event type is real evidence. Best-effort like D68: bounded, never throws, a failure goes to
+ * stderr and changes nothing the caller hears. The summary carries the reason, never the
+ * blocked text (that stays in conversation_turns.confidence_note).
+ */
+export async function recordGateBlocked(db: Db, ctx: LogContext, reason: string): Promise<void> {
+  try {
+    await withTimeout(guardedRpc(db, "log_conversation_event_guarded", {
+      p_conversation_id: ctx.conversationId,
+      p_turn_index: ctx.turnIndex,
+      p_event_type: "gate_blocked",
+      p_summary: summarize(`Reply blocked by the grounding gate: ${reason}`, 480),
+      p_metadata: { reason: summarize(reason, 200) },
+    }, ctx.attemptId), DB_CALL_TIMEOUT_MS, "gate_blocked event");
+  } catch (err) {
+    console.error(`[relaypay] gate_blocked event not recorded for ${ctx.conversationId}#${ctx.turnIndex}: ${summarize(err instanceof Error ? err.message : String(err), 200)}`);
+  }
+}
+
 /** The last thing the agent said, as Vapi reports it in the conversation history. */
 function previousAgentLine(history: HistoryEntry[]): string | null {
   for (let i = history.length - 1; i >= 0; i--) if (history[i]!.role === "agent") return history[i]!.text;
@@ -267,6 +287,8 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
   const done = (async () => {
     const { db, ctx } = input;
     const notes: string[] = [];
+    /** Best-effort event writes for this attempt; awaited before the attempt is closed (D71). */
+    const sideWrites: Array<Promise<void>> = [];
     const abort = new AbortController();
     const elapsed = () => Math.round(performance.now() - input.tReceivedMs);
     const marks: Record<string, number> = {};
@@ -541,6 +563,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
             } else {
               mark("final_message_stop");
               const note = `gate blocked: ${outcome.reason}; raw: ${summarize(outcome.raw, 300)}`;
+              sideWrites.push(recordGateBlocked(input.db, ctx, outcome.reason));
               if (spokeContent()) finish("blocked", note);
               else release(SAFE_DECLINE_LINE, "blocked", note);
             }
@@ -754,6 +777,8 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
                 ms_tools: finalResult || msTools ? Math.round(msTools) : null,
               }
             : null;
+        // The gate_blocked event (D71) must land while this attempt is still active (it is guarded).
+        await Promise.allSettled(sideWrites);
         // Bounded (D34): one retry, each call with a timeout; the caller's response is already sent.
         finalStatus = await retryOnce(() => finishTurnAttempt(db, ctx.attemptId!, status, statusReason, metrics, turnRow), DB_CALL_TIMEOUT_MS, "finish_turn_attempt");
       } catch (err) {

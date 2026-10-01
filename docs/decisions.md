@@ -1316,6 +1316,19 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `tools.test.ts`: the summary says "will follow up" and contains no email address, no channel words ("by email", "e-mail", "phone") and no time words.
   - `test:tools` 64/64: the real escalation's summary has no "@", "by email" or time, and `preferred_time_noted` equals the caller's words.
 
+### D71. gate_blocked events are written when the gate blocks a reply (2026-10-01)
+
+- **Why:** `conversation_events.event_type` allowed `gate_blocked`, and D39 and `log-conversation-event.ts` said the backend records it, but no code wrote it (found by the system-overview check). Blocks were visible only in `conversation_turns.confidence_note` and the logs.
+- **Change** (`recordGateBlocked` in `backend/src/turn.ts`):
+  - When the final message is blocked (missing, malformed or late header; every sentence filtered; …), the backend writes a guarded `gate_blocked` event.
+  - The summary is "Reply blocked by the grounding gate: <reason>". `metadata.reason` holds the reason. The blocked text is never stored here; it stays in the turn's `confidence_note`.
+  - **Best-effort, like D68:** the write is bounded by `DB_CALL_TIMEOUT_MS`, never throws, and logs a failure to stderr. Nothing the caller hears changes.
+  - The write is awaited before `finish_turn_attempt`, because the event is attempt-guarded and must land while the attempt is still active.
+- **Tests:** `turn-units.test.ts`, 2:
+  - the guarded RPC with `gate_blocked`, the attempt ID, the turn index and the reason-only summary;
+  - a failed write doesn't reject.
+  - The backend suite has 195 tests, all passing.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

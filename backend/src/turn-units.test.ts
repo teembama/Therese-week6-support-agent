@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildRetrievalQuery, meaningfulWordCount } from "./retrieval-query.js";
 import { styleViolations } from "./style.js";
-import { toolListProblem } from "./turn.js";
+import { recordGateBlocked, toolListProblem } from "./turn.js";
 
 const SIX = ["lookup_customer", "lookup_transaction", "lookup_payout", "create_support_ticket", "create_escalation", "log_conversation_event"].map((n) => `mcp__relaypay__${n}`);
 const CONNECTED = [{ name: "relaypay", status: "connected" }];
@@ -58,5 +58,26 @@ describe("style check (observability only)", () => {
   });
   it("does not flag 'document' or normal speech", () => {
     assert.deepEqual(styleViolations("You may need to upload business registration documents."), []);
+  });
+});
+
+describe("gate_blocked event (D71)", () => {
+  const ctx = { conversationId: "test-gb", turnIndex: 2, attemptId: "ATT-GB" };
+  type FakeDb = Parameters<typeof recordGateBlocked>[0];
+  it("writes a guarded gate_blocked event with the reason, never the blocked text", async () => {
+    const calls: Array<[string, Record<string, unknown>]> = [];
+    const db = { rpc: async (fn: string, params: Record<string, unknown>) => { calls.push([fn, params]); return { data: 1, error: null }; } } as unknown as FakeDb;
+    await recordGateBlocked(db, ctx, "every sentence dropped by the grounding filter (2)");
+    assert.equal(calls.length, 1);
+    const [fn, p] = calls[0]!;
+    assert.equal(fn, "log_conversation_event_guarded");
+    assert.equal(p["p_event_type"], "gate_blocked");
+    assert.equal(p["p_attempt_id"], "ATT-GB");
+    assert.equal(p["p_turn_index"], 2);
+    assert.match(String(p["p_summary"]), /^Reply blocked by the grounding gate: every sentence dropped/);
+  });
+  it("best-effort: a failed write never throws", async () => {
+    const db = { rpc: async () => ({ data: null, error: { code: "", message: "TypeError: fetch failed" } }) } as unknown as FakeDb;
+    await assert.doesNotReject(recordGateBlocked(db, ctx, "malformed or late header"));
   });
 });
