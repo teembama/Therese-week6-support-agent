@@ -153,6 +153,7 @@ These are server-side figures (`conversation_turns`), median over the 52 turns o
 - Retrieval and model time are unchanged; `init` is the startup of the per-turn Claude CLI and MCP server, measured on the same Railway service.
 - This round changed the MCP server bundle (D68's best-effort event helper, which imports `summarize` from shared) and redeployed onto a new container.
 - **The cause hasn't been determined.** It could be the code or the host the new container landed on. It was found after the time-boxed fix round and is not fixed.
+- **Update (same day):** the cause is the container, not the code. A fresh deployment of the same MCP bundle measures `init` p50 at 456 ms and first token p50 at 1431 ms (10 KB runs). The timestamp hypothesis was rejected, because the deployed process logs `mcp_entry kind="bundle"`. Details in docs/latency.md.
 - The first check would be a redeploy of the same commit, to separate host variance from the code change.
 
 Client-side figures from this laptop for the AFTER run, by turn type, as first content and first answer sentence p50/p95 in ms (n ≤ 18 per type, so p95 is about the maximum):
