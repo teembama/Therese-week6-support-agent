@@ -8,7 +8,8 @@ export const name = "lookup_payout";
 export const description =
   "Look up a contractor payout by payout reference (PAY- followed by four digits) or by its " +
   "transaction reference (TXN-). Returns the status, scheduled date, a customer-safe failure " +
-  "reason and a support summary. If requires_escalation is true, offer to connect the caller " +
+  "reason and a support summary. If offer_ticket is true (a failed payout), offer to log a support ticket " +
+  "(create_support_ticket). If requires_escalation is true (under review), offer to connect the caller " +
   "with a specialist and do not explain the review.";
 
 export const inputSchema = z.object({
@@ -93,6 +94,7 @@ export const handler = withToolLogging(name, "Look up a payout by payout or tran
       support_summary: payoutSupportSummary(p.status, p.transactions?.support_summary ?? null),
       requires_escalation: review,
       ...(review ? { escalation_category: "compliance" } : {}),
+      ...(p.status === "failed" ? { offer_ticket: true } : {}),
     },
     resultSummary: `${p.payout_id} ${p.status}`,
   };

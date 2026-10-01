@@ -25,8 +25,9 @@ describe("lookup_transaction", () => {
     assert.equal(pastEstimatedArrival("processing", "2026-09-30", "2026-09-30"), false);
     assert.equal(pastEstimatedArrival("failed", null, "2026-09-30"), false);
   });
-  it("failed -> payment, review required -> compliance", () => {
-    assert.deepEqual(transactionEscalation("failed"), { requires_escalation: true, escalation_category: "payment" });
+  it("failed -> offer_ticket (no escalation), review required -> compliance", () => {
+    // D69: failed -> offer a ticket, not a specialist (only "review required" escalates).
+    assert.deepEqual(transactionEscalation("failed"), { requires_escalation: false, offer_ticket: true });
     assert.deepEqual(transactionEscalation("review required"), { requires_escalation: true, escalation_category: "compliance" });
     assert.deepEqual(transactionEscalation("delayed"), { requires_escalation: false });
   });

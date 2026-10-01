@@ -99,6 +99,9 @@ async function main(): Promise<number> {
     check(payout["failure_reason"] === "The payout is under review." && !String(payout["support_summary"]).includes("undefined"), "PAY-7002 failure_reason is the customer-safe text");
     const byTxn = await call("lookup_payout", { transaction_id: "TXN-9004" }, "success");
     check(byTxn["payout_id"] === "PAY-7003" && byTxn["failure_reason"] === "The beneficiary details need review.", "lookup by transaction_id TXN-9004 -> PAY-7003");
+    check(byTxn["offer_ticket"] === true && byTxn["requires_escalation"] === false, "failed payout PAY-7003 -> offer_ticket, no escalation (D69)");
+    const failedTxn = await call("lookup_transaction", { transaction_id: "TXN-9004" }, "success");
+    check(failedTxn["offer_ticket"] === true && failedTxn["requires_escalation"] === false && failedTxn["escalation_category"] === undefined, "failed TXN-9004 -> offer_ticket, no escalation (D69)");
     check(!/"(amount|currency)"|800|USD/.test(JSON.stringify(byTxn)), "PAY-7003 (800 USD) -> amount and currency ABSENT");
     const noPayout = await call("lookup_payout", { payout_id: "PAY-0000" }, "not_found");
     check(noPayout["found"] === false, "unverified: unknown PAY-0000 -> found:false");

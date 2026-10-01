@@ -1283,6 +1283,23 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `test:tools` 61/61 against Supabase: events are still written on the normal path.
   - The runner change is exercised by the AFTER eval run; it has no unit test of its own.
 
+### D69. Failed transactions offer a ticket; only "review required" escalates (Batch 3C follow-up, 2026-10-01)
+
+- **Observed (AFTER eval S6 r3):** after `lookup_transaction` returned failed TXN-9004, the model started the escalation flow. When the caller then said "Yes, please log a ticket", it asked for name and email instead of creating the ticket.
+- **Root cause, a contradiction in our own signals:**
+  - `transactionEscalation("failed")` returned `requires_escalation: true, escalation_category: "payment"`.
+  - The prompt's escalation section says to escalate when a tool returns `requires_escalation true`.
+  - The ticket rule said "requires_escalation with escalation_category payment means the same: offer a ticket".
+  - So the model got two instructions for one flag. Payouts were already consistent: only "review required" set `requires_escalation`.
+- **Change:**
+  - Only "review required" sets `requires_escalation` (category compliance), for both transactions and payouts.
+  - A **failed** transaction or payout returns `offer_ticket: true` and `requires_escalation: false`.
+  - Both tool descriptions now say: offer_ticket → offer a support ticket (`create_support_ticket`), not a specialist; requires_escalation → a specialist.
+  - The prompt's ticket rule now reads "A lookup that returns offer_ticket true … means the same: offer a ticket, not the escalation flow".
+- **Tests:**
+  - `tools.test.ts`: failed → `{ requires_escalation: false, offer_ticket: true }`; review required → compliance.
+  - `test:tools` 63/63: failed TXN-9004 and failed PAY-7003 each return offer_ticket with no escalation.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

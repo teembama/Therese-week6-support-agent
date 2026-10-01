@@ -8,8 +8,9 @@ export const name = "lookup_transaction";
 export const description =
   "Look up a RelayPay transaction by its reference (TXN- followed by four digits, e.g. TXN-9001). " +
   "Returns its type, status, support summary and estimated arrival. It never returns amounts: " +
-  "do not state or confirm an amount. If requires_escalation is true, offer to connect the caller with a specialist instead of " +
-  "diagnosing the issue.";
+  "do not state or confirm an amount. If offer_ticket is true (a failed transaction), offer to log a support ticket " +
+  "(create_support_ticket), not a specialist. If requires_escalation is true (under review), offer to connect the caller with a " +
+  "specialist instead of diagnosing the issue.";
 
 export const inputSchema = z.object({
   transaction_id: z.string().trim().max(40).describe("The transaction reference, e.g. TXN-9001."),
@@ -31,9 +32,12 @@ export function pastEstimatedArrival(status: string, estimatedArrival: string | 
   return estimatedArrival !== null && status !== "completed" && today > estimatedArrival;
 }
 
-export function transactionEscalation(status: string): { requires_escalation: boolean; escalation_category?: string } {
+// Only a record under review needs a specialist (escalation-rules.md: compliance). A FAILED record is a
+// routine follow-up: offer_ticket, as for payouts (D69; AFTER eval S6 r3 escalated a failed payment
+// because this used to say requires_escalation/payment, against the prompt's "offer a ticket" rule).
+export function transactionEscalation(status: string): { requires_escalation: boolean; escalation_category?: string; offer_ticket?: boolean } {
   if (status === "review required") return { requires_escalation: true, escalation_category: "compliance" };
-  if (status === "failed") return { requires_escalation: true, escalation_category: "payment" };
+  if (status === "failed") return { requires_escalation: false, offer_ticket: true };
   return { requires_escalation: false };
 }
 
