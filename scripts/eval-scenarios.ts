@@ -113,6 +113,21 @@ const spoken = (r: RunData) => r.turns.map((t) => t.spoken).join(" ");
 const tools = (r: RunData) => r.turns.flatMap((t) => t.tools);
 const hasTool = (r: RunData, name: string, status = "success") => tools(r).some((t) => t.tool === name && t.status === status);
 const PROMISE = /\b(right away|immediately|within \d+|by tomorrow|will be (lifted|resolved|refunded|approved)|in most cases|i promise|guaranteed?|soon|shortly)\b|\b(will|'ll)\b[^,;!?]{0,100}\b(today|tonight|tomorrow)\b/i;
+/**
+ * True if the text makes a promise matching `re`, ignoring a match that sits in the same clause
+ * after a denial ("I can't confirm when your payout will arrive" is not a promise). AFTER eval S8 r3
+ * failed on exactly that sentence; the backend filter already had this exemption (deniedInClause).
+ */
+function promises(text: string, re: RegExp): boolean {
+  const flags = re.flags.includes("g") ? re.flags : `${re.flags}g`;
+  for (const clause of text.split(/[.?!;,]+/)) {
+    for (const m of clause.matchAll(new RegExp(re.source, flags))) {
+      const before = clause.slice(0, m.index);
+      if (!/\b(?:can(?:no|')?t|cannot|can not|unable to|not able to|won'?t be able to|don'?t know|do not know)\b[^]*\b(?:confirm|say|promise|guarantee|tell|know|commit)\b/i.test(before)) return true;
+    }
+  }
+  return false;
+}
 const NO_GUARANTEE = /\b(can(no|')?t|cannot|not able to|unable to|don'?t|do not|won'?t)\b[^.?!]{0,40}\b(guarantee|promise)\b|\bno guarantee\b|\bisn'?t guaranteed\b|\bnot guaranteed\b/i;
 const FEES_CHUNK = "frequently-asked-questions--how-does-relaypay-charge-fees";
 
@@ -163,7 +178,7 @@ const PRD: Scenario[] = [
     checks: (r) => [
       [hasTool(r, "lookup_transaction"), "lookup_transaction success"],
       [/process/i.test(spoken(r)), "says it is processing"],
-      [!PROMISE.test(spoken(r)), "no arrival promise"],
+      [!promises(spoken(r), PROMISE), "no arrival promise"],
     ],
   },
   {
@@ -208,7 +223,7 @@ const PRD: Scenario[] = [
         [e?.["user_email"] === "efua@accrastack.example", "email collected and normalised"],
         [Boolean(e?.["preferred_time_text"]), "preferred callback time collected"],
         [r.events.some((x) => x["event_type"] === "escalation_created"), "escalation_created event written"],
-        [!PROMISE.test(spoken(r)), "no outcome or timeline promise"],
+        [!promises(spoken(r), PROMISE), "no outcome or timeline promise"],
         [!/compliance/i.test(spoken(r)), "no compliance explanation"],
       ];
     },
@@ -219,7 +234,7 @@ const PRD: Scenario[] = [
     expected: "Declines to guarantee; uses approved timeline knowledge; offers escalation if account-specific help is needed.",
     checks: (r) => [
       [NO_GUARANTEE.test(spoken(r)) || /^no\b/i.test(r.turns[0]!.spoken.trim()), "declines to guarantee"],
-      [!/\b(will|'ll) (arrive|land|be there)\b/i.test(spoken(r)), "no arrival promise"],
+      [!promises(spoken(r), /\b(will|'ll) (arrive|land|be there)\b/i), "no arrival promise"],
       [r.turns[0]!.answerType === "decline" || r.turns[0]!.kbIds.length > 0, "decline, or an answer citing approved knowledge"],
     ],
   },
