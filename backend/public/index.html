@@ -43,7 +43,8 @@
         <h2 id="captions-title">Live captions</h2>
         <button id="captions-toggle" type="button" class="link-button" aria-expanded="true" aria-controls="captions-lines">Hide captions</button>
       </div>
-      <ol id="captions-lines" class="captions-lines" aria-live="polite" aria-relevant="additions"></ol>
+      <ol id="captions-lines" class="captions-lines" tabindex="0" aria-label="Captions for this call" aria-live="polite" aria-relevant="additions text"></ol>
+      <button id="captions-jump" type="button" class="jump-button" hidden>Jump to latest</button>
     </section>
 
     <section class="tips" aria-labelledby="tips-title">

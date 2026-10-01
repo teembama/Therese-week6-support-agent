@@ -109,8 +109,18 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
   color: var(--teal); font: inherit; font-size: 0.9rem; text-decoration: underline;
 }
 .link-button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
-.captions-lines { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; min-height: 1.5em; }
+.captions-lines {
+  list-style: none; margin: 8px 0 0; padding: 0 4px 0 0; display: grid; gap: 4px; align-content: start;
+  height: 9.5rem; overflow-y: auto; overscroll-behavior: contain; /* the whole call, fixed height (D80) */
+}
+.captions-lines:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
 .captions-lines li { margin: 0; color: var(--ink); }
 .captions-lines .who { font-weight: 650; margin-right: 6px; }
 .captions-lines .who.caller { color: var(--muted); }
 .captions-lines .who.agent { color: var(--primary); }
+.jump-button {
+  justify-self: end; margin-top: 6px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--teal); background: var(--surface); color: var(--teal); font: inherit; font-size: 0.85rem;
+}
+.jump-button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.captions { display: grid; }

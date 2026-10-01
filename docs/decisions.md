@@ -1446,6 +1446,25 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - the page's toggle starts as "Hide captions" with `aria-expanded="true"` and `aria-controls="captions-lines"`.
 - **No agent behaviour changed.**
 
+### D80. Captions keep the whole call, scroll, and merge fragments (web page only, 2026-10-01)
+
+- **Change** (`backend/public/captions.js` + `app.js` + `app.css`):
+  - Every final line of the current call is kept, not just the last 3, in a fixed-height (9.5rem) list with its own scrollbar (`overflow-y: auto`). The list is keyboard-focusable.
+  - **Auto-scroll** to the newest line only if the reader is already at the bottom (`isNearBottom`, 24 px). If they scrolled up to reread, the panel stays put and a small **"Jump to latest"** button appears. It hides again when they click it or scroll back down.
+  - **Consecutive fragments from the same speaker are merged into one line** (`appendFinal`). A live call had one RelayPay sentence split across two caption lines at "corridor—", because Vapi sends a reply as several final transcripts.
+  - Nothing is stored: lines live in page memory, are cleared when a new call starts, and are gone on reload.
+  - `aria-live="polite"` with `aria-relevant="additions text"`, so a merged line is read when it grows. Only final transcripts are ever rendered.
+- **Tests:** `captions.test.ts`:
+  - 10 lines are all kept;
+  - the live "corridor—" split merges into one line;
+  - a new speaker starts a new line;
+  - empty text and unknown roles are ignored;
+  - near-bottom detection both ways;
+  - speaker labels;
+  - the stylesheet has a fixed-height scroll area, and the jump button starts hidden.
+  - The backend suite has 218 tests, all passing.
+- **No agent behaviour changed.**
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

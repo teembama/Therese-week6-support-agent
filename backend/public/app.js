@@ -5,7 +5,7 @@
 // assistant ID come from /config (env on the server), never from the repo.
 
 import { classify, endOutcome, errorCode, isCallOverError } from "/call-end.js";
-import { toggleState } from "/captions.js";
+import { appendFinal, isNearBottom, speakerLabel, toggleState } from "/captions.js";
 
 const SDK_URL = "https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0";
 const MAX_CALL_MS = 4 * 60_000; // matches the note on the page; the assistant's own limit should be 240 s too
@@ -15,7 +15,7 @@ const ui = {
   icon: el("state-icon"), label: el("state-label"), status: el("status"), timer: el("timer"),
   error: el("error"), errorTitle: el("error-title"), errorSteps: el("error-steps"),
   start: el("start"), end: el("end"),
-  captions: el("captions"), captionsLines: el("captions-lines"), captionsToggle: el("captions-toggle"),
+  captions: el("captions"), captionsLines: el("captions-lines"), captionsToggle: el("captions-toggle"), captionsJump: el("captions-jump"),
 };
 
 let vapi = null;
@@ -119,22 +119,40 @@ function showEnded(text) {
   ui.start.focus();
 }
 
-// ---- Live captions (D77): the last 3 FINAL lines; caller finals and the assistant's spoken text only.
-// Nothing is stored: lines live in the page and are cleared when a new call starts.
-const MAX_CAPTION_LINES = 3;
+// ---- Live captions (D77, D80): every FINAL line of the current call (caller speech as recognised,
+// the assistant's text as spoken), consecutive fragments from one speaker merged. Kept in page memory
+// only: cleared when a new call starts, gone on reload; nothing is stored.
+let captionLines = [];
 function clearCaptions() {
+  captionLines = [];
   ui.captionsLines.replaceChildren();
+  ui.captionsJump.hidden = true;
 }
-function addCaption(role, text) {
-  const line = String(text ?? "").trim();
-  if (!line) return;
+function captionItem(line) {
   const li = document.createElement("li");
   const who = document.createElement("span");
-  who.className = `who ${role === "user" ? "caller" : "agent"}`;
-  who.textContent = role === "user" ? "You:" : "RelayPay:";
-  li.append(who, document.createTextNode(line));
-  ui.captionsLines.append(li);
-  while (ui.captionsLines.children.length > MAX_CAPTION_LINES) ui.captionsLines.firstElementChild.remove();
+  who.className = `who ${line.role === "user" ? "caller" : "agent"}`;
+  who.textContent = speakerLabel(line.role);
+  li.append(who, document.createTextNode(line.text));
+  return li;
+}
+function addCaption(role, text) {
+  const atBottom = isNearBottom(ui.captionsLines);
+  const next = appendFinal(captionLines, role, text);
+  if (next === captionLines) return;
+  if (next.length === captionLines.length) {
+    // Merged into the last line: replace that line's text.
+    ui.captionsLines.lastElementChild?.replaceWith(captionItem(next[next.length - 1]));
+  } else {
+    ui.captionsLines.append(captionItem(next[next.length - 1]));
+  }
+  captionLines = next;
+  if (atBottom) scrollCaptionsToLatest();
+  else ui.captionsJump.hidden = false; // the caller scrolled up to reread: don't move the panel
+}
+function scrollCaptionsToLatest() {
+  ui.captionsLines.scrollTop = ui.captionsLines.scrollHeight;
+  ui.captionsJump.hidden = true;
 }
 function toggleCaptions() {
   const next = toggleState(!ui.captionsLines.hidden);
@@ -270,6 +288,8 @@ async function init() {
   ui.start.addEventListener("click", startCall);
   ui.end.addEventListener("click", endCall);
   ui.captionsToggle.addEventListener("click", toggleCaptions);
+  ui.captionsJump.addEventListener("click", scrollCaptionsToLatest);
+  ui.captionsLines.addEventListener("scroll", () => { if (isNearBottom(ui.captionsLines)) ui.captionsJump.hidden = true; });
   let config;
   try {
     const res = await fetch("/config", { cache: "no-store" });
