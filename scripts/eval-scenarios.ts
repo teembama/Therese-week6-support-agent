@@ -19,7 +19,7 @@
 // returns exactly what the agent saw; write tools are represented by the rows they wrote.
 //
 // Usage: npm run eval:scenarios -- [--base-url https://<domain>] [--cap 1.00] [--prd-reps 3]
-//          [--only S1,S7,SEC-NOTES] [--estimate-only] [--no-write] [--out <results.json>]
+//          [--only S1,S7,SEC-NOTES] [--label after2] [--estimate-only] [--no-write] [--out <results.json>]
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -41,7 +41,9 @@ const OUT = argValue("--out");
 const ESTIMATE_ONLY = process.argv.includes("--estimate-only");
 /** Smoke tests: run and judge, but write no evaluations rows. */
 const NO_WRITE = process.argv.includes("--no-write");
-const RUN_ID = `eval-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+/** --label after2 -> run_id eval-<timestamp>-after2 (a named run in the evidence doc). */
+const LABEL = argValue("--label")?.replace(/[^a-z0-9-]/gi, "");
+const RUN_ID = `eval-${new Date().toISOString().replace(/[:.]/g, "-")}${LABEL ? `-${LABEL}` : ""}`;
 
 const JUDGE_MODEL = "claude-sonnet-5-5";
 // claude-api skill model table (cached 2026-09-25): Sonnet 5.5 $2 / $10 per MTok.
