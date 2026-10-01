@@ -106,3 +106,11 @@ describe("the LAST question decides goodbye vs declined_offer (D73, live call 01
     assert.equal(goodbyeAllowed("No. Thank you.", WEATHER), true);
   });
 });
+
+describe("after the off-topic decline line (D78)", () => {
+  const OFF_TOPIC = "That's outside what I can help with. I can only help with RelayPay payments and accounts. Is there anything RelayPay-related I can help you with?";
+  it("'No thanks' after the off-topic line -> goodbye (it ends with an anything-else question)", () => {
+    assert.equal(matchSocial("No thanks.", OFF_TOPIC), "goodbye");
+    assert.equal(matchSocial("No, thank you.", OFF_TOPIC), "goodbye");
+  });
+});

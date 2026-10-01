@@ -11,7 +11,7 @@
 // goodbye context for the next reply (live call 01a0f455…: "No, thank you." to a ticket offer
 // was taken as goodbye and hung up).
 
-import { SOCIAL_LINES } from "./config.js";
+import { OFF_TOPIC_LINE, SOCIAL_LINES } from "./config.js";
 import type { SocialIntent } from "./gate.js";
 
 /** Words that carry no intent and are dropped before matching. "oh"/"well" are NOT fillers. */
@@ -51,7 +51,9 @@ const THANKS_THEN_BYE = new RegExp(`^(?:${THANKS_RE}) (?:${alt(GOODBYE)})$`);
 const DECLINE_IN_CONTEXT = new RegExp(`^(?:(?:${THANKS_RE}) )?(?:${alt(DECLINE_AFTER_ANYTHING_ELSE)})(?: (?:${THANKS_RE}))?$`);
 
 /** The fixed lines that ask "anything else?"; only after one of these can a decline be a goodbye. */
-const ANYTHING_ELSE_LINES = new Set([normalise(SOCIAL_LINES.thanks), normalise(SOCIAL_LINES.declined_offer)]);
+// D78: the off-topic decline line ends "Is there anything RelayPay-related I can help you with?":
+// an anything-else question, so a decline after it is a goodbye (D73).
+const ANYTHING_ELSE_LINES = new Set([normalise(SOCIAL_LINES.thanks), normalise(SOCIAL_LINES.declined_offer), normalise(OFF_TOPIC_LINE)]);
 
 /**
  * The previous line's LAST question asked whether there's anything else (D73). Not only the fixed

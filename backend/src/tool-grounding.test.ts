@@ -330,3 +330,30 @@ describe("evidence-free decline -> fixed safe-decline line (D67)", () => {
     assert.deepEqual(g.text("[[type=clarify; kb=none; tool=none]] Could you tell me what you're looking to send? "), ["Could you tell me what you're looking to send?"]);
   });
 });
+
+describe("evidence-free decline reasons (D78, tone refinement of D67)", () => {
+  const OFF_TOPIC = "That's outside what I can help with. I can only help with RelayPay payments and accounts. Is there anything RelayPay-related I can help you with?";
+  const SAFE = "I'm sorry, I can't confirm that from our support information. I can connect you with a RelayPay support specialist if you'd like.";
+  const speak = (header: string, caller: string, retrieved = new Set<string>()) => {
+    const g = new StreamingGate(retrieved, undefined, { chunks: CHUNKS, callerText: caller, tools: observed([]) });
+    g.start();
+    const out = g.text(`${header} Ha, I wish I knew the weather! I only do payments though.`);
+    const end = g.end("end_turn");
+    if (end.kind === "final") out.push(...end.speak);
+    return out;
+  };
+  it("weather, reason=off_topic -> the fixed off-topic line (the model's words are never spoken)", () => {
+    assert.deepEqual(speak("[[type=decline; kb=none; tool=none; reason=off_topic]]", "What's the weather in Lagos like?"), [OFF_TOPIC]);
+  });
+  it("a crypto-style miss, reason=not_covered -> the unchanged safe line", () => {
+    assert.deepEqual(speak("[[type=decline; kb=none; tool=none; reason=not_covered]]", "Do you support crypto wallets?"), [SAFE]);
+  });
+  it("a missing or invalid reason -> not_covered (the safe default)", () => {
+    assert.deepEqual(speak("[[type=decline; kb=none; tool=none]]", "Do you support crypto wallets?"), [SAFE]);
+    assert.deepEqual(speak("[[type=decline; kb=none; tool=none; reason=chitchat]]", "Tell me a joke"), [SAFE]);
+  });
+  it("a decline WITH evidence is unchanged: the model's own (filtered) words, whatever the reason", () => {
+    const out = speak("[[type=decline; kb=none; tool=none; reason=off_topic]]", "What's the weather?", RETRIEVED);
+    assert.notDeepEqual(out, [OFF_TOPIC]);
+  });
+});

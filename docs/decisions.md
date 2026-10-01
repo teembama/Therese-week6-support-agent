@@ -1506,6 +1506,26 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - The backend suite has 225 tests, all passing.
 - **No agent behaviour changed.**
 
+### D78. Evidence-free declines get a fixed line per reason: off_topic or not_covered (tone refinement of D67, 2026-10-01)
+
+- **Why:** D67 made every evidence-free decline speak the formal safe-decline line ("I'm sorry, I can't confirm that from our support information…"), including plainly off-topic questions such as the weather. That reads as stiff in a conversation whose tone the user wants kept.
+- **Change (a refinement, not a reversal):**
+  - The decline header gains `reason=off_topic | not_covered`, chosen by the model (prompt header rules). `parseHeader` reads it. A missing or invalid value is **not_covered**, the safe default.
+  - For an **evidence-free** decline (D67's condition, unchanged), the backend speaks a **fixed** line by reason:
+    - `off_topic`: "That's outside what I can help with. I can only help with RelayPay payments and accounts. Is there anything RelayPay-related I can help you with?"
+    - `not_covered`: the current safe-decline line, unchanged.
+  - A decline **with** evidence is unchanged: the model's own words go through the full filter (D58).
+  - The off-topic line ends with an anything-else question, so it is in the fast path's fixed anything-else set: a "no thanks" after it is a goodbye (D73).
+- **Safety guarantee unchanged:** in an evidence-free decline the model's text is still never spoken. The model only picks which of two fixed lines.
+- **Tests:**
+  - `tool-grounding.test.ts`, 4:
+    - weather + off_topic → the off-topic line;
+    - a crypto-style miss + not_covered → the safe line;
+    - a missing reason and an invalid reason → the safe line;
+    - a decline with evidence → the model's words, not the fixed line.
+  - `social-fast-path.test.ts`: "No thanks." / "No, thank you." after the off-topic line → goodbye.
+  - The backend suite has 230 tests, all passing.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

@@ -36,7 +36,7 @@
 
 import { performance } from "node:perf_hooks";
 import { SentenceFilter, type GroundingFlag, type SentenceFilterOptions } from "@relaypay/shared";
-import { HEADER_WINDOW_CHARS, LOOKUP_TOOL_NAMES, MCP_TOOL_PREFIX, SAFE_DECLINE_LINE, SOCIAL_LINES } from "./config.js";
+import { DECLINE_REASONS, HEADER_WINDOW_CHARS, LOOKUP_TOOL_NAMES, MCP_TOOL_PREFIX, OFF_TOPIC_LINE, SAFE_DECLINE_LINE, SOCIAL_LINES, type DeclineReason } from "./config.js";
 
 export type ReplyType = "answer" | "clarify" | "decline" | "escalate" | "social";
 
@@ -77,11 +77,19 @@ export interface ParsedHeader {
   tool: string | null;
   /** Only for type=social. */
   intent?: SocialIntent;
+  /** Only for type=decline (D78): off_topic | not_covered; a missing or invalid value is not_covered. */
+  declineReason?: DeclineReason;
   rest: string;
 }
 
+/** The fixed line for an evidence-free decline, by reason (D67, D78). */
+export function declineLine(reason: DeclineReason | undefined): string {
+  return reason === "off_topic" ? OFF_TOPIC_LINE : SAFE_DECLINE_LINE;
+}
+
 // tool= is optional so a header without it means tool=none.
-const HEADER_RE = /^\s*\[\[\s*type\s*=\s*(answer|clarify|decline|escalate)\s*;\s*kb\s*=\s*([^\];]*?)\s*(?:;\s*tool\s*=\s*([a-z_]+)\s*)?\]\]/i;
+// D78: an optional `; reason=<word>` (meaningful for decline only) after tool=.
+const HEADER_RE = /^\s*\[\[\s*type\s*=\s*(answer|clarify|decline|escalate)\s*;\s*kb\s*=\s*([^\];]*?)\s*(?:;\s*tool\s*=\s*([a-z_]+)\s*)?(?:;\s*reason\s*=\s*([a-z_]*)\s*)?\]\]/i;
 // Social header carries an intent and NO kb field; anything else (unknown intent, kb=..., extra
 // fields) does not match and is treated as a malformed header.
 const SOCIAL_HEADER_RE = /^\s*\[\[\s*type\s*=\s*social\s*;\s*intent\s*=\s*(thanks|goodbye|greeting|declined_offer)\s*\]\]/i;
@@ -109,7 +117,12 @@ export function parseHeader(text: string, windowChars: number = HEADER_WINDOW_CH
     if (!kbIds.every((id) => CHUNK_ID_RE.test(id))) return null;
   }
   const toolRaw = (m[3] ?? "none").toLowerCase().replace(MCP_TOOL_PREFIX, "");
-  return { type, kbIds, tool: toolRaw === "none" ? null : toolRaw, rest: text.slice(m[0].length) };
+  const header: ParsedHeader = { type, kbIds, tool: toolRaw === "none" ? null : toolRaw, rest: text.slice(m[0].length) };
+  if (type === "decline") {
+    const reason = (m[4] ?? "").toLowerCase();
+    header.declineReason = (DECLINE_REASONS as readonly string[]).includes(reason) ? (reason as DeclineReason) : "not_covered";
+  }
+  return header;
 }
 
 /** Plain spoken text: no headers, tags, markdown, lists or symbols; whitespace collapsed. */
@@ -326,10 +339,13 @@ export class StreamingGate {
       // succeeded) has nothing to say beyond "can't confirm": speak the fixed line and discard the
       // model's text, which otherwise restates policy from memory (BEFORE eval ROB-OVERSEAS).
       if (header.type === "decline" && this.retrievedIds.size === 0 && (this.evidence?.tools?.records() ?? []).length === 0) {
+        // D78: the line is chosen by the model's reason (off_topic | not_covered), but it is still a
+        // FIXED line: the model's words are never spoken here.
+        const line = declineLine(header.declineReason);
         this.fixedDecline = true;
         this.fixedDeclines++;
-        this.spokenInMessage.push(SAFE_DECLINE_LINE);
-        return [SAFE_DECLINE_LINE];
+        this.spokenInMessage.push(line);
+        return [line];
       }
       if (this.evidence) {
         const records = this.evidence.tools?.records() ?? [];

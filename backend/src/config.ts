@@ -134,6 +134,17 @@ export function channelFor(conversationId: string): "test" | "voice" {
   return conversationId.startsWith("test-") || conversationId.startsWith("eval-") ? "test" : "voice";
 }
 
+/**
+ * Fixed lines for an evidence-free decline (D67), chosen by the decline header's reason (D78).
+ * not_covered (a RelayPay question with no approved answer) is the safe default for a missing or
+ * invalid reason. off_topic ends with an anything-else question, so a "no thanks" after it is a
+ * goodbye (D73; it is in the fast path's fixed anything-else set).
+ */
+export const DECLINE_REASONS = ["off_topic", "not_covered"] as const;
+export type DeclineReason = (typeof DECLINE_REASONS)[number];
+export const OFF_TOPIC_LINE =
+  "That's outside what I can help with. I can only help with RelayPay payments and accounts. Is there anything RelayPay-related I can help you with?";
+
 /** Spoken when the gate blocks a reply. */
 export const SAFE_DECLINE_LINE =
   "I'm sorry, I can't confirm that from our support information. I can connect you with a RelayPay support specialist if you'd like.";
