@@ -16,6 +16,8 @@
 -- Same conventions as 005: security invoker, search_path pinned, EXECUTE revoked from
 -- public/anon/authenticated and granted to service_role, RLS on (no policies).
 
+begin;
+
 -- 2. Event type ------------------------------------------------------------------------------------
 alter table conversation_events drop constraint conversation_events_event_type_check;
 alter table conversation_events add constraint conversation_events_event_type_check
@@ -246,3 +248,5 @@ grant execute on function queue_notification(text, text, text, text, jsonb) to s
 grant execute on function create_support_ticket_guarded(text, text, text, text, text, text, text, text) to service_role;
 grant execute on function create_escalation_with_ticket(text, text, text, text, text, text, text, text, text, text, text, text, boolean, text) to service_role;
 grant select, insert, update on notification_outbox to service_role;
+
+commit;
