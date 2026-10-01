@@ -4,6 +4,8 @@
 // esm.sh, pinned: the SDK version AND the Daily transport it depends on. The public key and
 // assistant ID come from /config (env on the server), never from the repo.
 
+import { classify, endOutcome, errorCode, isCallOverError } from "/call-end.js";
+
 const SDK_URL = "https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0";
 const MAX_CALL_MS = 4 * 60_000; // matches the note on the page; the assistant's own limit should be 240 s too
 
@@ -12,6 +14,7 @@ const ui = {
   icon: el("state-icon"), label: el("state-label"), status: el("status"), timer: el("timer"),
   error: el("error"), errorTitle: el("error-title"), errorSteps: el("error-steps"),
   start: el("start"), end: el("end"),
+  captions: el("captions"), captionsLines: el("captions-lines"), captionsToggle: el("captions-toggle"),
 };
 
 let vapi = null;
@@ -22,6 +25,11 @@ let lastEndedReason = null;
 let callStartedAt = 0;
 let tick = null;
 let warned = false;
+// D76: no caller speech was ever transcribed in this call (so a silent end means "we couldn't hear you").
+let heardCaller = false;
+// D76: Daily reports Vapi ending the call as an error ("ejection"); the end is explained at call-end.
+let callOverByVapi = false;
+let explainTimer = null;
 // Set when the browser blocks something by Content Security Policy (e.g. the Daily bundle).
 let cspBlocked = null;
 document.addEventListener("securitypolicyviolation", (e) => {
@@ -80,32 +88,58 @@ const ERRORS = {
     "This is a problem on our side, not your microphone or network.",
     "Please try again later.",
   ]],
+  // D76 (live call 01a0f839…, silence-timed-out: the page said "Something went wrong… daily-error").
+  noAudio: ["We couldn't hear you, so the call ended.", [
+    "Check your microphone is selected and unmuted, then try again.",
+    "If you use a headset or Bluetooth device, try your computer's built-in microphone instead.",
+  ]],
   generic: ["Something went wrong with the call.", [
     "Reload the page and try again.",
   ]],
 };
 
-/** A short, non-sensitive code for support: the SDK's error type or name, or "unknown". */
-function errorCode(err) {
-  const raw = err?.type || err?.error?.type || err?.error?.name || err?.name || "unknown";
-  return String(raw).toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 40) || "unknown";
+
+
+
+/** How the call ended, in plain words, with a next step where the caller can do something. */
+function explainEnd() {
+  if (explainTimer) clearTimeout(explainTimer);
+  explainTimer = null;
+  stopTimer();
+  const seconds = callStartedAt ? (Date.now() - callStartedAt) / 1000 : 0;
+  inCall = false;
+  const outcome = endOutcome({ endedByUser, lastEndedReason, heardCaller, seconds });
+  return outcome.kind === "error" ? fail(outcome.error) : showEnded(outcome.text);
 }
 
-function classify(err) {
-  const text = (() => {
-    try {
-      return [err?.name, err?.message, err?.type, err?.error?.name, err?.error?.message, err?.error?.type, err?.errorMsg, JSON.stringify(err)].filter(Boolean).join(" ");
-    } catch {
-      return String(err);
-    }
-  })();
-  // The component itself failed (blocked by CSP, bundle or module failed to load): our side.
-  if (cspBlocked || /Content Security Policy|unsafe-eval|EvalError|call-machine|bundle|dynamically imported module|Failed to load module|ChunkLoadError|Loading chunk/i.test(text)) return "component";
-  if (/NotAllowedError|SecurityError|permission (denied|dismissed)|not.*allowed.*microphone|microphone.*permission/i.test(text)) return "micBlocked";
-  if (/setSinkId|sinkId|output device|audiooutput|NotFoundError|NotReadableError|OverconstrainedError|AbortError|device/i.test(text)) return "noDevice";
-  if (/Key doesn't allow|allowed origin|origin|\b40[13]\b|Unauthorized|Forbidden/i.test(text)) return "notAllowed";
-  if (/network|ICE|WebSocket|Failed to fetch|timed? ?out|daily-call-join|connection|offline/i.test(text)) return "network";
-  return "generic";
+function showEnded(text) {
+  setState("ended", "Call ended", text);
+  setButtons({ start: true, end: false, startText: "Start a new call" });
+  ui.start.focus();
+}
+
+// ---- Live captions (D77): the last 3 FINAL lines; caller finals and the assistant's spoken text only.
+// Nothing is stored: lines live in the page and are cleared when a new call starts.
+const MAX_CAPTION_LINES = 3;
+function clearCaptions() {
+  ui.captionsLines.replaceChildren();
+}
+function addCaption(role, text) {
+  const line = String(text ?? "").trim();
+  if (!line) return;
+  const li = document.createElement("li");
+  const who = document.createElement("span");
+  who.className = `who ${role === "user" ? "caller" : "agent"}`;
+  who.textContent = role === "user" ? "You:" : "RelayPay:";
+  li.append(who, document.createTextNode(line));
+  ui.captionsLines.append(li);
+  while (ui.captionsLines.children.length > MAX_CAPTION_LINES) ui.captionsLines.firstElementChild.remove();
+}
+function toggleCaptions() {
+  const show = ui.captionsLines.hidden;
+  ui.captionsLines.hidden = !show;
+  ui.captionsToggle.textContent = show ? "Hide captions" : "Show captions";
+  ui.captionsToggle.setAttribute("aria-expanded", String(show));
 }
 
 function fail(kind, err) {
@@ -147,27 +181,13 @@ function stopTimer() {
   tick = null;
 }
 
-const ENDED = {
-  "customer-ended-call": "You ended the call.",
-  "assistant-ended-call": "The assistant ended the call.",
-  "assistant-said-end-call-phrase": "The assistant ended the call. Thanks for calling.",
-  "silence-timed-out": "The call ended after a long silence.",
-  "exceeded-max-duration": "The call reached the 4-minute limit.",
-  "customer-did-not-give-microphone-permission": "The call ended because the microphone wasn't available.",
-};
 
-function endedText(reason) {
-  if (endedByUser) return "You ended the call.";
-  if (!reason) return "The call has ended.";
-  if (ENDED[reason]) return ENDED[reason];
-  if (reason.startsWith("assistant-ended-call")) return ENDED["assistant-ended-call"];
-  return "The call ended because of a problem on our side. Please try again.";
-}
 
 // ---- Wiring.
 function attach(v) {
   v.on("call-start", () => {
     inCall = true;
+    ui.captions.hidden = false;
     setState("listening", "Live: listening", "Go ahead and speak.");
     startTimer();
     ui.end.focus();
@@ -176,17 +196,32 @@ function attach(v) {
   v.on("speech-end", () => { if (inCall) setState("listening", "Live: listening", "Go ahead and speak."); });
   v.on("message", (m) => {
     if (m?.type === "status-update" && m.status === "ended" && typeof m.endedReason === "string") lastEndedReason = m.endedReason;
+    // Vapi transcript messages: only FINAL lines are shown (caller speech as recognised; the
+    // assistant's text as spoken), never partials.
+    if (m?.type === "transcript" && m.transcriptType === "final" && (m.role === "user" || m.role === "assistant")) {
+      if (m.role === "user" && String(m.transcript ?? "").trim()) heardCaller = true;
+      addCaption(m.role, m.transcript);
+    }
   });
   v.on("call-end", () => {
-    const wasInCall = inCall;
-    inCall = false;
-    stopTimer();
-    if (!ui.error.hidden) return; // an error already explained what happened
-    setState("ended", "Call ended", wasInCall ? endedText(lastEndedReason) : "The call didn't start. Please try again.");
-    setButtons({ start: true, end: false, startText: "Start a new call" });
-    ui.start.focus();
+    const wasInCall = inCall || callOverByVapi;
+    if (!ui.error.hidden) { inCall = false; stopTimer(); return; } // an error already explained what happened
+    if (!wasInCall) {
+      inCall = false;
+      stopTimer();
+      return showEnded("The call didn't start. Please try again.");
+    }
+    explainEnd();
   });
-  v.on("error", (e) => fail(classify(e), e));
+  v.on("error", (e) => {
+    if (isCallOverError(e, Boolean(callStartedAt))) {
+      // The call is ending on Vapi's side; call-end (or this fallback) explains how.
+      callOverByVapi = true;
+      if (!explainTimer) explainTimer = setTimeout(() => { if (ui.error.hidden) explainEnd(); }, 1500);
+      return;
+    }
+    fail(classify(e, cspBlocked), e);
+  });
 }
 
 async function startCall() {
@@ -194,6 +229,12 @@ async function startCall() {
   cspBlocked = null; // only violations during THIS attempt count
   endedByUser = false;
   lastEndedReason = null;
+  heardCaller = false;
+  callOverByVapi = false;
+  callStartedAt = 0;
+  if (explainTimer) clearTimeout(explainTimer);
+  explainTimer = null;
+  clearCaptions();
   setButtons({ start: false, end: false });
   if (!navigator.mediaDevices?.getUserMedia) return fail("insecure");
   setState("mic", "Requesting microphone", "Allow microphone access when your browser asks.");
@@ -202,14 +243,14 @@ async function startCall() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((t) => t.stop());
   } catch (err) {
-    return fail(classify(err), err);
+    return fail(classify(err, cspBlocked), err);
   }
   setState("connecting", "Connecting", "Connecting you to RelayPay support…");
   setButtons({ start: false, end: true });
   try {
     await vapi.start(assistantId);
   } catch (err) {
-    fail(classify(err), err);
+    fail(classify(err, cspBlocked), err);
   }
 }
 
@@ -227,6 +268,7 @@ function endCall() {
 async function init() {
   ui.start.addEventListener("click", startCall);
   ui.end.addEventListener("click", endCall);
+  ui.captionsToggle.addEventListener("click", toggleCaptions);
   let config;
   try {
     const res = await fetch("/config", { cache: "no-store" });

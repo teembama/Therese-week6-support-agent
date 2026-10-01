@@ -95,3 +95,18 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
   .card { padding: 18px; }
   .actions .button { flex: 1 1 100%; }
 }
+
+/* Live captions (D77): the last 3 final lines, compact, not a chat UI. */
+.captions { border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; }
+.captions-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.captions-head h2 { margin: 0; font-size: 0.85rem; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.link-button {
+  background: none; border: none; padding: 2px 0; cursor: pointer;
+  color: var(--teal); font: inherit; font-size: 0.9rem; text-decoration: underline;
+}
+.link-button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.captions-lines { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; min-height: 1.5em; }
+.captions-lines li { margin: 0; color: var(--ink); }
+.captions-lines .who { font-weight: 650; margin-right: 6px; }
+.captions-lines .who.caller { color: var(--muted); }
+.captions-lines .who.agent { color: var(--primary); }

@@ -1403,6 +1403,37 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - **Tests:** `sse.test.ts`, 2: the filler is written at once as exactly "One moment while I check that. "; later sentences carry their own trailing space, and the joined text is unchanged. The backend suite has 203 tests, all passing.
 - **After:** measured on the next live call's Vapi `voiceLatency` for tool turns, recorded below when available.
 
+### D76. The voice page explains every known ending and failure in plain words (live testing, 2026-10-01)
+
+- **Observed (live call `01a0f839…`, 16:08):** Vapi ended the call for silence (`silence-timed-out`, 39 s, no caller speech transcribed), and the page showed "Something went wrong… Error code for support: daily-error".
+  - The page doesn't log SDK events server-side, so the exact client event wasn't captured.
+  - The code shows the path: the Vapi SDK reports Daily's ejection ("Meeting has ended") as an `error` of type `daily-error`. `classify` had no rule for it, so it fell through to generic.
+- **Change** (new pure module `backend/public/call-end.js`, imported by `app.js`, served at `/call-end.js`):
+  - **`isCallOverError`:** once the call has started, an ejection or "meeting ended" error, or an otherwise-unclassified `daily-error`, is the call **ending**. It is explained at call-end, with a 1.5 s fallback if call-end never comes.
+  - **`endOutcome`:**
+    - a silence end, meaning Vapi's `silence-timed-out` or **no caller speech ever transcribed** for 20 s or more (tracked client-side from Vapi's final user transcripts), → "We couldn't hear you, so the call ended. Check your microphone is selected and unmuted, then try again." with a headset tip;
+    - the 4-minute limit → "The call reached the 4-minute limit. Start a new call to keep going.";
+    - a normal end → "The call has ended. Thanks for calling RelayPay.";
+    - the caller hanging up → "You ended the call.".
+  - Microphone blocked, device, network, not allowed, not configured, insecure page and component-failed keep their messages. Only a truly unknown error is "Something went wrong", with its code.
+- **Tests:** `backend/src/call-end.test.ts`, 6, loading the browser module itself:
+  - the ejection and an unclassified daily-error after start → an end;
+  - before start → still an error;
+  - a network daily-error → the network message;
+  - silence by reason or by no transcript → noAudio;
+  - limit, normal end and hang-up texts;
+  - classify mappings, and generic only for unknown errors.
+
+### D77. Live captions on the voice page (2026-10-01)
+
+- A compact "Live captions" panel, shown once the call starts, lists the **last 3 final lines**: "You:" (the caller's speech as recognised) and "RelayPay:" (the assistant's text as spoken).
+  - Lines come from Vapi's client `transcript` messages with `transcriptType: "final"`; partials are never shown.
+  - It is not a chat UI: no history, no input.
+- **Accessibility:** the list is `aria-live="polite"` and only final lines are ever added. "Hide captions" / "Show captions" toggles the list, with `aria-expanded`.
+- **Privacy:** nothing is stored client-side. Lines live in the page and are cleared when a new call starts; the toggle state isn't saved.
+- **Style:** the brand palette (primary blue for RelayPay, muted for the caller, teal link-style toggle).
+- Checked locally: the page, `/app.js` and `/call-end.js` return 200 with the right types, and the panel markup is served. Live behaviour is to be confirmed on the next call.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
