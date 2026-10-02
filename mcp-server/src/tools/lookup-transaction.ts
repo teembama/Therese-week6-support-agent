@@ -1,7 +1,7 @@
 import { normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { customerSafeStatus, customerSafeSummary, invalid, notAvailable, parseArgs, todayUtc, verifiedCustomerId } from "./common.js";
+import { customerSafeStatus, customerSafeSummary, guestLookupGate, invalid, notAvailable, parseArgs, todayUtc, verifiedCustomerId } from "./common.js";
 
 export const name = "lookup_transaction";
 
@@ -10,10 +10,12 @@ export const description =
   "Returns its type, status, support summary and estimated arrival. It never returns amounts: " +
   "do not state or confirm an amount. If offer_ticket is true (a failed transaction), offer to log a support ticket " +
   "(create_support_ticket), not a specialist. If requires_escalation is true (under review), offer to connect the caller with a " +
-  "specialist instead of diagnosing the issue.";
+  "specialist instead of diagnosing the issue. On a call where the caller isn't identified, pass customer_id (the caller's " +
+  "RelayPay customer ID, e.g. CUS-1001): without it nothing about the record is returned (customer_id_required).";
 
 export const inputSchema = z.object({
   transaction_id: z.string().trim().max(40).describe("The transaction reference, e.g. TXN-9001."),
+  customer_id: z.string().trim().max(40).optional().describe("D98: the caller's customer ID, as they said it (e.g. CUS-1001). Required on a call where the caller isn't identified."),
 });
 
 // Amount and currency are never selected, so they can never be returned or spoken (D40).
@@ -52,6 +54,10 @@ export const handler = withToolLogging(name, "Look up a transaction's customer-s
     .eq("transaction_id", id).maybeSingle();
   if (error) throw new Error(`transactions read failed (${error.code}): ${error.message}`);
   const verified = await verifiedCustomerId(db, ctx.conversationId);
+  if (!verified) {
+    const gate = await guestLookupGate(db, ctx, id, data ? (data as TransactionRow).customer_id : null, parsed.data.customer_id, (t) => normaliseReference(t, "CUS"));
+    if (gate) return gate;
+  }
   if (verified && (!data || (data as TransactionRow).customer_id !== verified)) {
     return notAvailable(id, data ? `owned by another customer; conversation verified as ${verified}` : "no such record; conversation verified");
   }

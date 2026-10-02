@@ -94,3 +94,26 @@ export function countText(type, n) {
   const [one, many] = type === "callbacks" ? ["scheduled callback", "scheduled callbacks"] : ["raised ticket", "raised tickets"];
   return `${n} ${n === 1 ? one : many}${n === 100 ? " (latest 100)" : ""}.`;
 }
+
+/** D98: every status the database allows (support_tickets / escalations: open, in progress, closed). */
+export const STATUSES = ["open", "in progress", "closed"];
+
+/**
+ * The Close action for a record, or null when it is already closed. Tickets and escalations both
+ * close; closing an escalation frees its callback slot, so the confirmation says so.
+ */
+export function closeAction(type, record) {
+  const status = String(record?.status ?? "");
+  if (!STATUSES.includes(status) || status === "closed") return null;
+  if (type === "callbacks") {
+    const id = String(record.escalation_id ?? "");
+    return { kind: "escalation", id, label: `Close ${id}`, confirm: `Close ${id}? Its callback slot will be freed.` };
+  }
+  const id = String(record.ticket_id ?? "");
+  return { kind: "ticket", id, label: `Close ${id}`, confirm: `Close ${id}?` };
+}
+
+/** Whether a card is shown as closed (still listed, marked closed). */
+export function isClosed(record) {
+  return String(record?.status ?? "") === "closed";
+}

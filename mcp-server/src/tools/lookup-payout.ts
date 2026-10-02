@@ -1,7 +1,7 @@
 import { normaliseReference } from "@relaypay/shared";
 import * as z from "zod";
 import { withToolLogging, type ToolOutcome } from "../tool-logging.js";
-import { customerSafeStatus, customerSafeSummary, invalid, notAvailable, parseArgs, verifiedCustomerId } from "./common.js";
+import { customerSafeStatus, customerSafeSummary, guestLookupGate, invalid, notAvailable, parseArgs, verifiedCustomerId } from "./common.js";
 
 export const name = "lookup_payout";
 
@@ -10,11 +10,13 @@ export const description =
   "transaction reference (TXN-). Returns the status, scheduled date, a customer-safe failure " +
   "reason and a support summary. If offer_ticket is true (a failed payout), offer to log a support ticket " +
   "(create_support_ticket). If requires_escalation is true (under review), offer to connect the caller " +
-  "with a specialist and do not explain the review.";
+  "with a specialist and do not explain the review. On a call where the caller isn't identified, pass customer_id (the caller's " +
+  "RelayPay customer ID, e.g. CUS-1001): without it nothing about the record is returned (customer_id_required).";
 
 export const inputSchema = z.object({
   payout_id: z.string().trim().max(40).optional().describe("The payout reference, e.g. PAY-7001."),
   transaction_id: z.string().trim().max(40).optional().describe("The linked transaction reference, e.g. TXN-9001."),
+  customer_id: z.string().trim().max(40).optional().describe("D98: the caller's customer ID, as they said it (e.g. CUS-1001). Required on a call where the caller isn't identified."),
 });
 
 interface PayoutRow {
@@ -75,6 +77,10 @@ export const handler = withToolLogging(name, "Look up a payout by payout or tran
   const p = ((data ?? []) as unknown as PayoutRow[])[0];
   const ref = [payoutId, transactionId].filter(Boolean).join(" / ");
   const verified = await verifiedCustomerId(db, ctx.conversationId);
+  if (!verified) {
+    const gate = await guestLookupGate(db, ctx, ref, p ? p.customer_id : null, parsed.data.customer_id, (t) => normaliseReference(t, "CUS"));
+    if (gate) return gate;
+  }
   if (verified && (!p || p.customer_id !== verified)) {
     return notAvailable(ref, p ? `owned by another customer; conversation verified as ${verified}` : "no such record; conversation verified");
   }

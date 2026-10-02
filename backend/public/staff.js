@@ -3,7 +3,7 @@
 // verifies the staff token and role on the server. The browser never reads tables.
 
 import { loginErrorMessage, MESSAGES, SUPABASE_JS_URL, validLoginForm } from "/auth.js";
-import { cardFor, countText, emptyText, recordsOutcome, recordsPath, STAFF_MESSAGES } from "/staff-view.js";
+import { cardFor, closeAction, countText, emptyText, isClosed, recordsOutcome, recordsPath, STAFF_MESSAGES } from "/staff-view.js";
 
 const el = (id) => document.getElementById(id);
 const ui = {
@@ -58,7 +58,45 @@ function cardItem(type, record) {
     dl.append(Object.assign(document.createElement("dt"), { textContent: label }), Object.assign(document.createElement("dd"), { textContent: value }));
   }
   li.append(h, badges, dl);
+  // D98: closed items stay listed, marked closed; open / in progress ones get a Close action.
+  if (isClosed(record)) li.classList.add("is-closed");
+  const action = closeAction(type, record);
+  if (action) {
+    const btn = Object.assign(document.createElement("button"), { type: "button", className: "button secondary small close-button", textContent: "Close" });
+    btn.setAttribute("aria-label", action.label);
+    btn.addEventListener("click", () => void closeRecord(action, btn));
+    li.append(btn);
+  }
   return li;
+}
+
+/** D98: confirm, then POST /staff/records/close with the staff token; reload on success. */
+async function closeRecord(action, btn) {
+  if (!window.confirm(action.confirm)) return;
+  btn.disabled = true;
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (!token) return showLogin(STAFF_MESSAGES.expired);
+    const res = await fetch("/staff/records/close", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ type: action.kind, id: action.id }),
+      cache: "no-store",
+    });
+    if (res.status === 401) return showLogin(STAFF_MESSAGES.expired);
+    if (res.status === 403) return pageError(STAFF_MESSAGES.notStaff);
+    if (!res.ok) {
+      ui.status.textContent = `Couldn't close ${action.id}. Please try again.`;
+      btn.disabled = false;
+      return;
+    }
+    ui.status.textContent = `${action.id} closed.`;
+    await load();
+  } catch {
+    ui.status.textContent = `Couldn't close ${action.id}. Please try again.`;
+    btn.disabled = false;
+  }
 }
 
 async function load() {

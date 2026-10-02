@@ -122,12 +122,16 @@ describe("logEventBestEffort (D68: an event failure never turns a committed acti
 
 describe("create_escalation flow preconditions (D72)", () => {
   const base = { email_confirmed_by_caller: true };
-  it("missing preferred time (neither given nor declined) -> invalid_input reason: ask for it first", () => {
-    assert.match(escalationPreconditions({ ...base }) ?? "", /^Ask the caller for their preferred callback time first/);
-    assert.match(escalationPreconditions({ ...base, preferred_time_declined: false }) ?? "", /preferred callback time/);
+  it("D98: no time -> refused: an escalation needs a booked callback; create a ticket instead, never say a callback is arranged", () => {
+    for (const r of [escalationPreconditions({ ...base }), escalationPreconditions({ ...base, preferred_time_declined: false })]) {
+      assert.match(r ?? "", /needs a booked callback day and time/);
+      assert.match(r ?? "", /create a support ticket instead/);
+      assert.match(r ?? "", /specialist will review it/);
+      assert.match(r ?? "", /Never say a callback is arranged, booked or noted\./);
+    }
   });
-  it("declined preferred time -> allowed, call_booked false", () => {
-    assert.equal(escalationPreconditions({ ...base, preferred_time_declined: true }), null);
+  it("D98: a DECLINED time is no longer an escalation (the same refusal: create a ticket)", () => {
+    assert.match(escalationPreconditions({ ...base, preferred_time_declined: true }) ?? "", /create a support ticket instead/);
     assert.equal(callBookedFor({}), false);
   });
   it("preferred time given -> allowed, call_booked true", () => {
@@ -139,7 +143,8 @@ describe("create_escalation flow preconditions (D72)", () => {
     assert.match(escalationPreconditions({ email_confirmed_by_caller: false, preferred_time_declined: true }) ?? "", /^Read the email back/);
   });
   it("the reasons say nothing was written", () => {
-    for (const r of [escalationPreconditions({}), escalationPreconditions(base)]) assert.match(r ?? "", /Nothing was written\.$/);
+    assert.match(escalationPreconditions({}) ?? "", /Nothing was written\.$/);
+    assert.match(escalationPreconditions(base) ?? "", /Nothing was written\./);
   });
 });
 

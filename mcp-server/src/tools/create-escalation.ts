@@ -9,8 +9,9 @@ export const name = "create_escalation";
 export const description =
   "Hand the caller over to a RelayPay support specialist. Steps, in order: (1) ask for the caller's name; " +
   "(2) ask for their email; (3) read the email back exactly and get the caller's confirmation; (4) ask for a " +
-  "callback day and time; (5) call this tool, with email_confirmed_by_caller true and either " +
-  "preferred_time_text (their words) or preferred_time_declined true. The tool refuses to create anything " +
+  "callback day and time; (5) call this tool, with email_confirmed_by_caller true and preferred_time_text " +
+  "(their words). An escalation always has a booked callback slot: if the caller won't or can't give a time, don't call " +
+  "this tool; create a support ticket instead and say a specialist will review it. The tool refuses to create anything " +
   "until steps 3 and 4 are done. Creates the escalation and its support ticket. Tell the caller what " +
   "follow_up_summary says (a representative will follow up); never promise an outcome. " +
   "Callback booking: the tool books a real slot from the caller's words. If it refuses the time " +
@@ -80,13 +81,17 @@ export function escalationKeys(conversationId: string, category: string): { tick
  * with these as description wording only, the model created the escalation straight after the
  * email, skipping the read-back and the time question, 2 of 2 complete runs.
  */
+export const NO_CALLBACK_TIME_MESSAGE =
+  "An escalation needs a booked callback day and time, and none was given. Nothing was written. If the caller won't or can't " +
+  "give a time, do not escalate: create a support ticket instead (create_support_ticket, with a short factual summary) and " +
+  "tell the caller a specialist will review it. Never say a callback is arranged, booked or noted.";
+
 export function escalationPreconditions(input: { email_confirmed_by_caller?: boolean | undefined; preferred_time_text?: string | undefined; preferred_time_declined?: boolean | undefined }): string | null {
   if (input.email_confirmed_by_caller !== true) {
     return "Read the email back to the caller exactly and get their confirmation first, then call again with email_confirmed_by_caller true. Nothing was written.";
   }
-  if (!input.preferred_time_text && input.preferred_time_declined !== true) {
-    return "Ask the caller for their preferred callback time first, then call again with preferred_time_text (their words) or preferred_time_declined true if they don't want to give one. Nothing was written.";
-  }
+  // D98: no escalation without a callback slot. A declined time is not an escalation: it is a ticket.
+  if (!input.preferred_time_text) return NO_CALLBACK_TIME_MESSAGE;
   return null;
 }
 

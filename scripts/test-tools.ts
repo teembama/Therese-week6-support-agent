@@ -90,34 +90,43 @@ async function main(): Promise<number> {
     check(conflicting["reason"] === "no_match" && conflicting["verified"] === false, "conflicting identifiers (Daniel + Lagos Ledger) -> no_match");
     check(!/daniel|lagos|contact_name|company_name|name was|company was/.test(conflictText), "no_match does not reveal which identifier was wrong");
 
-    console.log("\n== Transaction before verification");
-    const txnUnverified = await call("lookup_transaction", { transaction_id: "TXN-9001" }, "success");
-    check(txnUnverified["found"] === true && noAmounts(txnUnverified), "TXN-9001 unverified -> amount and currency ABSENT");
+    console.log("\n== Guest lookups need the owner's customer ID (D98)");
+    const noId = await call("lookup_transaction", { transaction_id: "TXN-9001" }, "denied");
+    check(noId["reason"] === "customer_id_required" && noId["found"] === false && !/processing|payout|9001/i.test(String(noId["message"])) && noId["transaction_status"] === undefined,
+      "guest, no customer ID -> customer_id_required, nothing about the record", JSON.stringify(noId));
+    const noIdPayout = await call("lookup_payout", { payout_id: "PAY-7002" }, "denied");
+    check(noIdPayout["reason"] === "customer_id_required" && noIdPayout["payout_status"] === undefined, "guest payout, no customer ID -> customer_id_required");
+    const txnUnverified = await call("lookup_transaction", { transaction_id: "TXN-9001", customer_id: "cus 1001" }, "success");
+    check(txnUnverified["found"] === true && noAmounts(txnUnverified), "TXN-9001 with its owner's ID (spoken 'cus 1001', normalised) -> status; amount and currency ABSENT");
     check(txnUnverified["status"] === "success" && txnUnverified["transaction_status"] === "processing", "tool status 'success' is not overwritten by the record's own status (transaction_status)");
-
-    const reviewTxn = await call("lookup_transaction", { transaction_id: "TXN-9003" }, "success");
+    const reviewTxn = await call("lookup_transaction", { transaction_id: "TXN-9003", customer_id: "CUS-1003" }, "success");
     const spokenFields = (x: Structured) => JSON.stringify([x["transaction_status"], x["payout_status"], x["support_summary"], x["failure_reason"]]);
-    check(reviewTxn["transaction_status"] === "under review" && reviewTxn["support_summary"] === "The transaction is under review.", "unverified TXN-9003 -> 'under review', seed compliance summary replaced");
+    check(reviewTxn["transaction_status"] === "under review" && reviewTxn["support_summary"] === "The transaction is under review.", "TXN-9003 with its owner's ID -> 'under review', seed compliance summary replaced");
     check(!/compliance|escalate/i.test(spokenFields(reviewTxn)), "TXN-9003: no 'compliance' in any spoken field", spokenFields(reviewTxn));
-    const malformed = await call("lookup_transaction", { transaction_id: "TXN-12" }, "invalid_input");
+    const malformed = await call("lookup_transaction", { transaction_id: "TXN-12", customer_id: "CUS-1001" }, "invalid_input");
     check(malformed["status"] === "invalid_input", "malformed ID TXN-12 -> invalid_input");
-    const unknown = await call("lookup_transaction", { transaction_id: "TXN-0000" }, "not_found");
-    check(unknown["status"] === "not_found" && unknown["found"] === false, "unverified: unknown TXN-0000 -> found:false");
-
-    console.log("\n== Payout before verification");
-    const payout = await call("lookup_payout", { payout_id: "PAY-7002" }, "success");
-    check(payout["status"] === "success" && payout["requires_escalation"] === true && payout["escalation_category"] === "compliance", "PAY-7002 -> requires_escalation, category compliance");
+    const payout = await call("lookup_payout", { payout_id: "PAY-7002", customer_id: "CUS-1003" }, "success");
+    check(payout["status"] === "success" && payout["requires_escalation"] === true && payout["escalation_category"] === "compliance", "PAY-7002 with its owner's ID -> requires_escalation, category compliance");
     check(noAmounts(payout), "PAY-7002 (5300 GBP) -> amount and currency ABSENT");
     check(payout["payout_status"] === "under review" && !/compliance|escalate/i.test(spokenFields(payout)), "PAY-7002: 'under review', no 'compliance' in any spoken field", spokenFields(payout));
     check(payout["failure_reason"] === "The payout is under review." && !String(payout["support_summary"]).includes("undefined"), "PAY-7002 failure_reason is the customer-safe text");
-    const byTxn = await call("lookup_payout", { transaction_id: "TXN-9004" }, "success");
+    const byTxn = await call("lookup_payout", { transaction_id: "TXN-9004", customer_id: "CUS-1004" }, "success");
     check(byTxn["payout_id"] === "PAY-7003" && byTxn["failure_reason"] === "The beneficiary details need review.", "lookup by transaction_id TXN-9004 -> PAY-7003");
     check(byTxn["offer_ticket"] === true && byTxn["requires_escalation"] === false, "failed payout PAY-7003 -> offer_ticket, no escalation (D69)");
-    const failedTxn = await call("lookup_transaction", { transaction_id: "TXN-9004" }, "success");
+    const failedTxn = await call("lookup_transaction", { transaction_id: "TXN-9004", customer_id: "CUS-1004" }, "success");
     check(failedTxn["offer_ticket"] === true && failedTxn["requires_escalation"] === false && failedTxn["escalation_category"] === undefined, "failed TXN-9004 -> offer_ticket, no escalation (D69)");
     check(!/"(amount|currency)"|800|USD/.test(JSON.stringify(byTxn)), "PAY-7003 (800 USD) -> amount and currency ABSENT");
-    const noPayout = await call("lookup_payout", { payout_id: "PAY-0000" }, "not_found");
-    check(noPayout["found"] === false, "unverified: unknown PAY-0000 -> found:false");
+    // Failures: a wrong ID and an unknown reference get the SAME response; the 3rd guest lookup is locked.
+    const strip = (x: Structured) => JSON.stringify({ status: x["status"], found: x["found"], reason: x["reason"], message: x["message"] });
+    const wrongId = await call("lookup_transaction", { transaction_id: "TXN-9001", customer_id: "CUS-1002" }, "not_found");
+    const unknown = await call("lookup_transaction", { transaction_id: "TXN-0000", customer_id: "CUS-1001" }, "not_found");
+    check(strip(wrongId) === strip(unknown) && wrongId["found"] === false && !/9001|processing/.test(JSON.stringify(wrongId)), "wrong customer ID and unknown reference -> the identical response (never which part was wrong)", `${strip(wrongId)} | ${strip(unknown)}`);
+    const locked = await call("lookup_transaction", { transaction_id: "TXN-9001", customer_id: "CUS-1001" }, "denied");
+    check(locked["reason"] === "guest_lookup_locked" && /support ticket/.test(String(locked["message"])), "after 2 failed attempts: guest lookups refused for the call, a ticket offered", JSON.stringify(locked));
+    const { data: refusalRows } = await db.from("tool_calls").select("result_summary").eq("conversation_id", conversationId).in("tool_name", ["lookup_transaction", "lookup_payout"]);
+    const summaries = ((refusalRows ?? []) as Structured[]).map((r) => String(r["result_summary"]));
+    check(summaries.some((x) => x.startsWith("customer_id_required")) && summaries.filter((x) => x.startsWith("customer_id_mismatch")).length === 2 && summaries.some((x) => x.startsWith("guest_lookup_locked")),
+      "each refusal is logged in tool_calls (customer_id_required, customer_id_mismatch x2, guest_lookup_locked)", JSON.stringify(summaries));
 
     const verified = await call("lookup_customer", { contact_name: "Amara", company_name: "Lagos Ledger" }, "success");
     const verifiedText = JSON.stringify(verified);
@@ -180,7 +189,7 @@ async function main(): Promise<number> {
     // D72: the flow is enforced by the tool; nothing is written until both steps are done.
     const noTime = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", email_confirmed_by_caller: true }, "invalid_input");
     const noConfirm = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", preferred_time_text: SLOTS[0]!.text }, "invalid_input");
-    check(noTime["status"] === "invalid_input" && /preferred callback time/.test(JSON.stringify(noTime)) && noConfirm["status"] === "invalid_input" && /Read the email back/.test(JSON.stringify(noConfirm)) && (await count("escalations")) === 0,
+    check(noTime["status"] === "invalid_input" && /needs a booked callback day and time/.test(JSON.stringify(noTime)) && noConfirm["status"] === "invalid_input" && /Read the email back/.test(JSON.stringify(noConfirm)) && (await count("escalations")) === 0,
       "no preferred time (given or declined) / email not confirmed -> invalid_input with an actionable reason, nothing written (D72)");
     const e1 = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", preferred_time_text: SLOTS[0]!.text, email_confirmed_by_caller: true }, "success");
     const { data: eRow } = await db.from("escalations").select("user_email, call_booked, preferred_time_text, callback_slot, customer_id, ticket_id").eq("escalation_id", String(e1["escalation_id"])).single();
@@ -191,7 +200,7 @@ async function main(): Promise<number> {
     check(e1["callback_booked_for"] === `${SLOTS[0]!.text} Lagos time`, "the result says what to confirm: booked for <day date time> Lagos time", String(e1["callback_booked_for"]));
     check(!/\b(within|hours?|days?|soon|shortly)\b/i.test(String(e1["follow_up_summary"])), "follow_up_summary promises no timeline");
     check(!/@|\bby e-?mail\b|tomorrow|2pm/i.test(String(e1["follow_up_summary"])) && e1["preferred_time_noted"] === SLOTS[0]!.text, "follow_up_summary has no channel, address or time; the preference is returned separately as noted (D70)", String(e1["follow_up_summary"]));
-    const e1again = await call("create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Asked again", email_confirmed_by_caller: true, preferred_time_declined: true }, "success");
+    const e1again = await call("create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Asked again", email_confirmed_by_caller: true, preferred_time_text: SLOTS[0]!.text }, "success");
     check(e1again["escalation_id"] === e1["escalation_id"] && e1again["duplicate"] === true, "duplicate returns the same escalation");
 
     console.log("\n== Conversation event");
@@ -213,7 +222,7 @@ async function main(): Promise<number> {
     // database guard and prove it, even for a duplicate.
     const deniedCalls: Array<[string, Structured]> = [
       ["create_support_ticket", { category: "payout", summary: "Written after the attempt was replaced", payout_id: "PAY-7001" }],
-      ["create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Written after replacement", email_confirmed_by_caller: true, preferred_time_declined: true }],
+      ["create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Written after replacement", email_confirmed_by_caller: true, preferred_time_text: SLOTS[5]!.text }],
       ["log_conversation_event", { event_type: "other", summary: "Written after replacement" }],
       ["lookup_customer", { contact_name: "Amara", company_name: "Lagos Ledger" }],
     ];
@@ -278,9 +287,9 @@ async function main(): Promise<number> {
     check(c["status"] === "denied" && c["reason"] === "conversation_write_limit", "third ticket -> denied, conversation_write_limit");
     const aAgain = await capCall("create_support_ticket", { category: "other", summary: "Write cap test: first ticket, asked again" });
     check(aAgain["status"] === "success" && aAgain["ticket_id"] === a["ticket_id"] && aAgain["duplicate"] === true, "a repeat of an existing ticket is not capped (returns it)");
-    const e1 = await capCall("create_escalation", { user_name: "Amara Okafor", user_email: "amara@lagosledger.example", category: "payment", reason: "Write cap test: first escalation", email_confirmed_by_caller: true, preferred_time_declined: true });
+    const e1 = await capCall("create_escalation", { user_name: "Amara Okafor", user_email: "amara@lagosledger.example", category: "payment", reason: "Write cap test: first escalation", email_confirmed_by_caller: true, preferred_time_text: SLOTS[5]!.text });
     check(e1["status"] === "success" && e1["duplicate"] === false, "escalation 1 created (its own ticket doesn't count toward the 2)");
-    const e2 = await capCall("create_escalation", { user_name: "Amara Okafor", user_email: "amara@lagosledger.example", category: "account", reason: "Write cap test: second escalation", email_confirmed_by_caller: true, preferred_time_declined: true });
+    const e2 = await capCall("create_escalation", { user_name: "Amara Okafor", user_email: "amara@lagosledger.example", category: "account", reason: "Write cap test: second escalation", email_confirmed_by_caller: true, preferred_time_text: SLOTS[5]!.text });
     check(e2["status"] === "denied" && e2["reason"] === "conversation_write_limit", "second escalation in a different category -> denied, conversation_write_limit");
     const { data: capTickets } = await db.from("support_tickets").select("idempotency_key").eq("conversation_id", capConversation);
     const { data: capEscalations } = await db.from("escalations").select("escalation_id").eq("conversation_id", capConversation);
@@ -338,24 +347,16 @@ async function main(): Promise<number> {
   };
   try {
     const base = { user_name: "Efua Mensah", user_email: "efua at accra stack dot example", category: "account", reason: "Account restricted, caller asked for a specialist", email_confirmed_by_caller: true };
-    const first = await enrCall({ ...base, preferred_time_declined: true });
-    check(first["status"] === "success" && first["duplicate"] === false && first["call_booked"] === false && first["preferred_time_noted"] === undefined, "first call (time declined): created, call_booked false, no time");
-    const second = await enrCall({ ...base, preferred_time_text: SLOTS[1]!.text });
-    check(second["status"] === "success" && second["escalation_id"] === first["escalation_id"] && second["duplicate"] === true && second["updated"] === true,
-      "second call with a time: the SAME escalation, updated true", JSON.stringify(second));
-    check(second["call_booked"] === true && second["preferred_time_noted"] === SLOTS[1]!.text && second["callback_booked_for"] === `${SLOTS[1]!.text} Lagos time`, "the result reports the stored record: the slot booked by enrichment (D97)");
-    const { data: enrRows } = await db.from("escalations").select("escalation_id, preferred_time_text, call_booked").eq("conversation_id", enrConversation);
-    check((enrRows ?? []).length === 1 && (enrRows as Structured[])[0]!["preferred_time_text"] === SLOTS[1]!.text && (enrRows as Structured[])[0]!["call_booked"] === true,
-      "one escalation row: time filled, call_booked true", JSON.stringify(enrRows));
-    const third = await enrCall({ ...base, preferred_time_text: SLOTS[2]!.text });
-    check(third["updated"] === undefined && third["preferred_time_noted"] === SLOTS[1]!.text, "a later, different time: not overwritten (updated absent, stored time reported)", JSON.stringify(third));
-    const { data: enrEvents } = await db.from("conversation_events").select("event_type").eq("conversation_id", enrConversation).order("id");
-    check(((enrEvents ?? []) as Structured[]).map((e) => e["event_type"]).join(",") === "escalation_created,escalation_updated", "events: escalation_created, then one escalation_updated", JSON.stringify(enrEvents));
+    const declined = await enrCall({ ...base, preferred_time_declined: true });
+    check(declined["status"] === "invalid_input" && /create a support ticket instead/.test(JSON.stringify(declined)), "D98: a declined time -> no escalation (create a ticket instead)", JSON.stringify(declined).slice(0, 200));
+    const { count: noEsc } = await db.from("escalations").select("*", { count: "exact", head: true }).eq("conversation_id", enrConversation);
+    check(noEsc === 0, "nothing written for the declined time");
+    const first = await enrCall({ ...base, preferred_time_text: SLOTS[1]!.text });
+    check(first["status"] === "success" && first["duplicate"] === false && first["call_booked"] === true && first["callback_booked_for"] === `${SLOTS[1]!.text} Lagos time`, "with a time: created with its slot booked", JSON.stringify(first));
+    const again = await enrCall({ ...base, preferred_time_text: SLOTS[2]!.text });
+    check(again["escalation_id"] === first["escalation_id"] && again["duplicate"] === true && again["updated"] === undefined && again["callback_booked_for"] === `${SLOTS[1]!.text} Lagos time`, "a later, different time: the booked slot is never overwritten", JSON.stringify(again));
     const enrOutbox = await outboxOf(enrConversation);
-    check(enrOutbox.map((r) => r.kind).join(",") === "escalation_created,escalation_updated", "outbox: exactly one escalation_created and one escalation_updated", JSON.stringify(enrOutbox.map((r) => r.kind)));
-    const upd = enrOutbox.find((r) => r.kind === "escalation_updated");
-    check(upd?.payload["preferred_time_text"] === SLOTS[1]!.text && upd?.payload["callback_slot"] != null && upd?.payload["call_booked"] === true && upd?.payload["user_email"] === "efua@accrastack.example" && noAmountsOrNotes(enrOutbox),
-      "the escalation_updated payload: the new time, call_booked, the caller's email for the team; no amounts or notes", JSON.stringify(upd?.payload));
+    check(enrOutbox.map((r) => r.kind).join(",") === "escalation_created" && enrOutbox[0]?.payload["callback_slot"] != null && noAmountsOrNotes(enrOutbox), "outbox: one escalation_created with the slot; no amounts or notes", JSON.stringify(enrOutbox.map((r) => r.kind)));
   } finally {
     await enrClient.close();
   }

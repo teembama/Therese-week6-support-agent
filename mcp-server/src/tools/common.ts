@@ -146,3 +146,49 @@ export function customerSafeSummary(summary: string | null, kind: "transaction" 
 export function todayUtc(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
+
+/**
+ * D98: guest (unidentified) transaction and payout lookups need the customer ID that owns the
+ * record, enforced here, not in the prompt. Returns the outcome to send back, or null to go ahead.
+ * - No ID: customer_id_required, and nothing about the record (not even whether it exists).
+ * - A wrong, unknown or malformed ID, or an unknown reference: ONE neutral response that never
+ *   says which part was wrong (customer_id_mismatch in tool_calls).
+ * - After 2 such failures in the call: guest_lookup_locked (offer a ticket instead).
+ * Identified callers (form or voice) don't come here: the ownership rule (D44/D57) applies.
+ */
+export const GUEST_LOOKUP_MAX_FAILURES = 2;
+export async function guestLookupGate(
+  db: Db,
+  ctx: LogContext,
+  reference: string,
+  ownerCustomerId: string | null,
+  givenCustomerId: string | undefined,
+  normaliseCustomerId: (text: string) => string | null,
+): Promise<ToolOutcome | null> {
+  const { count, error } = await db.from("tool_calls").select("id", { count: "exact", head: true })
+    .eq("conversation_id", ctx.conversationId).in("tool_name", ["lookup_transaction", "lookup_payout"]).like("result_summary", "customer_id_mismatch%");
+  if (error) throw new Error(`tool_calls read failed (${error.code}): ${error.message}`);
+  if ((count ?? 0) >= GUEST_LOOKUP_MAX_FAILURES) {
+    return {
+      status: "denied",
+      result: { found: false, reason: "guest_lookup_locked", message: "Reference lookups aren't available for the rest of this call. Don't ask for the customer ID again. Offer to log a support ticket (create_support_ticket) so the team can check it." },
+      resultSummary: `guest_lookup_locked ${reference}`,
+    };
+  }
+  if (!givenCustomerId || !givenCustomerId.trim()) {
+    return {
+      status: "denied",
+      result: { found: false, reason: "customer_id_required", message: "Before checking a reference, ask the caller for their RelayPay customer ID (it looks like CUS-1001), then call again with customer_id. Say nothing about this reference until then." },
+      resultSummary: `customer_id_required ${reference}`,
+    };
+  }
+  const given = normaliseCustomerId(givenCustomerId);
+  if (!given || !ownerCustomerId || given !== ownerCustomerId) {
+    return {
+      status: "not_found",
+      result: { found: false, reason: "no_match", message: "No record matches this reference and customer ID. Ask the caller to check both. Do not say which one was wrong." },
+      resultSummary: `customer_id_mismatch ${reference}`,
+    };
+  }
+  return null;
+}

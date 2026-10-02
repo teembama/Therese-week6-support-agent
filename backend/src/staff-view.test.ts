@@ -100,3 +100,15 @@ describe("staff dashboard gating (D87)", () => {
     }
   });
 });
+
+describe("close action on the dashboard (D98)", async () => {
+  const m = (await import(pathToFileURL(resolve(publicDir, "staff-view.js")).href)) as { STATUSES: string[]; closeAction(t: string, r: Record<string, unknown>): { kind: string; id: string; confirm: string } | null; isClosed(r: Record<string, unknown>): boolean };
+  it("every status the database allows; Close only on open / in progress; the escalation dialog says the slot is freed", () => {
+    assert.deepEqual(m.STATUSES, ["open", "in progress", "closed"]);
+    assert.deepEqual(m.closeAction("callbacks", { escalation_id: "ESC-1A2B3C4D", status: "open" }), { kind: "escalation", id: "ESC-1A2B3C4D", label: "Close ESC-1A2B3C4D", confirm: "Close ESC-1A2B3C4D? Its callback slot will be freed." });
+    assert.equal(m.closeAction("tickets", { ticket_id: "TKT-1", status: "in progress" })?.kind, "ticket");
+    assert.equal(m.closeAction("tickets", { ticket_id: "TKT-1", status: "closed" }), null);
+    assert.equal(m.isClosed({ status: "closed" }), true);
+    assert.equal(m.isClosed({ status: "open" }), false);
+  });
+});

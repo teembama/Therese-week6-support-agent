@@ -35,7 +35,7 @@ import { parseVapiBody } from "./vapi.js";
 import { classifyEvent, recordEndOfCall } from "./vapi-events.js";
 import { retryOnce } from "./bounded.js";
 import { handleCspReport, handlePublic, isPublicRoute, SECURITY_HEADERS, staffDashboardEnabled } from "./web.js";
-import { handleStaffRecords, STAFF_RATE_LIMIT_PER_MINUTE } from "./staff.js";
+import { handleStaffClose, handleStaffRecords, STAFF_RATE_LIMIT_PER_MINUTE } from "./staff.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -350,6 +350,14 @@ function main(): void {
       return;
     }
     // Staff dashboard API (L2, D87): staff-only, read-only. 404 while the flag is off.
+    // D98: staff close a ticket or escalation (POST, staff token verified on the server).
+    if (req.method === "POST" && pathname === "/staff/records/close" && staffDashboardEnabled()) {
+      handleStaffClose(req, res, db, { allow: staffAllow, log, headers: SECURITY_HEADERS }).catch((err: unknown) => {
+        log({ event: "request_error", stage: "staff_close", ...errorDetails(err) });
+        if (!res.headersSent) sendJson(res, 503, { error: "unavailable" });
+      });
+      return;
+    }
     if (req.method === "GET" && pathname === "/staff/records" && staffDashboardEnabled()) {
       handleStaffRecords(req, res, db, { allow: staffAllow, log, headers: SECURITY_HEADERS }).catch((err: unknown) => {
         log({ event: "request_error", stage: "staff_records", ...errorDetails(err) });

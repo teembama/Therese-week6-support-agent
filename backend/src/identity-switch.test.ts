@@ -62,7 +62,7 @@ describe("form-call context line (D89)", async () => {
     const line = formCallContext("Amara", "CUS-1001", "amara@lagosledger.example");
     assert.equal(line, "The caller is already identified as Amara (CUS-1001) via the call page. Don't ask for their name, company or email to verify them. If they say they are someone else, call lookup_customer with the details they give. " +
       "Always address the caller by Amara; never adopt a different name heard in speech. For escalations, confirm the email they entered (amara@lagosledger.example) instead of asking for it: say it back and ask if a specialist should contact them there. Never ask for their email or name. " +
-      "After they confirm the email, ask for their preferred callback time before creating the escalation; set preferred_time_declined only if they say they don't want to give one.");
+      "After they confirm the email, ask for their preferred callback time before creating the escalation; if they won't give one, create a support ticket instead and say a specialist will review it.");
     const withCtx = buildTurnPrompt([], "Can you check my account status?", [], line);
     assert.ok(withCtx.includes("<call_context>\nThe caller is already identified as Amara (CUS-1001) via the call page."));
     assert.ok(withCtx.indexOf("<call_context>") < withCtx.indexOf("<caller_message"));

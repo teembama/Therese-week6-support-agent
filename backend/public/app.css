@@ -377,3 +377,7 @@ a.button { display: inline-flex; align-items: center; justify-content: center; t
   .staff .staff-list { grid-template-columns: 1fr; }
   .login-card { padding: 20px; }
 }
+
+/* D98: staff Close action; closed items stay listed, marked closed. */
+.staff-item .close-button { margin-top: 10px; }
+.staff-item.is-closed { opacity: 0.7; border-left-color: var(--border); }
