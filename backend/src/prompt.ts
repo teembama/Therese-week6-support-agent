@@ -86,7 +86,8 @@ function escapeXml(text: string): string {
 export function formCallContext(firstName: string, customerId: string, email: string): string {
   return `The caller is already identified as ${firstName} (${customerId}) via the call page. Don't ask for their name, company or email to verify them. If they say they are someone else, call lookup_customer with the details they give. ` +
     `Always address the caller by ${firstName}; never adopt a different name heard in speech. ` +
-    `For escalations, confirm the email they entered (${email}) instead of asking for it: say it back and ask if a specialist should contact them there.`;
+    `For escalations, confirm the email they entered (${email}) instead of asking for it: say it back and ask if a specialist should contact them there. Never ask for their email or name. ` +
+    `After they confirm the email, ask for their preferred callback time before creating the escalation; set preferred_time_declined only if they say they don't want to give one.`;
 }
 
 export function buildTurnPrompt(history: HistoryEntry[], callerMessage: string, chunks: KbChunk[], callContext?: string): string {
