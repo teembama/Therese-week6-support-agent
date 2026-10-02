@@ -1646,6 +1646,18 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - `test:gate` 261/261.
 - **Live check pending:** it relies on `vapi.start()` resolving with the call object (`call.id`). If it doesn't, the panel stays hidden; nothing else is affected.
 
+### D85. Future work, not built: authenticated customer sessions and a staff dashboard (2026-10-02)
+
+- **(a) Authenticated customer sessions.**
+  - The customer signs in on the web page; the login sets the verified customer on the conversation **before** the call starts, instead of voice verification (name plus company, or a reference: F1/F2).
+  - A spoken identity switch during the call ("actually, I'm calling for another account") is **refused**: the session's customer is the only one the call can act on. This extends the one-account-per-call rule (D74) from "first verified" to "signed in".
+  - Ticket and escalation confirmations go to the **account's verified email** (never one spoken on the call) through a **second outbox channel**: a new `notification_outbox` kind, e.g. `customer_confirmation`, sent by its own sender with a verified sender domain. The team channel (Discord, D83) is unchanged.
+- **(b) Staff dashboard.**
+  - Behind staff login and authorisation (roles; every read checked server-side).
+  - Tickets and scheduled callbacks shown as cards, filterable by type (raised tickets / scheduled callbacks), reading the existing `support_tickets` and `escalations` tables. No schema change is needed for a first version.
+  - **Why it wasn't built:** it exposes customer PII (names, emails, account and callback details). Today's staff surface is Discord messages with no amounts or notes (D83); a dashboard needs real staff authentication and authorisation first, which didn't fit this week. The customer-facing panel (D84) shows references only, for that reason.
+- **No code** for either; recorded in `docs/limitations.md`.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

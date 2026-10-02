@@ -20,6 +20,10 @@
   1. The model comes only from the environment (`AGENT_MODEL`), so a switch is a Railway variable change, not a code change.
   2. The backend automatically retries a turn once with `AGENT_MODEL_FALLBACK`, but only when the SDK reports `model_not_found` (unavailable, retired or unknown), only if nothing was spoken, and only while at least 3 s of the 8 s first-token budget remain. Each fallback is logged (`model_fallback`) and recorded in the turn's note and `model` column.
   3. `docs/pre-submission-checklist.md`: check Haiku's deprecation status before grading.
+- **Status checked on submission day (2026-10-02):** `claude-haiku-4-5-20251001` is **Active**, Deprecated: **N/A**, tentative retirement **"Not sooner than October 15, 2026"**.
+  - Sources: the Model status table on Anthropic's [Model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations) page, and the Retirement row for Claude Haiku 4.5 on the [Models overview](https://platform.claude.com/docs/en/models/overview), both read 2026-10-02.
+  - The same page says Anthropic gives "at least 60 days' notice before model retirement for publicly released models". No deprecation notice has been issued, so the earliest possible retirement is about 60 days after a future notice (not before early December 2026), not October 15.
+  - No change: the agent stays on Haiku 4.5, with Sonnet 5.5 as the automatic fallback (D49). Sonnet 5.5's retirement is not sooner than September 28, 2027.
 
 The rest of this page is the evidence behind the decision.
 
