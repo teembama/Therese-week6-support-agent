@@ -39,5 +39,25 @@ for (const type of ["tickets", "callbacks"]) {
     if (type === "callbacks") check(body.records.every((x) => typeof x["preferred_time_text"] === "string"), `staff callbacks${inc}: every callback has a time`);
   }
 }
+// D98: Close. --close-ticket TKT-…: a TEST ticket, reopened here, then closed by staff.
+const ci = process.argv.indexOf("--close-ticket");
+if (ci >= 0) {
+  const id = process.argv[ci + 1]!;
+  const post = (t: string | undefined, body: object) => fetch(`${BASE}/staff/records/close`, { method: "POST", headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) }, body: JSON.stringify(body) });
+  await db.from("support_tickets").update({ status: "open" }).eq("ticket_id", id);
+  check((await post(undefined, { type: "ticket", id })).status === 401, "close: no token -> 401");
+  check((await post(customer, { type: "ticket", id })).status === 403, "close: customer session -> 403");
+  const { data: still } = await db.from("support_tickets").select("status").eq("ticket_id", id).single();
+  check(still?.status === "open", "close: refused attempts change nothing");
+  const r = await post(staff, { type: "ticket", id });
+  const body = (await r.json()) as { closed?: boolean; closed_by?: string; closed_at?: string };
+  check(r.status === 200 && body.closed === true && body.closed_by === "care@relaypay.example", `close: staff -> 200 closed by ${body.closed_by} at ${body.closed_at}`);
+  const { data: after } = await db.from("support_tickets").select("status").eq("ticket_id", id).single();
+  check(after?.status === "closed", "close: the ticket is closed");
+  const { data: ev } = await db.from("conversation_events").select("summary").like("summary", `${id} closed by staff%`);
+  check((ev ?? []).length >= 1, "close: an event row records who and when", JSON.stringify(ev));
+  check((await post(staff, { type: "escalation", id: "ESC-00000000" })).status === 404, "close: unknown escalation -> 404");
+  check((await post(staff, { type: "escalation", id })).status === 400, "close: an ID of the wrong type -> 400");
+}
 console.log(`\nPASS ${pass}  FAIL ${fail}`);
 process.exit(fail ? 1 : 0);
