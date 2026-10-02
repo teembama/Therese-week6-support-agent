@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { handlePublic, isPublicRoute } from "./web.js";
+import { handlePublic, isPublicRoute, renderPage, siteFooter, siteHeader } from "./web.js";
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), "..", "public");
 const read = (f: string) => readFileSync(resolve(publicDir, f), "utf8");
@@ -57,7 +57,9 @@ describe("call page layout (D92)", () => {
     assert.match(html, /id="status"[^>]*role="status"[^>]*aria-live="polite"/);
     assert.match(html, /id="captions-toggle"[^>]*aria-expanded="true"[^>]*aria-controls="captions-lines"/);
     assert.match(html, /id="captions-lines"[^>]*tabindex="0"[^>]*aria-live="polite"/);
-    assert.match(html, /class="skip-link" href="#start"/);
+    // D95: the skip link is in the shared header and targets the page's main.
+    assert.match(renderPage(html), /class="skip-link" href="#main"/);
+    assert.match(html, /<main id="main"/);
   });
   it("Try asking: the account status question replaces the spelled-out transaction", () => {
     assert.ok(html.includes("“Can you check my account status?”"));
@@ -73,7 +75,8 @@ describe("call page layout (D92)", () => {
 
 describe("kept from D93 after the revert", () => {
   it("staff Log out is a button that signs out and goes to the landing page", () => {
-    assert.match(read("staff.html"), /<button id="logout" type="button" class="button secondary small">Log out<\/button>/);
+    // D95: Log out lives in the shared header (staff page).
+    assert.match(renderPage(read("staff.html")), /<button id="logout" type="button" class="button secondary small">Log out<\/button>/);
     const js = read("staff.js");
     const logout = js.slice(js.indexOf('ui.logout.addEventListener("click"'), js.indexOf("ui.refresh.addEventListener"));
     assert.match(logout, /signOut\(\)/);
@@ -81,33 +84,92 @@ describe("kept from D93 after the revert", () => {
   });
 });
 
-describe("landing decoration (D94)", () => {
+describe("site redesign: shared header and footer, one container (D95)", () => {
+  const pages = { landing: read("landing.html"), support: read("index.html"), staff: read("staff.html") };
+  it("every page uses the shared header and footer partials, and its main sits in the same container", () => {
+    assert.match(pages.landing, /<!-- @header home -->/);
+    assert.match(pages.support, /<!-- @header support -->/);
+    assert.match(pages.staff, /<!-- @header staff -->/);
+    for (const html of Object.values(pages)) {
+      assert.match(html, /<!-- @footer -->/);
+      assert.match(html, /<main id="main" class="container /);
+      assert.match(html, /<body class="site">/);
+      const rendered = renderPage(html);
+      assert.ok(!rendered.includes("<!-- @"), "placeholders filled");
+      assert.match(rendered, /<header class="site-header">\s*<div class="container header-inner">/);
+      assert.match(rendered, /<footer class="site-footer">/);
+    }
+  });
+  it("header: wordmark to /, nav with aria-current on the current page, Start a call on customer pages, account on staff", () => {
+    const home = siteHeader("home"), support = siteHeader("support"), staff = siteHeader("staff");
+    assert.match(home, /<a class="wordmark" href="\/"[^>]*><span class="logo" aria-hidden="true">R<\/span><span class="wordmark-text">RelayPay<\/span><\/a>/);
+    assert.match(home, /<a href="\/" aria-current="page">Home<\/a>/);
+    assert.match(support, /<a href="\/support" aria-current="page">Customer support<\/a>/);
+    assert.match(staff, /<a href="\/staff" aria-current="page">Staff<\/a>/);
+    for (const h of [home, support]) assert.match(h, /<a class="button primary small header-cta" href="\/support">Start a call<\/a>/);
+    assert.ok(!staff.includes("Start a call"));
+    assert.match(staff, /<div id="account" class="header-account" hidden><span>Signed in as <strong id="account-email"><\/strong><\/span>/);
+    assert.equal((home.match(/aria-current/g) ?? []).length, 1);
+  });
+  it("footer: the demo line and the nav links", () => {
+    const f = siteFooter();
+    assert.match(f, /© 2026 RelayPay · Demo project/);
+    for (const href of ['href="/"', 'href="/support"', 'href="/staff"']) assert.ok(f.includes(href), href);
+  });
+  it("served pages are rendered (the header is in the response, not a placeholder)", async () => {
+    const { server, base } = await serve();
+    try {
+      for (const path of ["/", "/support"]) {
+        const html = await (await fetch(`${base}${path}`)).text();
+        assert.match(html, /<header class="site-header">/, path);
+        assert.ok(!html.includes("<!-- @header"), path);
+      }
+    } finally {
+      server.close();
+    }
+  });
+  it("CSS: a full-width sticky header with a 1px grey rule and a 2px teal bottom line; 1200px container; body no longer centres", () => {
+    const css = read("app.css");
+    assert.match(css, /\.site-header \{\s*position: sticky; top: 0; z-index: 20; width: 100%;\s*background: var\(--surface\); border-bottom: 2px solid var\(--teal\); box-shadow: inset 0 -1px 0 var\(--border\);/);
+    assert.match(css, /\.container \{ width: 100%; max-width: 75rem; margin: 0 auto; padding-left: 24px; padding-right: 24px; \}/);
+    assert.match(css, /body\.site \{ display: flex; flex-direction: column; place-items: normal;/);
+    assert.match(css, /\.site-nav a\[aria-current="page"\] \{ box-shadow: inset 0 -2px 0 var\(--teal\);/);
+  });
+});
+
+describe("landing hero (D95)", () => {
   const landing = read("landing.html");
-  const css = read("app.css");
-  it("3-4 decorative line drawings, aria-hidden, outside the card, hidden on narrow screens", () => {
-    const art = landing.slice(landing.indexOf('<div class="landing-art"'), landing.indexOf('<main class="card"'));
-    assert.match(art, /<div class="landing-art" aria-hidden="true">/);
-    const count = (art.match(/<svg class="art /g) ?? []).length;
-    assert.ok(count >= 3 && count <= 4, `${count} drawings`);
-    assert.ok(!/<(?:animate|animateTransform|linearGradient|radialGradient|text)\b/.test(art), "no animation, gradients or text");
-    assert.ok(!/fill="(?!none)/.test(art), "no fills");
-    assert.match(css, /@media \(max-width: 1180px\) \{ \.landing-art \{ display: none; \} \}/);
-    assert.match(css, /\.landing-art \{ position: fixed; inset: 0; pointer-events: none;/);
-    assert.match(css, /\.art-line \{ stroke: var\(--primary\); fill: none; \}/);
-    assert.match(css, /\.art-accent \{ stroke: var\(--teal\); fill: none; \}/);
+  it("hero: teal label, headline, one line, Customer support (primary) and Staff sign in (secondary)", () => {
+    assert.match(landing, /<p class="eyebrow">RelayPay support<\/p>\s*<h1 id="title">Help with payments, payouts and your account<\/h1>/);
+    assert.match(landing, /<a class="button primary" href="\/support">Customer support<\/a>\s*<a class="button secondary" href="\/staff">Staff sign in<\/a>/);
   });
-  it("three plain reassurances inside the card, under the options, each with a tiny teal icon", () => {
-    const card = landing.slice(landing.indexOf('<main class="card"'));
-    const opts = card.indexOf('class="landing-options"');
-    const strip = card.indexOf('class="reassurances"');
-    assert.ok(opts > 0 && strip > opts, "under the options, inside the card");
-    for (const t of ["Answers from approved RelayPay information", "Your references shown on screen", "A specialist when you need one"]) assert.ok(card.includes(t), t);
-    assert.equal((card.match(/class="reassure-icon"[^>]*aria-hidden="true"/g) ?? []).length, 3);
-    assert.match(css, /\.reassure-icon \{[^}]*stroke: var\(--teal\);/);
+  it("a static, decorative line illustration: aria-hidden, no fills or animation", () => {
+    const art = landing.slice(landing.indexOf('<div class="hero-art"'), landing.indexOf("</section>"));
+    assert.match(art, /<div class="hero-art" aria-hidden="true">/);
+    assert.ok(!/<(?:animate|animateTransform|linearGradient|radialGradient|text)/.test(art));
+    assert.ok(!/fill="(?!none)/.test(art));
   });
-  it("the card itself is unchanged: header, the two options, the note", () => {
-    assert.match(landing, /<main class="card" aria-labelledby="title">\s*<header class="brand">\s*<span class="logo" aria-hidden="true">R<\/span>/);
-    assert.match(landing, /<a class="landing-option primary" href="\/support">[\s\S]*<a class="landing-option" href="\/staff">/);
-    assert.match(landing, /<p class="note">Voice calls use your microphone and last at most 4 minutes.<\/p>/);
+  it("three reassurances below the hero, each with a small icon", () => {
+    const after = landing.slice(landing.indexOf("</section>"));
+    for (const t of ["Answers from approved RelayPay information", "Your references shown on screen", "A specialist when you need one"]) assert.ok(after.includes(t), t);
+    assert.equal((after.match(/class="reassure-icon"[^>]*aria-hidden="true"/g) ?? []).length, 3);
+  });
+});
+
+describe("support and staff page structure (D95)", () => {
+  it("/support: title area (teal label, heading, one line) above the two columns", () => {
+    const html = read("index.html");
+    assert.match(html, /<div class="page-head">\s*<p class="eyebrow">Customer support<\/p>\s*<h1 id="title">RelayPay voice support<\/h1>/);
+    assert.ok(html.indexOf('class="page-head"') < html.indexOf('class="support-grid"'));
+  });
+  it("/staff: a centred login card with a back link; the dashboard title area; the 3/2/1 grid", () => {
+    const html = read("staff.html");
+    assert.match(html, /<section id="login" class="login-wrap"[\s\S]*<div class="login-card">\s*<h1 id="login-title">Staff sign in<\/h1>[\s\S]*<\/div>\s*<p class="back-link"><a href="\/">← Back to home<\/a><\/p>/);
+    assert.match(html, /<p class="eyebrow">Staff<\/p>\s*<h1 id="title">Raised tickets and scheduled callbacks<\/h1>\s*<p class="lede">Read-only.<\/p>/);
+    const css = read("app.css");
+    assert.match(css, /\.login-card \{ width: 100%; max-width: 420px;/);
+    assert.match(css, /\.staff \.staff-list \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
+    assert.match(css, /@media \(max-width: 1024px\) \{\s*\.staff \.staff-list \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/);
+    assert.match(css, /\.staff \.staff-list \{ grid-template-columns: 1fr; \}/);
   });
 });

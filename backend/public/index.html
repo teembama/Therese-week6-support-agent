@@ -9,23 +9,18 @@
   <link rel="stylesheet" href="/app.css">
   <script type="module" src="/app.js"></script>
 </head>
-<body class="support-body">
-  <a class="skip-link" href="#start">Skip to Start call</a>
-  <main class="support" aria-labelledby="title">
-    <header class="topbar">
-      <a class="brand brand-link" href="/" aria-label="RelayPay home">
-        <span class="logo" aria-hidden="true">R</span>
-        <span class="brand-name">RelayPay</span>
-      </a>
-      <a class="link-button" href="/">Home</a>
-    </header>
+<body class="site">
+<!-- @header support -->
 
-    <div class="support-grid">
-    <div class="col col-left">
-    <div class="intro">
+  <main id="main" class="container support" aria-labelledby="title" tabindex="-1">
+    <div class="page-head">
+      <p class="eyebrow">Customer support</p>
       <h1 id="title">RelayPay voice support</h1>
       <p class="lede">Ask about fees, payouts or a transaction, out loud.</p>
     </div>
+
+    <div class="support-grid">
+    <div class="col col-left">
 
     <section id="path" class="path" aria-labelledby="path-title" hidden>
       <h2 id="path-title">How would you like to continue?</h2>
@@ -102,6 +97,8 @@
     </aside>
     </div>
   </main>
+
+<!-- @footer -->
   <noscript><p class="note">This page needs JavaScript to start a voice call.</p></noscript>
 </body>
 </html>

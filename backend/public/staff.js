@@ -9,7 +9,7 @@ const el = (id) => document.getElementById(id);
 const ui = {
   pageError: el("page-error"), login: el("login"), loginForm: el("login-form"), loginEmail: el("login-email"),
   loginPassword: el("login-password"), loginError: el("login-error"), loginMessage: el("login-message"), loginSubmit: el("login-submit"),
-  dashboard: el("dashboard"), accountEmail: el("account-email"), logout: el("logout"), refresh: el("refresh"),
+  dashboard: el("dashboard"), account: el("account"), accountEmail: el("account-email"), logout: el("logout"), refresh: el("refresh"),
   status: el("records-status"), list: el("records-list"), filters: [...document.querySelectorAll(".filter-button")],
 };
 
@@ -21,6 +21,7 @@ const includeTest = new URLSearchParams(location.search).get("include_test") ===
 
 function showLogin(message) {
   ui.dashboard.hidden = true;
+  ui.account.hidden = true; // D95: the header's "Signed in as" + Log out
   ui.login.hidden = false;
   ui.loginMessage.textContent = message ?? "";
   ui.loginError.hidden = true;
@@ -31,6 +32,7 @@ function showLogin(message) {
 function showDashboard(email) {
   ui.login.hidden = true;
   ui.dashboard.hidden = false;
+  ui.account.hidden = false;
   ui.accountEmail.textContent = email;
   // Outside the auth callback: supabase-js can deadlock if its methods are awaited inside it.
   setTimeout(() => void load(), 0);

@@ -276,3 +276,104 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
 }
 .reassurances li { display: flex; align-items: center; gap: 6px; }
 .reassure-icon { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--teal); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ===================================================================================== */
+/* D95: site redesign. One shared header and footer (rendered from web.ts), every page's  */
+/* content in the same centred container, brand tokens only. Deep blue is primary; teal  */
+/* is the accent (the header's bottom line, the current nav link, labels, focus, icons). */
+/* ===================================================================================== */
+/* place-items: normal undoes the old centred body (Chrome applies it in block layout too); a flex
+   column keeps the footer at the bottom of short pages. */
+body.site { display: flex; flex-direction: column; place-items: normal; padding: 0; min-height: 100vh; background: var(--bg); }
+body.site > main { flex: 1 0 auto; }
+.container { width: 100%; max-width: 75rem; margin: 0 auto; padding-left: 24px; padding-right: 24px; }
+a.button { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+
+/* Header: full-width bar, 1px grey rule above a 2px teal line along the very bottom edge. */
+.site-header {
+  position: sticky; top: 0; z-index: 20; width: 100%;
+  background: var(--surface); border-bottom: 2px solid var(--teal); box-shadow: inset 0 -1px 0 var(--border);
+}
+/* Three columns: the wordmark left, the nav centred, the CTA or account right (also when that is hidden). */
+.header-inner { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; min-height: 64px; }
+.wordmark { justify-self: start; }
+.header-cta, .header-account { justify-self: end; grid-column: 3; }
+.wordmark { display: flex; align-items: center; gap: 10px; color: var(--primary); text-decoration: none; font-weight: 700; font-size: 1.15rem; }
+.wordmark .logo { width: 36px; height: 36px; border-radius: 10px; font-size: 1.05rem; }
+.wordmark:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 8px; }
+.site-nav ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; flex-wrap: wrap; }
+.site-nav a { display: block; padding: 8px 12px; color: var(--primary); text-decoration: none; font-weight: 600; font-size: 0.95rem; border-radius: 6px; }
+.site-nav a:hover { text-decoration: underline; }
+.site-nav a[aria-current="page"] { box-shadow: inset 0 -2px 0 var(--teal); border-radius: 0; }
+.site-nav a:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.header-cta { min-height: 40px; }
+.header-account { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 0.9rem; color: var(--muted); }
+.header-account strong { color: var(--ink); }
+
+/* Footer. */
+.site-footer { margin-top: 56px; background: var(--surface); border-top: 1px solid var(--border); }
+.footer-inner { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 18px; padding-bottom: 18px; font-size: 0.85rem; color: var(--muted); }
+.footer-inner p { margin: 0; }
+.site-footer ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 16px; flex-wrap: wrap; }
+.site-footer a { color: var(--muted); text-decoration: none; }
+.site-footer a:hover { color: var(--teal); text-decoration: underline; }
+.site-footer a:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+/* Page title areas: a small teal label, a deep blue heading, one line. */
+.eyebrow { margin: 0; color: var(--teal); font-size: 0.85rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+.page-head { display: grid; gap: 6px; margin-bottom: 24px; }
+.page-head h1 { margin: 0; font-size: 1.9rem; line-height: 1.2; color: var(--primary); }
+.page-head .lede { margin: 0; }
+
+/* Landing: hero (text left, line illustration right), then three reassurances. */
+.landing { padding-top: 56px; }
+.hero { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap: 48px; align-items: center; }
+.hero-text { display: grid; gap: 16px; }
+.hero-text h1 { margin: 0; font-size: clamp(2rem, 4vw, 3rem); line-height: 1.15; color: var(--primary); }
+.hero-text .lede { margin: 0; font-size: 1.1rem; max-width: 36rem; }
+.hero-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.hero-art svg { width: 100%; max-width: 26rem; height: auto; display: block; margin: 0 auto; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.landing .reassurances {
+  list-style: none; margin: 56px 0 0; padding: 0; border: 0;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; font-size: 0.95rem; color: var(--ink);
+}
+.landing .reassurances li { display: flex; align-items: center; gap: 10px; padding: 16px 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.landing .reassure-icon { width: 18px; height: 18px; }
+
+/* /support: the two columns inside the container, under the sticky header. */
+.container.support { display: block; min-height: 0; padding-top: 32px; }
+.container.support .support-grid { max-width: none; padding: 0; margin: 0; }
+.container.support .col-right { top: 88px; height: calc(100vh - 112px); }
+.container.support .right-empty { flex: 1 1 auto; display: grid; place-items: center; text-align: center; }
+
+/* /staff: a centred login card; the dashboard uses the full container width. */
+.container.staff { padding-top: 32px; }
+.login-wrap { display: grid; justify-items: center; gap: 14px; padding-top: 24px; }
+.login-card { width: 100%; max-width: 420px; display: grid; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; }
+.login-card h1 { margin: 0; font-size: 1.5rem; color: var(--primary); }
+.login-card .lede { margin: 0; }
+.back-link { margin: 0; }
+.back-link a { color: var(--teal); font-weight: 650; }
+.back-link a:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.staff .dashboard { gap: 16px; }
+.staff .staff-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+
+@media (max-width: 1024px) {
+  .staff .staff-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .hero { grid-template-columns: 1fr; gap: 24px; }
+  .hero-art svg { max-width: 18rem; }
+  .landing .reassurances { grid-template-columns: 1fr; margin-top: 32px; }
+  .container.support .col-right { position: static; height: auto; }
+}
+@media (max-width: 640px) {
+  .container { padding-left: 16px; padding-right: 16px; }
+  .site-header { position: static; } /* a wrapped header would take too much of a small screen */
+  .header-inner { display: flex; flex-wrap: wrap; justify-content: space-between; padding-top: 8px; padding-bottom: 8px; gap: 8px; }
+  .site-nav { order: 3; width: 100%; }
+  .site-nav a { padding: 6px 10px; }
+  .landing { padding-top: 28px; }
+  .staff .staff-list { grid-template-columns: 1fr; }
+  .login-card { padding: 20px; }
+}

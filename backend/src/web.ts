@@ -75,11 +75,58 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "Permissions-Policy": "microphone=(self), camera=(), geolocation=()",
 };
 
+/**
+ * D95: the shared site header and footer, one source for every page. A page marks where they go
+ * with <!-- @header home|support|staff --> and <!-- @footer -->; they are filled in when the file is
+ * first served (then cached). Full-width bar; contents in the same centred container as the page.
+ */
+export type SitePage = "home" | "support" | "staff";
+const NAV: Array<{ page: SitePage; href: string; label: string }> = [
+  { page: "home", href: "/", label: "Home" },
+  { page: "support", href: "/support", label: "Customer support" },
+  { page: "staff", href: "/staff", label: "Staff" },
+];
+const navLinks = (current: SitePage | null) =>
+  NAV.map((n) => `<li><a href="${n.href}"${n.page === current ? ' aria-current="page"' : ""}>${n.label}</a></li>`).join("");
+
+export function siteHeader(page: SitePage): string {
+  // Staff: "Signed in as" + Log out live here (shown by staff.js only when signed in). Customer
+  // pages: the "Start a call" button.
+  const right = page === "staff"
+    ? '<div id="account" class="header-account" hidden><span>Signed in as <strong id="account-email"></strong></span><button id="logout" type="button" class="button secondary small">Log out</button></div>'
+    : '<a class="button primary small header-cta" href="/support">Start a call</a>';
+  return `<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="wordmark" href="/" aria-label="RelayPay home"><span class="logo" aria-hidden="true">R</span><span class="wordmark-text">RelayPay</span></a>
+    <nav class="site-nav" aria-label="Main"><ul>${navLinks(page)}</ul></nav>
+    ${right}
+  </div>
+</header>`;
+}
+
+export function siteFooter(): string {
+  return `<footer class="site-footer">
+  <div class="container footer-inner">
+    <p>© 2026 RelayPay · Demo project</p>
+    <nav aria-label="Footer"><ul>${navLinks(null)}</ul></nav>
+  </div>
+</footer>`;
+}
+
+/** Fills the header and footer placeholders of a page's HTML. */
+export function renderPage(html: string): string {
+  return html
+    .replace(/<!-- @header (home|support|staff) -->/, (_m, page: SitePage) => siteHeader(page))
+    .replace("<!-- @footer -->", siteFooter());
+}
+
 const cache = new Map<string, Buffer>();
 function load(file: string): Buffer {
   let body = cache.get(file);
   if (!body) {
-    body = readFileSync(resolve(PUBLIC_DIR, file));
+    const raw = readFileSync(resolve(PUBLIC_DIR, file));
+    body = file.endsWith(".html") ? Buffer.from(renderPage(raw.toString("utf8")), "utf8") : raw;
     cache.set(file, body);
   }
   return body;
