@@ -1902,6 +1902,34 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - **Accessibility:** a skip link and a focusable main on each new page, native buttons, labels unchanged, and teal focus rings.
 - **Tests:** `layout.test.ts` (nav bar markup, Log out button and redirect, full-page layouts, the teal rules, primary still deep blue) and `staff-view.test.ts` (singular/plural counts). `test:gate` 329/329. Live `check-staff` 16/16 (deploy `26565edc`).
 
+### D95. Site redesign: shared header and footer, one container, landing hero (visual only; 2026-10-02)
+
+- **No change** to behaviour, auth, the APIs, the voice agent or the page logic. Every element ID and the accessibility features are kept.
+  - The only script change: the staff "Signed in as" and Log out (same IDs) moved into the header, so `staff.js` shows and hides that area (two lines).
+- **Shared header and footer, one source:** the pages carry `<!-- @header home|support|staff -->` and `<!-- @footer -->`; `web.ts` fills them in when a page is first served (`siteHeader`, `siteFooter`, `renderPage`).
+  - **The header** is a full-width sticky white bar with a 1px light-grey rule and a 2px teal line along its bottom edge.
+    - Inside, a centred container (max 1200px, 24px padding, 64px tall) in three columns:
+      - the "R" logo and "RelayPay" wordmark (→ `/`);
+      - the nav (Home, Customer support, Staff; the current page has `aria-current="page"` and a teal underline);
+      - on the right, "Start a call" (→ `/support`) on `/` and `/support`, or "Signed in as <email>" and the Log out button on the staff dashboard. Nothing extra on the staff login.
+    - Under 640px it wraps neatly and scrolls away instead of staying sticky.
+  - **A skip link** ("Skip to content" → `#main`) on every page.
+  - **The footer:** "© 2026 RelayPay · Demo project" and the nav links, in small grey text, pinned to the bottom of short pages.
+- **One container:** every page's main uses the header's container, so edges line up (measured: header contents and main both start at x = 120 at 1440px).
+- **Landing:** a hero.
+  - Left: the teal label "RelayPay support", "Help with payments, payouts and your account", one line, and Customer support (primary) / Staff sign in (secondary).
+  - Right: an original static line illustration (headset, phone with sound waves, ticket card, a small speech wave).
+  - Below: three reassurance cards with small teal icons.
+  - It stacks under 860px. (The D94 decorations around the card were replaced by the hero.)
+- **`/support`:** a title area (the teal label "Customer support", the heading, one line) above the unchanged two columns. The right column's placeholder fills its height before a call.
+- **`/staff`:** a centred login card (max 420px) with "← Back to home" under it. The dashboard has a title area (the teal label "Staff", "Raised tickets and scheduled callbacks", "Read-only."), then the filters and Refresh on one row, and the cards in a 3 / 2 / 1-column grid (desktop / tablet ≤1024px / mobile ≤640px).
+- **Found while checking visually:** the old `body { place-items: center }` is now applied by Chrome in block layout too, which shrank the footer to a narrow centred box. Fixed with `place-items: normal` on `body.site`.
+- **Verification:**
+  - Headless Chrome (`playwright-core` with the installed Chrome; a staff session from the admin API) screenshotted `/`, `/support`, `/staff` (login) and the staff dashboard, plus the dashboard with test data for the grid, at 1440px and 390px, locally and then on production. The screenshots were inspected.
+  - Measured on every page at both widths: header width equals the viewport; no horizontal overflow; header contents aligned with the main content; the dashboard grid at 3 columns at 1440px and 1 at 390px (100 cards with test data).
+  - Saved in `docs/screenshots/`.
+  - `test:gate` 336/336 (the D92/D93/D94 layout tests updated to the new structure; new D95 tests for the partials, the header variants, aria-current, the container, the hero and the staff structure); live `check-staff` 16/16 (deploy `a8565b2a`).
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
