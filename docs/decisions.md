@@ -1656,7 +1656,55 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - Behind staff login and authorisation (roles; every read checked server-side).
   - Tickets and scheduled callbacks shown as cards, filterable by type (raised tickets / scheduled callbacks), reading the existing `support_tickets` and `escalations` tables. No schema change is needed for a first version.
   - **Why it wasn't built:** it exposes customer PII (names, emails, account and callback details). Today's staff surface is Discord messages with no amounts or notes (D83); a dashboard needs real staff authentication and authorisation first, which didn't fit this week. The customer-facing panel (D84) shows references only, for that reason.
-- **No code** for either; recorded in `docs/limitations.md`.
+- **No code** for either when recorded; recorded in `docs/limitations.md`.
+- **Update (2026-10-02, submission day):** parts are now being built behind flags, with a feature freeze at 4pm. Anything not complete and tested by then stays off and remains future work here.
+  - **L1** (D86): enforced customer login for calls (`CUSTOMER_LOGIN_REQUIRED`).
+  - **L2**: the staff dashboard (`STAFF_DASHBOARD_ENABLED`), if time allows.
+  - **L3**: a login mapped to a customer sets the verified customer at the start of the call (D74 then refuses a spoken switch), only if L1 and L2 are done.
+  - Still future work regardless: confirmations to the account's verified email through a second outbox channel.
+
+### D86. L1: enforced customer login for calls (flag `CUSTOMER_LOGIN_REQUIRED`, migration 007; 2026-10-02)
+
+- **Scope:** the voice agent's prompt, tools, gate and filter are unchanged. Voice identity rules are unchanged: a logged-in general customer still verifies by voice, so S1–S8 behave as before.
+- **Accounts** (Supabase Auth, created by the user): `customer@relaypay.example` (role customer), `care@relaypay.example` (role staff), `amara@lagosledger.example` (role customer, `customer_id` CUS-1001, for L3).
+  - Roles are set in `app_metadata` through the admin API; users can't edit it.
+- **Page:**
+  - A login form (Supabase Auth in the browser with the **publishable** key only; the session in `sessionStorage`, this tab only), "Signed in as …" and Log out.
+  - The browser never reads tables: RLS is on everywhere, with no policies.
+  - When the session ends without a logout (refresh failed, revoked, or `/calls/pass` returns 401): back to the login form with "Your session has expired. Please log in again."
+  - The Supabase origin is listed in CSP `connect-src`.
+- **`POST /calls/pass`** (Authorization: Bearer access token), served only while the flag is on:
+  - The backend verifies the token with Supabase (`auth.getUser`) and requires `app_metadata.role` customer or staff. Otherwise 401 (no or invalid session) or 403 (role).
+  - It returns a **one-time pass**: 32 random bytes, base64url. Only its SHA-256 is stored, in `call_passes`, with the user ID, role, the `customer_id` mapping and a 5-minute expiry from the database clock.
+  - Rate-limited to 10 per minute per client IP. Logs carry a short hash of the user ID, never the token or the pass.
+- **Carrying the pass:** the page starts the Vapi call with `assistantOverrides.variableValues.callPass`.
+  - It reaches the backend as `call.assistantOverrides.variableValues.callPass`. Evidence: a live Custom LLM request body (2026-09-29, the D28 structure log) contained `call.assistantOverrides.variableValues`.
+  - Each first check logs `pass_source` (the path, never the value) to confirm it on the first live call.
+- **Every turn:** `redeem_call_pass(conversation, sha256(pass))` (migration 007, row lock):
+  - unused and unexpired → marked used and linked to the conversation;
+  - already linked → ok, so later turns and Vapi's speculative retries of turn 0 need no pass;
+  - missing, forged, expired, or reused by another conversation → the fixed line **"Please log in on the RelayPay page to use voice support."**, spoken with no agent run (before the social fast path) and recorded as `answer_type` error, status reason `login_required`.
+  - A database failure in the check speaks the usual fallback line (`login_check_failed`), never a misleading login prompt.
+  - An ok conversation is cached in memory, so later turns don't wait on the database.
+- **Tests:**
+  - Local Postgres: `schema-suite.sh` **180/180** (24 new). They cover:
+    - valid → linked;
+    - a later turn without a pass, and a retry with the same pass → ok;
+    - reused on another conversation, missing, forged, malformed, expired (not marked used);
+    - the mapped `customer_id`;
+    - a second pass on a linked conversation stays unused;
+    - constraints: role, hash shape, expiry ≤ 10 minutes, unknown customer, used without a conversation, one pass per conversation;
+    - RLS and privileges.
+  - `race.sh` **6/6**, including two concurrent conversations redeeming one pass: exactly one gets it.
+  - Unit (`login.test.ts`, `auth-page.test.ts`), 274/274 in `test:gate`:
+    - pass extraction;
+    - roles only from `app_metadata`;
+    - only the hash sent;
+    - ok cached and failures not;
+    - `/calls/pass` 200 (hash stored, nothing sensitive logged), 401, 403, 429;
+    - the denied turn (login line, `error`/`login_required`, no model, the admission slot never requested);
+    - page messages and markup.
+  - Live: `npm run test:login` (deployed, flag on) and S1, S3, S7 ×1 with `eval-scenarios --login-email` (real passes). Pending: 007 to be applied.
 
 ## Migration log
 
