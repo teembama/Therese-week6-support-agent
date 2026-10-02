@@ -172,7 +172,7 @@ async function main(): Promise<number> {
   const [c1, c2] = await Promise.all([post(chat(), body(joinId, ["How long do international payouts take?"])), post(chat(), body(joinId, ["How long do international payouts take?"]))]);
   await turnRow(db, joinId);
   const { data: joinAttempts } = await db.from("turn_attempts").select("status").eq("conversation_id", joinId);
-  check(c1.text === c2.text && c1.text.length > 0 && (joinAttempts ?? []).length === 1, "two identical concurrent requests -> one attempt, same text", `${(joinAttempts ?? []).length} attempts`);
+  check(c1.text === c2.text && c1.text.length > 0 && (joinAttempts ?? []).length === 1, "two identical concurrent requests -> one attempt, same text", `${(joinAttempts ?? []).length} attempts; c1=${JSON.stringify(c1.text.slice(0, 120))} (${c1.source}); c2=${JSON.stringify(c2.text.slice(0, 120))} (${c2.source})`);
 
   console.log("\n== Speculative: partial A disconnects, fuller B answers");
   const specId = id("spec");

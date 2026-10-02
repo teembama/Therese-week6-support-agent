@@ -1846,6 +1846,29 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - **Form-Amara dispute** (`test-form-escalation.ts`, the form-path equivalent of S7, whose scripted caller is Efua): **5/5**. Early filler; the typed email confirmed; the time asked; "One moment while I set that up."; one escalation with the account's name and email; the reply ended "Is there anything else I can help you with?".
   - Spend about $0.095 (cap $0.10).
 
+### D92. Landing page, full-screen two-column call page, Try asking (UI only; 2026-10-02)
+
+- **Routes:**
+  - `/` is a landing page with two options: **Customer support** → `/support` (the call page, moved from `/`) and **Staff** → `/staff`.
+  - Old call-page addresses redirect permanently to `/support` (`/index.html`, `/support/`, `/call`). Vapi's allowed origin is unaffected (same origin).
+- **Call page:**
+  - Full screen, in two columns on desktop. **Left:** the path chooser, the form, the call status, Start/End, Try asking and the note. **Right:** live captions, full height and scrollable, then the references panel, with a placeholder before the first call.
+  - Stacks into one column under 860px.
+  - Same element IDs and the same accessibility: aria-live status and captions, the captions toggle's `aria-controls`, the focusable caption list, "Jump to latest", the native buttons. Added a skip link and an `aside` landmark for the right column.
+- **Brand** (`assets/brand-direction.md`): only the existing colour tokens (deep blue `#0b2a5b`, teal `#0f766e`, off-white `#f7f7f4`, white); no gradients; system font. A test pins the tokens.
+- **Try asking:** "Can you check my account status?" replaces "Can you check transaction T X N nine zero zero one?".
+- **No behaviour change:** one JavaScript line hides the right column's placeholder at call start.
+- **Tests:**
+  - Unit `layout.test.ts`: `/` landing, `/support` call page, the three redirects, the CSP on `/support`; which elements are in which column; accessibility attributes and the skip link; the Try asking text; the mobile stacking rule; the brand tokens and no gradients. `test:gate` 325/325 (all earlier page tests unchanged and passing).
+  - `test-deployed` and `test-endpoint` updated for the new routes. `test-deployed` now sends a real guest pass for every conversation (call passes are required) and allows the newer public `/config` keys.
+- **Live** (deploy `0d0b8f0e`):
+  - `test:callpass` **14/14**, including the rate limit this time.
+  - `check-staff` **16/16**.
+  - `test:deployed` **26/27.** The failure is "two identical concurrent requests → one attempt, same text": one attempt as required, but the texts differed. The logs show the second request was not joined in flight (no `turn_inflight_joined`): it most likely arrived after the first turn had been saved and was replayed, a timing effect of this laptop's network.
+    - A direct reproduction (`test-join-…`) joined in flight and returned identical text.
+    - Part 2 changed only static pages and routes, not the turn path.
+    - The check now prints both texts and their sources on failure.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

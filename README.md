@@ -7,7 +7,7 @@ A voice customer-support agent for RelayPay, a (fictional) cross-border payments
 
 Everything it says passes a grounding gate in code before it is spoken.
 
-**Live:** https://relaypay-backend-production-aa34.up.railway.app (choose a path, click **Start call** and allow the microphone)
+**Live:** https://relaypay-backend-production-aa34.up.railway.app: a landing page with **Customer support** (the call page, `/support`: choose a path, click **Start call** and allow the microphone) and **Staff** (`/staff`).
 
 ### Starting a call (graders)
 
