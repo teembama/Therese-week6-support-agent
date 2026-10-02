@@ -42,6 +42,8 @@ export interface StaffCallback {
   user_name: string;
   user_email: string;
   preferred_time_text: string | null;
+  /** D97: the booked slot (ISO). */
+  callback_slot: string | null;
   status: string;
   reason: string;
   created_at: string;
@@ -91,6 +93,7 @@ export function toStaffCallback(r: Row): StaffCallback {
     user_name: str(r["user_name"]),
     user_email: str(r["user_email"]),
     preferred_time_text: strOrNull(r["preferred_time_text"]),
+    callback_slot: strOrNull(r["callback_slot"]),
     status: str(r["status"]),
     reason: maskAmounts(str(r["reason"])).slice(0, 1000),
     created_at: str(r["created_at"]),
@@ -117,10 +120,10 @@ export async function readStaffRecords(db: Db, type: StaffRecordType, includeTes
     return rows.filter((r) => !linked.has(str(r["ticket_id"]))).slice(0, STAFF_PAGE_SIZE).map(toStaffTicket);
   }
   let q = db.from("escalations")
-    .select("escalation_id, ticket_id, category, customer_id, user_name, user_email, preferred_time_text, status, reason, created_at, conversations!inner(channel)")
-    .eq("call_booked", true);
+    .select("escalation_id, ticket_id, category, customer_id, user_name, user_email, preferred_time_text, callback_slot, status, reason, created_at, conversations!inner(channel)")
+    .not("callback_slot", "is", null); // D97: booked slots only
   if (!includeTest) q = q.neq("conversations.channel", "test");
-  const { data, error } = await q.order("created_at", { ascending: false }).limit(STAFF_PAGE_SIZE);
+  const { data, error } = await q.order("callback_slot", { ascending: true }).limit(STAFF_PAGE_SIZE); // by slot time
   if (error) throw new Error(`escalations read failed (${error.code})`);
   return ((data ?? []) as Row[]).map(toStaffCallback);
 }

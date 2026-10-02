@@ -61,7 +61,8 @@ export function cardFor(type, r) {
     title: `Callback for escalation ${r.escalation_id}`,
     badges: [cap(r.category), cap(r.status)].filter(Boolean),
     fields: [
-      ["Caller's preference", r.preferred_time_text ? `“${r.preferred_time_text}”` : "No time given"],
+      ["Callback booked", r.callback_slot ? slotForStaff(r.callback_slot) : "Not booked"],
+      ["Caller's words", r.preferred_time_text ? `“${r.preferred_time_text}”` : ""],
       ["Caller", r.user_name],
       ["Caller email", r.user_email],
       ["Customer", r.customer_id || "Not verified on the call"],
@@ -71,6 +72,16 @@ export function cardFor(type, r) {
       ...(r.channel === "test" ? [["Source", "Test conversation"]] : []),
     ].filter(([, v]) => v),
   };
+}
+
+/** D97: "Mon 5 Oct, 10:00 WAT" for a booked slot (Lagos is UTC+1, no DST). */
+export function slotForStaff(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const l = new Date(d.getTime() + 60 * 60_000);
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${days[l.getUTCDay()]} ${l.getUTCDate()} ${months[l.getUTCMonth()]}, ${String(l.getUTCHours()).padStart(2, "0")}:${String(l.getUTCMinutes()).padStart(2, "0")} WAT`;
 }
 
 /** The empty-state line for a filter. */

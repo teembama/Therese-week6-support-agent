@@ -231,7 +231,8 @@ const PRD: Scenario[] = [
       "My account was restricted and nobody is helping me.",
       "Yes please. My name is Efua Mensah.",
       "My email is efua at accra stack dot example.",
-      "Yes, that's correct. Tomorrow morning would be good for a callback.",
+      // D97: a valid weekday slot ("tomorrow morning" is now too vague to book).
+      "Yes, that's correct. Monday at 11 AM would be good for a callback.",
       "Yes, please go ahead.",
     ],
     stopWhen: (r) => r.escalations.length > 0,
@@ -243,6 +244,7 @@ const PRD: Scenario[] = [
         [e?.["user_name"] !== undefined && /efua/i.test(String(e?.["user_name"])), "name collected"],
         [e?.["user_email"] === "efua@accrastack.example", "email collected and normalised"],
         [Boolean(e?.["preferred_time_text"]), "preferred callback time collected"],
+        [Boolean(e?.["callback_slot"]) && e?.["call_booked"] === true, "a callback slot booked (D97)"],
         [r.events.some((x) => x["event_type"] === "escalation_created"), "escalation_created event written"],
         [!promises(spoken(r), PROMISE), "no outcome or timeline promise"],
         [!/compliance/i.test(spoken(r)), "no compliance explanation"],
@@ -435,7 +437,7 @@ async function runScenario(db: Db, sc: Scenario, rep: number): Promise<RunData> 
       msServerFirstToken: (row?.["ms_first_token"] as number | null) ?? null, cost,
     });
     r.tickets = ((await db.from("support_tickets").select("ticket_id, customer_id, transaction_id, payout_id, category, priority, status, summary").eq("conversation_id", conversationId)).data ?? []) as Row[];
-    r.escalations = ((await db.from("escalations").select("escalation_id, ticket_id, customer_id, user_name, user_email, category, call_booked, preferred_time_text, status").eq("conversation_id", conversationId)).data ?? []) as Row[];
+    r.escalations = ((await db.from("escalations").select("escalation_id, ticket_id, customer_id, user_name, user_email, category, call_booked, preferred_time_text, callback_slot, status").eq("conversation_id", conversationId)).data ?? []) as Row[];
     r.events = ((await db.from("conversation_events").select("turn_index, event_type, summary").eq("conversation_id", conversationId).order("id")).data ?? []) as Row[];
     if (sc.stopWhen?.(r)) break;
   }
@@ -739,6 +741,8 @@ async function main(): Promise<number> {
       failedChecks.length ? `failed checks: ${failedChecks.join("; ")}` : "all deterministic checks passed",
       judgeFlags.length ? `judge flags: ${judgeFlags.join("; ")}` : `judge: ${judgments.reduce((n, j) => n + j.result.claims.length, 0)} claims, all supported with verified quotes`,
     ].join("\n");
+    // D97: free this run's callback slot so the next repetition can book the same time.
+    await db.from("escalations").update({ status: "closed" }).eq("conversation_id", run.conversationId).like("conversation_id", "eval-%");
     const { error } = NO_WRITE ? { error: null } : await db.from("evaluations").insert({ run_id: RUN_ID, conversation_id: run.conversationId, scenario: `${sc.id} ${sc.title}`, expected: sc.expected, actual: actual.slice(0, 8000), passed, notes: notes.slice(0, 8000) });
     if (error) console.log(`   evaluations insert failed: ${error.message}`);
   }

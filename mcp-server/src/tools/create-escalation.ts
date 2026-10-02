@@ -2,18 +2,22 @@ import { guardedRpc, normaliseEmail } from "@relaypay/shared";
 import * as z from "zod";
 import { withWriteToolLogging, type ToolOutcome } from "../tool-logging.js";
 import { invalid, logEventBestEffort, parseArgs, serialised, verifiedCustomerId, writeLimitOutcome, writeLimitReached } from "./common.js";
+import { BUSINESS_HOURS_SENTENCE, inPartOfDay, parseCallbackTime, refusalMessage, slotForSpeech, type PartOfDay, type RefusalReason } from "./callback-slot.js";
 
 export const name = "create_escalation";
 
 export const description =
   "Hand the caller over to a RelayPay support specialist. Steps, in order: (1) ask for the caller's name; " +
   "(2) ask for their email; (3) read the email back exactly and get the caller's confirmation; (4) ask for a " +
-  "preferred callback time; (5) call this tool, with email_confirmed_by_caller true and either " +
+  "callback day and time; (5) call this tool, with email_confirmed_by_caller true and either " +
   "preferred_time_text (their words) or preferred_time_declined true. The tool refuses to create anything " +
   "until steps 3 and 4 are done. Creates the escalation and its support ticket. Tell the caller what " +
-  "follow_up_summary says (a representative will follow up); never say how or when, and never promise an " +
-  "outcome. If preferred_time_noted is set, say it is NOTED as their preferred time (\"I've noted tomorrow " +
-  "morning as your preferred time\"), never as a commitment.";
+  "follow_up_summary says (a representative will follow up); never promise an outcome. " +
+  "Callback booking: the tool books a real slot from the caller's words. If it refuses the time " +
+  "(status invalid_input with callback_refused), nothing was written: say why in plain words (message), " +
+  "say business_hours, and offer ONLY the returned alternatives (their spoken text); then call again with the " +
+  "time the caller picks. If callback_booked_for is set, confirm it as \"booked for <callback_booked_for>\". " +
+  "Never say a day, time or hours that are not in this tool's result.";
 
 export const ESCALATION_CATEGORIES = ["compliance", "account", "dispute", "payment", "other"] as const;
 
@@ -31,11 +35,38 @@ export const inputSchema = z.object({
 });
 
 interface EscalationRow {
-  ticket_id: string;
-  escalation_id: string;
+  ticket_id: string | null;
+  escalation_id: string | null;
   created: boolean;
   /** Migration 006 (D82): missing fields of an existing escalation were filled. Absent before 006. */
   updated?: boolean;
+  /** Migration 009 (D97): the requested slot was already booked; nothing was written. */
+  slot_taken?: boolean;
+}
+
+/**
+ * A callback refusal (D97): nothing was written. The reason in plain words, the business hours,
+ * and the next free slots (in the caller's part of the day when they named one), for speech.
+ */
+export async function callbackRefusal(db: Parameters<typeof verifiedCustomerId>[0], reason: RefusalReason, words: string, opts: { partOfDay?: PartOfDay; from?: Date } = {}): Promise<ToolOutcome> {
+  const { data, error } = await db.rpc("next_free_slots", { p_from: (opts.from ?? new Date()).toISOString(), p_count: 40 });
+  const free = error ? [] : ((data ?? []) as string[]).map((x) => new Date(x));
+  const inPart = free.filter((d) => inPartOfDay(d, opts.partOfDay));
+  const picked = [...inPart, ...free.filter((d) => !inPart.includes(d))].slice(0, 3);
+  const alternatives = picked.map((d) => ({ slot: d.toISOString(), spoken: slotForSpeech(d) }));
+  return {
+    status: "invalid_input",
+    result: {
+      callback_refused: true,
+      reason,
+      message: refusalMessage(reason, opts.partOfDay),
+      business_hours: BUSINESS_HOURS_SENTENCE,
+      alternatives,
+      preferred_time_text: words,
+      nothing_written: true,
+    },
+    resultSummary: `callback refused: ${reason} ("${words.slice(0, 60)}"); offered ${alternatives.map((a) => a.spoken).join(" | ") || "none"}`,
+  };
 }
 
 export function escalationKeys(conversationId: string, category: string): { ticket: string; escalation: string } {
@@ -100,13 +131,28 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
   const precondition = escalationPreconditions(input);
   if (precondition) return invalid(precondition);
 
+  // D97: the caller's words -> a real slot, or a refusal with alternatives (nothing written).
+  let slot: Date | null = null;
+  if (input.preferred_time_text) {
+    const parsedTime = parseCallbackTime(input.preferred_time_text, new Date());
+    if (!parsedTime.ok) {
+      return callbackRefusal(db, parsedTime.reason, input.preferred_time_text, {
+        ...(parsedTime.partOfDay ? { partOfDay: parsedTime.partOfDay } : {}),
+        ...(parsedTime.day && parsedTime.day.getTime() > Date.now() ? { from: parsedTime.day } : {}),
+      });
+    }
+    slot = parsedTime.slot;
+  }
+
   const keys = escalationKeys(ctx.conversationId, input.category);
   const cap = await writeLimitReached(db, ctx.conversationId, "escalation", keys.escalation);
   if (cap.reached) return writeLimitOutcome("escalation", cap.existing);
 
   const customerId = await verifiedCustomerId(db, ctx.conversationId);
-  const callBooked = callBookedFor(input);
-  const rows = await guardedRpc<EscalationRow[]>(db, "create_escalation_with_ticket", {
+  const callBooked = slot !== null;
+  let rows: EscalationRow[];
+  try {
+    rows = await guardedRpc<EscalationRow[]>(db, "create_escalation_with_ticket", {
     p_conversation_id: ctx.conversationId,
     p_ticket_idempotency_key: keys.ticket,
     p_escalation_idempotency_key: keys.escalation,
@@ -118,15 +164,23 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
     p_customer_id: customerId,
     p_call_booked: callBooked,
     p_preferred_time_text: input.preferred_time_text ?? null,
+    p_callback_slot: slot ? slot.toISOString() : null,
   }, ctx.attemptId);
-  const e = rows[0];
-  if (!e) throw new Error("create_escalation_with_ticket returned no row");
+  } catch (err) {
+    // The slot became less than 30 minutes ahead between parsing and writing.
+    if (err instanceof Error && err.message.includes("CALLBACK_SLOT_PAST")) return callbackRefusal(db, "past", input.preferred_time_text ?? "");
+    throw err;
+  }
+  const first = rows[0];
+  if (!first) throw new Error("create_escalation_with_ticket returned no row");
+  if (first.slot_taken) return callbackRefusal(db, "taken", input.preferred_time_text ?? "", slot ? { from: slot } : {});
+  const e = { ...first, ticket_id: first.ticket_id!, escalation_id: first.escalation_id! };
   const updated = e.updated === true;
   // An existing escalation (D82): report what is STORED (a set time is never overwritten; a missing
   // one may just have been filled), not this call's inputs.
-  let stored = { call_booked: callBooked, preferred_time_text: input.preferred_time_text ?? null };
+  let stored: { call_booked: boolean; preferred_time_text: string | null; callback_slot: string | null } = { call_booked: callBooked, preferred_time_text: input.preferred_time_text ?? null, callback_slot: slot ? slot.toISOString() : null };
   if (!e.created) {
-    const { data: row, error: readError } = await db.from("escalations").select("call_booked, preferred_time_text").eq("escalation_id", e.escalation_id).maybeSingle();
+    const { data: row, error: readError } = await db.from("escalations").select("call_booked, preferred_time_text, callback_slot").eq("escalation_id", e.escalation_id).maybeSingle();
     if (readError) throw new Error(`escalations read failed (${readError.code}): ${readError.message}`);
     if (row) stored = row as typeof stored;
   }
@@ -150,7 +204,8 @@ export const handler = withWriteToolLogging(name, "Create (or return the existin
       ...(updated ? { updated: true } : {}),
       follow_up_summary: followUpSummary(),
       ...(stored.preferred_time_text ? { preferred_time_noted: stored.preferred_time_text } : {}),
+      ...(stored.callback_slot ? { callback_slot: new Date(stored.callback_slot).toISOString(), callback_booked_for: `${slotForSpeech(new Date(stored.callback_slot))} Lagos time` } : {}),
     },
-    resultSummary: `${e.created ? "created" : updated ? "existing, enriched" : "existing"} ${e.escalation_id}/${e.ticket_id} ${input.category}; call_booked=${stored.call_booked}; customer=${customerId ?? "unverified"}${note}`,
+    resultSummary: `${e.created ? "created" : updated ? "existing, enriched" : "existing"} ${e.escalation_id}/${e.ticket_id} ${input.category}; call_booked=${stored.call_booked}${stored.callback_slot ? `; slot=${new Date(stored.callback_slot).toISOString()}` : ""}; customer=${customerId ?? "unverified"}${note}`,
   };
 }));

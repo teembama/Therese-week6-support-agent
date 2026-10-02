@@ -21,6 +21,18 @@ async function main(): Promise<number> {
   process.loadEnvFile(resolve(REPO, ".env"));
   const db = createServiceClient();
   const conversationId = `test-tools-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  // D97: callbacks book real slots, one open escalation per slot. Use free slots (spoken the way the
+  // agent offers them) so repeated runs never collide; this run's escalations are closed at the end.
+  const lagosSpoken = (iso: string) => {
+    const l = new Date(new Date(iso).getTime() + 3_600_000);
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const h = l.getUTCHours(), m = l.getUTCMinutes();
+    return `${days[l.getUTCDay()]} ${l.getUTCDate()} ${months[l.getUTCMonth()]} at ${h % 12 === 0 ? 12 : h % 12}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h < 12 ? "AM" : "PM"}`;
+  };
+  const { data: freeRows, error: freeError } = await db.rpc("next_free_slots", { p_from: new Date(Date.now() + 2 * 86_400_000).toISOString(), p_count: 12 });
+  if (freeError) throw new Error(`next_free_slots failed (is migration 009 applied?): ${freeError.message}`);
+  const SLOTS = ((freeRows ?? []) as string[]).filter((_, i) => i % 2 === 0).map((iso) => ({ iso: new Date(iso).toISOString(), text: lagosSpoken(iso) }));
   const attemptId = newAttemptId();
   let failures = 0;
   const check = (ok: boolean, label: string, detail = "") => {
@@ -167,17 +179,18 @@ async function main(): Promise<number> {
     check(badEmail["status"] === "invalid_input" && (await count("escalations")) === 0, "bad email -> invalid_input, nothing written");
     // D72: the flow is enforced by the tool; nothing is written until both steps are done.
     const noTime = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", email_confirmed_by_caller: true }, "invalid_input");
-    const noConfirm = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", preferred_time_text: "tomorrow after 2pm Lagos time" }, "invalid_input");
+    const noConfirm = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", preferred_time_text: SLOTS[0]!.text }, "invalid_input");
     check(noTime["status"] === "invalid_input" && /preferred callback time/.test(JSON.stringify(noTime)) && noConfirm["status"] === "invalid_input" && /Read the email back/.test(JSON.stringify(noConfirm)) && (await count("escalations")) === 0,
       "no preferred time (given or declined) / email not confirmed -> invalid_input with an actionable reason, nothing written (D72)");
-    const e1 = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", preferred_time_text: "tomorrow after 2pm Lagos time", email_confirmed_by_caller: true }, "success");
-    const { data: eRow } = await db.from("escalations").select("user_email, call_booked, preferred_time_text, customer_id, ticket_id").eq("escalation_id", String(e1["escalation_id"])).single();
+    const e1 = await call("create_escalation", { user_name: "Amara Okafor", user_email: "amara at lagos ledger dot example", category: "payment", reason: "Payout past its estimated arrival", preferred_time_text: SLOTS[0]!.text, email_confirmed_by_caller: true }, "success");
+    const { data: eRow } = await db.from("escalations").select("user_email, call_booked, preferred_time_text, callback_slot, customer_id, ticket_id").eq("escalation_id", String(e1["escalation_id"])).single();
     const eR = (eRow ?? {}) as Structured;
     check(e1["status"] === "success" && e1["escalation_status"] === "open" && e1["duplicate"] === false && typeof e1["ticket_id"] === "string" && eR["ticket_id"] === e1["ticket_id"], "escalation created with a linked ticket");
     check(eR["user_email"] === "amara@lagosledger.example", "spoken email normalised to amara@lagosledger.example", String(eR["user_email"]));
-    check(eR["call_booked"] === true && eR["preferred_time_text"] === "tomorrow after 2pm Lagos time" && eR["customer_id"] === "CUS-1001", "call_booked true with the verbatim preferred time; customer from verified state");
+    check(eR["call_booked"] === true && eR["preferred_time_text"] === SLOTS[0]!.text && new Date(String(eR["callback_slot"])).toISOString() === SLOTS[0]!.iso && eR["customer_id"] === "CUS-1001", "a real slot booked (D97): call_booked, callback_slot, the verbatim words; customer from verified state", JSON.stringify(eR));
+    check(e1["callback_booked_for"] === `${SLOTS[0]!.text} Lagos time`, "the result says what to confirm: booked for <day date time> Lagos time", String(e1["callback_booked_for"]));
     check(!/\b(within|hours?|days?|soon|shortly)\b/i.test(String(e1["follow_up_summary"])), "follow_up_summary promises no timeline");
-    check(!/@|\bby e-?mail\b|tomorrow|2pm/i.test(String(e1["follow_up_summary"])) && e1["preferred_time_noted"] === "tomorrow after 2pm Lagos time", "follow_up_summary has no channel, address or time; the preference is returned separately as noted (D70)", String(e1["follow_up_summary"]));
+    check(!/@|\bby e-?mail\b|tomorrow|2pm/i.test(String(e1["follow_up_summary"])) && e1["preferred_time_noted"] === SLOTS[0]!.text, "follow_up_summary has no channel, address or time; the preference is returned separately as noted (D70)", String(e1["follow_up_summary"]));
     const e1again = await call("create_escalation", { user_name: "Amara", user_email: "amara@lagosledger.example", category: "payment", reason: "Asked again", email_confirmed_by_caller: true, preferred_time_declined: true }, "success");
     check(e1again["escalation_id"] === e1["escalation_id"] && e1again["duplicate"] === true, "duplicate returns the same escalation");
 
@@ -327,21 +340,21 @@ async function main(): Promise<number> {
     const base = { user_name: "Efua Mensah", user_email: "efua at accra stack dot example", category: "account", reason: "Account restricted, caller asked for a specialist", email_confirmed_by_caller: true };
     const first = await enrCall({ ...base, preferred_time_declined: true });
     check(first["status"] === "success" && first["duplicate"] === false && first["call_booked"] === false && first["preferred_time_noted"] === undefined, "first call (time declined): created, call_booked false, no time");
-    const second = await enrCall({ ...base, preferred_time_text: "tomorrow morning" });
+    const second = await enrCall({ ...base, preferred_time_text: SLOTS[1]!.text });
     check(second["status"] === "success" && second["escalation_id"] === first["escalation_id"] && second["duplicate"] === true && second["updated"] === true,
       "second call with a time: the SAME escalation, updated true", JSON.stringify(second));
-    check(second["call_booked"] === true && second["preferred_time_noted"] === "tomorrow morning", "the result reports the stored record: call_booked true, preferred_time_noted 'tomorrow morning'");
+    check(second["call_booked"] === true && second["preferred_time_noted"] === SLOTS[1]!.text && second["callback_booked_for"] === `${SLOTS[1]!.text} Lagos time`, "the result reports the stored record: the slot booked by enrichment (D97)");
     const { data: enrRows } = await db.from("escalations").select("escalation_id, preferred_time_text, call_booked").eq("conversation_id", enrConversation);
-    check((enrRows ?? []).length === 1 && (enrRows as Structured[])[0]!["preferred_time_text"] === "tomorrow morning" && (enrRows as Structured[])[0]!["call_booked"] === true,
+    check((enrRows ?? []).length === 1 && (enrRows as Structured[])[0]!["preferred_time_text"] === SLOTS[1]!.text && (enrRows as Structured[])[0]!["call_booked"] === true,
       "one escalation row: time filled, call_booked true", JSON.stringify(enrRows));
-    const third = await enrCall({ ...base, preferred_time_text: "Friday at 3pm" });
-    check(third["updated"] === undefined && third["preferred_time_noted"] === "tomorrow morning", "a later, different time: not overwritten (updated absent, stored time reported)", JSON.stringify(third));
+    const third = await enrCall({ ...base, preferred_time_text: SLOTS[2]!.text });
+    check(third["updated"] === undefined && third["preferred_time_noted"] === SLOTS[1]!.text, "a later, different time: not overwritten (updated absent, stored time reported)", JSON.stringify(third));
     const { data: enrEvents } = await db.from("conversation_events").select("event_type").eq("conversation_id", enrConversation).order("id");
     check(((enrEvents ?? []) as Structured[]).map((e) => e["event_type"]).join(",") === "escalation_created,escalation_updated", "events: escalation_created, then one escalation_updated", JSON.stringify(enrEvents));
     const enrOutbox = await outboxOf(enrConversation);
     check(enrOutbox.map((r) => r.kind).join(",") === "escalation_created,escalation_updated", "outbox: exactly one escalation_created and one escalation_updated", JSON.stringify(enrOutbox.map((r) => r.kind)));
     const upd = enrOutbox.find((r) => r.kind === "escalation_updated");
-    check(upd?.payload["preferred_time_text"] === "tomorrow morning" && upd?.payload["call_booked"] === true && upd?.payload["user_email"] === "efua@accrastack.example" && noAmountsOrNotes(enrOutbox),
+    check(upd?.payload["preferred_time_text"] === SLOTS[1]!.text && upd?.payload["callback_slot"] != null && upd?.payload["call_booked"] === true && upd?.payload["user_email"] === "efua@accrastack.example" && noAmountsOrNotes(enrOutbox),
       "the escalation_updated payload: the new time, call_booked, the caller's email for the team; no amounts or notes", JSON.stringify(upd?.payload));
   } finally {
     await enrClient.close();
@@ -413,9 +426,9 @@ async function main(): Promise<number> {
     stderr: "pipe",
   }));
   try {
-    const noConfirm = ((await formClient.callTool({ name: "create_escalation", arguments: { category: "dispute", reason: "Caller wants to dispute a payment", preferred_time_text: "tomorrow morning" } })).structuredContent ?? {}) as Structured;
+    const noConfirm = ((await formClient.callTool({ name: "create_escalation", arguments: { category: "dispute", reason: "Caller wants to dispute a payment", preferred_time_text: SLOTS[3]!.text } })).structuredContent ?? {}) as Structured;
     check(noConfirm["status"] === "invalid_input", "form call: email_confirmed_by_caller is still required", JSON.stringify(noConfirm).slice(0, 160));
-    const esc = ((await formClient.callTool({ name: "create_escalation", arguments: { user_name: "Tamara", user_email: "tamara at lagos ledger dot example", category: "dispute", reason: "Caller wants to dispute a payment", email_confirmed_by_caller: true, preferred_time_text: "tomorrow morning" } })).structuredContent ?? {}) as Structured;
+    const esc = ((await formClient.callTool({ name: "create_escalation", arguments: { user_name: "Tamara", user_email: "tamara at lagos ledger dot example", category: "dispute", reason: "Caller wants to dispute a payment", email_confirmed_by_caller: true, preferred_time_text: SLOTS[3]!.text } })).structuredContent ?? {}) as Structured;
     check(esc["status"] === "success", "form call: escalation created", JSON.stringify(esc).slice(0, 200));
     const { data: rows } = await db.from("escalations").select("user_name, user_email, customer_id, preferred_time_text").eq("conversation_id", formConversation);
     check((rows ?? []).length === 1 && rows![0]!.user_name === "Amara Okafor" && rows![0]!.user_email === "amara@lagosledger.example" && rows![0]!.customer_id === "CUS-1001",
@@ -427,6 +440,58 @@ async function main(): Promise<number> {
   check((guestNoName ?? []).length === 0, "guest call: no escalation was created by these checks");
   await db.rpc("finish_turn_attempt", { p_attempt_id: formAttempt, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });
   await db.from("conversations").update({ ended_at: new Date().toISOString(), final_status: "completed", summary: "Form escalation test run (D90)" }).eq("conversation_id", formConversation);
+
+  // ---- D97: callback refusals (nothing written, the reason, the business hours, 3 free slots) and a taken slot.
+  console.log("\n== Callback slots (D97): refusals and a taken slot");
+  const slotClient = async (suffix: string) => {
+    const conv = `${conversationId}-${suffix}`;
+    const att = newAttemptId();
+    await db.rpc("begin_turn_attempt", { p_conversation_id: conv, p_channel: "test", p_caller: "scripts/test-tools.ts", p_turn_index: 0, p_attempt_id: att, p_transcript_hash: transcriptHash(suffix), p_user_transcript: suffix });
+    const client = new Client({ name: `relaypay-test-tools-${suffix}`, version: "0.1.0" });
+    await client.connect(new StdioClientTransport({
+      command: process.execPath, args: [SERVER],
+      env: { ...getDefaultEnvironment(), SUPABASE_URL: process.env["SUPABASE_URL"]!, SUPABASE_SERVICE_ROLE_KEY: process.env["SUPABASE_SERVICE_ROLE_KEY"]!, CONVERSATION_ID: conv, TURN_INDEX: "0", ATTEMPT_ID: att },
+      stderr: "pipe",
+    }));
+    const book = async (words: string) => ((await client.callTool({ name: "create_escalation", arguments: { user_name: "Efua Mensah", user_email: "efua at accra stack dot example", category: "account", reason: "Account restricted, caller asked for a specialist", email_confirmed_by_caller: true, preferred_time_text: words } })).structuredContent ?? {}) as Structured;
+    const done = async () => {
+      await client.close();
+      await db.rpc("finish_turn_attempt", { p_attempt_id: att, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });
+    };
+    return { conv, book, done };
+  };
+  const refusals = await slotClient("slot-refusals");
+  try {
+    for (const [words, reason] of [["Saturday at 10am", "weekend"], ["Monday at 6pm", "outside_hours"], ["yesterday at 10am", "past"], ["tomorrow morning", "needs_specific_time"], ["Monday at 10:15am", "not_a_slot"]] as const) {
+      const r = await refusals.book(words);
+      const alts = (r["alternatives"] as Array<{ spoken: string }> | undefined) ?? [];
+      check(r["status"] === "invalid_input" && r["reason"] === reason && r["business_hours"] === "Callbacks are available Monday to Friday, 9 AM to 5 PM Lagos time." && alts.length === 3 && alts.every((a) => / at \d/.test(a.spoken)),
+        `"${words}" -> refused: ${reason}, the business hours and 3 free slots`, JSON.stringify(r).slice(0, 300));
+    }
+    const morning = await refusals.book("Monday morning");
+    check(((morning["alternatives"] as Array<{ spoken: string }>) ?? []).every((a) => / AM$/.test(a.spoken)), "a vague 'morning' -> the offered slots are in the morning", JSON.stringify(morning["alternatives"]));
+    const { count: refusedRows } = await db.from("escalations").select("*", { count: "exact", head: true }).eq("conversation_id", refusals.conv);
+    check(refusedRows === 0, "nothing written on any refusal (no escalation)");
+  } finally {
+    await refusals.done();
+  }
+  const first = await slotClient("slot-a");
+  const second = await slotClient("slot-b");
+  try {
+    const a = await first.book(SLOTS[4]!.text);
+    check(a["status"] === "success" && a["callback_booked_for"] === `${SLOTS[4]!.text} Lagos time`, "a free slot is booked", JSON.stringify(a).slice(0, 200));
+    const b = await second.book(SLOTS[4]!.text);
+    check(b["status"] === "invalid_input" && b["reason"] === "taken" && ((b["alternatives"] as unknown[]) ?? []).length === 3, "the same slot on another call -> taken, with 3 other slots", JSON.stringify(b).slice(0, 300));
+    const { count: bRows } = await db.from("escalations").select("*", { count: "exact", head: true }).eq("conversation_id", second.conv);
+    const { count: bTickets } = await db.from("support_tickets").select("*", { count: "exact", head: true }).eq("conversation_id", second.conv);
+    check(bRows === 0 && bTickets === 0, "taken: nothing written (no escalation, no ticket)");
+  } finally {
+    await first.done();
+    await second.done();
+  }
+  // Free this run's slots: close every escalation the run created.
+  const { error: closeError } = await db.from("escalations").update({ status: "closed" }).like("conversation_id", `${conversationId}%`);
+  check(!closeError, "this run's escalations closed (their slots freed)", closeError?.message);
 
   // Close whichever attempt is still active (the replacing one, if the guard test ran).
   await db.rpc("finish_turn_attempt", { p_attempt_id: newer ?? attemptId, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });

@@ -41,11 +41,12 @@ describe("staff dashboard view (D87)", () => {
     assert.deepEqual(c.badges, ["Payout", "High priority", "Open"]);
     assert.deepEqual(c.fields, [["Customer", "Not verified on the call"], ["Summary", "Payout failed"], ["Raised", "2 Oct, 11:05 WAT"]]);
   });
-  it("callback card: preference, caller, email, linked ticket, reason; test conversations labelled", () => {
-    const c = v.cardFor("callbacks", { escalation_id: "ESC-1", ticket_id: "TKT-2", category: "account", status: "open", customer_id: "CUS-1001", user_name: "Amara", user_email: "amara@lagosledger.example", preferred_time_text: "tomorrow morning", reason: "Restricted", created_at: "2026-10-02T10:05:00Z", channel: "test" });
+  it("callback card: the booked slot (D97), the caller's words, caller, email, linked ticket, reason; test conversations labelled", () => {
+    const c = v.cardFor("callbacks", { escalation_id: "ESC-1", ticket_id: "TKT-2", category: "account", status: "open", customer_id: "CUS-1001", user_name: "Amara", user_email: "amara@lagosledger.example", preferred_time_text: "Monday at 10 AM", callback_slot: "2026-10-05T09:00:00+00:00", reason: "Restricted", created_at: "2026-10-02T10:05:00Z", channel: "test" });
     assert.equal(c.title, "Callback for escalation ESC-1");
     const f = Object.fromEntries(c.fields);
-    assert.equal(f["Caller's preference"], "“tomorrow morning”");
+    assert.equal(f["Callback booked"], "Mon 5 Oct, 10:00 WAT");
+    assert.equal(f["Caller's words"], "“Monday at 10 AM”");
     assert.equal(f["Caller email"], "amara@lagosledger.example");
     assert.equal(f["Linked ticket"], "TKT-2");
     assert.equal(f["Customer"], "CUS-1001");

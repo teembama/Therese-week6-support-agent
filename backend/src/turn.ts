@@ -466,6 +466,9 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       toolStatuses.set(name, [...(toolStatuses.get(name) ?? []), status]);
       toolCallsSeen.push(`${name}:${status}`);
       if (status === "success" && parsed) successRecords.push(JSON.stringify(parsed));
+      // D97: a callback refusal's reason, business hours and offered slots are evidence the agent
+      // may say (they come from the tool, not the model). Nothing was written; it is not a success.
+      if (name === "create_escalation" && parsed?.["callback_refused"] === true) successRecords.push(JSON.stringify(parsed));
       if (name === "lookup_customer" && status === "denied" && parsed?.["reason"] === "already_verified_other") identitySwitch = true;
     };
     let stopReason: string | null = null;

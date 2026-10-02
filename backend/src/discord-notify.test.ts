@@ -195,3 +195,16 @@ describe("discord sender", () => {
     assert.ok(logs.some((l) => l["event"] === "discord_sweep_failed"));
   });
 });
+
+describe("Discord: a booked callback slot (D97)", () => {
+  it("'Callback booked: Mon 5 Oct, 10:00 WAT' with the caller's words; no 'agree an exact time' action", () => {
+    const m = formatMessage({ ...row(1), payload: { ...row(1).payload, preferred_time_text: "Monday at 10 AM", callback_slot: "2026-10-05T09:00:00+00:00", call_booked: true } });
+    assert.ok(m.content.includes("**Callback booked:** Mon 5 Oct, 10:00 WAT"), m.content);
+    assert.ok(m.content.includes(`**Caller's words:** "Monday at 10 AM"`));
+    assert.ok(!m.content.includes("agree an exact time"));
+  });
+  it("no slot: the earlier lines are unchanged", () => {
+    const m = formatMessage({ ...row(1), payload: { ...row(1).payload, preferred_time_text: null, call_booked: false } });
+    assert.ok(m.content.includes("**Callback:** not requested"));
+  });
+});

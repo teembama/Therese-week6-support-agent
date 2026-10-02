@@ -18,9 +18,11 @@ const TABLES: Record<string, Row[]> = {
     { ticket_id: "TKT-TEST", category: "invoice", priority: "normal", status: "open", customer_id: null, summary: "test ticket", created_at: "2026-10-02T12:00:00Z", ...conv("test") },
   ],
   escalations: [
-    { escalation_id: "ESC-1", ticket_id: "TKT-ESC", category: "account", customer_id: "CUS-1001", user_name: "Amara", user_email: "amara@lagosledger.example", preferred_time_text: "tomorrow morning", status: "open", reason: "Restricted; 300 USD held", call_booked: true, created_at: "2026-10-02T11:00:00Z", ...conv("voice") },
-    { escalation_id: "ESC-2", ticket_id: "TKT-X", category: "dispute", customer_id: null, user_name: "Kofi", user_email: "kofi@example.com", preferred_time_text: null, status: "open", reason: "No time given", call_booked: false, created_at: "2026-10-02T12:00:00Z", ...conv("voice") },
-    { escalation_id: "ESC-T", ticket_id: "TKT-Y", category: "account", customer_id: null, user_name: "Efua", user_email: "efua@accrastack.example", preferred_time_text: "Friday", status: "open", reason: "eval", call_booked: true, created_at: "2026-10-02T13:00:00Z", ...conv("test") },
+    { escalation_id: "ESC-1", ticket_id: "TKT-ESC", category: "account", customer_id: "CUS-1001", user_name: "Amara", user_email: "amara@lagosledger.example", preferred_time_text: "Monday at 10 AM", callback_slot: "2026-10-05T09:00:00+00:00", status: "open", reason: "Restricted; 300 USD held", call_booked: true, created_at: "2026-10-02T11:00:00Z", ...conv("voice") },
+    { escalation_id: "ESC-2", ticket_id: "TKT-X", category: "dispute", customer_id: null, user_name: "Kofi", user_email: "kofi@example.com", preferred_time_text: null, callback_slot: null, status: "open", reason: "No time given", call_booked: false, created_at: "2026-10-02T12:00:00Z", ...conv("voice") },
+    // A legacy row (before 009): call_booked true but no slot -> not a scheduled callback.
+    { escalation_id: "ESC-L", ticket_id: "TKT-L", category: "account", customer_id: null, user_name: "Ama", user_email: "ama@example.com", preferred_time_text: "tomorrow morning", callback_slot: null, status: "open", reason: "legacy", call_booked: true, created_at: "2026-10-02T12:30:00Z", ...conv("voice") },
+    { escalation_id: "ESC-T", ticket_id: "TKT-Y", category: "account", customer_id: null, user_name: "Efua", user_email: "efua@accrastack.example", preferred_time_text: "Friday at 2pm", callback_slot: "2026-10-09T13:00:00+00:00", status: "open", reason: "eval", call_booked: true, created_at: "2026-10-02T13:00:00Z", ...conv("test") },
   ],
 };
 
@@ -28,6 +30,7 @@ function fakeDb(user: unknown = { id: "staff-1", app_metadata: { role: "staff" }
   const from = (table: string) => {
     const filters: Array<(r: Row) => boolean> = [];
     let desc = false;
+    let orderKey = "created_at";
     let limit = Infinity;
     const get = (r: Row, k: string) => (k === "conversations.channel" ? (r["conversations"] as { channel: string }).channel : r[k]);
     const b: Record<string, unknown> = {
@@ -35,11 +38,12 @@ function fakeDb(user: unknown = { id: "staff-1", app_metadata: { role: "staff" }
       eq: (k: string, v: unknown) => { filters.push((r) => get(r, k) === v); return b; },
       neq: (k: string, v: unknown) => { filters.push((r) => get(r, k) !== v); return b; },
       in: (k: string, v: unknown[]) => { filters.push((r) => v.includes(get(r, k))); return b; },
-      order: (_k: string, o: { ascending: boolean }) => { desc = !o.ascending; return b; },
+      not: (k: string, op: string, v: unknown) => { if (op === "is" && v === null) filters.push((r) => get(r, k) !== null && get(r, k) !== undefined); return b; },
+      order: (k: string, o: { ascending: boolean }) => { orderKey = k; desc = !o.ascending; return b; },
       limit: (n: number) => { limit = n; return b; },
       then: (res: (v: unknown) => unknown) => {
         let rows = (TABLES[table] ?? []).filter((r) => filters.every((f) => f(r)));
-        rows = rows.sort((a, c) => String(a["created_at"]).localeCompare(String(c["created_at"])) * (desc ? -1 : 1)).slice(0, limit);
+        rows = rows.sort((a, c) => String(a[orderKey]).localeCompare(String(c[orderKey])) * (desc ? -1 : 1)).slice(0, limit);
         return Promise.resolve({ data: rows, error: null }).then(res);
       },
     };
@@ -60,14 +64,15 @@ describe("staff records: reading (D87)", () => {
     const r = await readStaffRecords(fakeDb(), "tickets", true);
     assert.deepEqual(r.map((t) => (t as { ticket_id: string }).ticket_id), ["TKT-TEST", "TKT-NEW", "TKT-OLD"]);
   });
-  it("scheduled callbacks: call_booked only, with time, email and reason", async () => {
+  it("scheduled callbacks: booked slots only (D97), sorted by slot time, with the slot, email and reason", async () => {
     const r = await readStaffRecords(fakeDb(), "callbacks", false);
     assert.deepEqual(r, [{
       escalation_id: "ESC-1", ticket_id: "TKT-ESC", category: "account", customer_id: "CUS-1001", user_name: "Amara",
-      user_email: "amara@lagosledger.example", preferred_time_text: "tomorrow morning", status: "open", reason: "Restricted; [amount] held",
+      user_email: "amara@lagosledger.example", preferred_time_text: "Monday at 10 AM", callback_slot: "2026-10-05T09:00:00+00:00", status: "open", reason: "Restricted; [amount] held",
       created_at: "2026-10-02T11:00:00Z", channel: "voice",
     }]);
-    assert.deepEqual((await readStaffRecords(fakeDb(), "callbacks", true)).map((c) => (c as { escalation_id: string }).escalation_id), ["ESC-T", "ESC-1"]);
+    // The legacy row (call_booked, no slot) is not listed; the test row's later slot sorts after.
+    assert.deepEqual((await readStaffRecords(fakeDb(), "callbacks", true)).map((c) => (c as { escalation_id: string }).escalation_id), ["ESC-1", "ESC-T"]);
   });
   it("whitelisted fields only: no support notes, no amounts", async () => {
     const json = JSON.stringify(await readStaffRecords(fakeDb(), "tickets", false));

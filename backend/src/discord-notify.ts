@@ -72,6 +72,16 @@ const clean = (v: unknown, max = 300): string | null => {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 };
 
+/** D97: "Mon 5 Oct, 10:00 WAT" for a booked callback slot (Lagos is UTC+1, no DST). */
+export function slotForStaff(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const l = new Date(d.getTime() + 60 * 60_000);
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${days[l.getUTCDay()]} ${l.getUTCDate()} ${months[l.getUTCMonth()]}, ${String(l.getUTCHours()).padStart(2, "0")}:${String(l.getUTCMinutes()).padStart(2, "0")} WAT`;
+}
+
 /** "Thursday 2 October, 00:21 WAT": when the caller said it (the outbox row's time), in Lagos time. */
 export function formatSaidAt(iso: string | undefined): string | null {
   const d = iso ? new Date(iso) : null;
@@ -110,7 +120,12 @@ export function formatMessage(row: Pick<OutboxRow, "kind" | "ref_id" | "payload"
     field("Customer", customerLine(clean(p["customer_id"])));
     field("Reason", clean(p["reason"], 500));
     const preference = clean(p["preferred_time_text"]);
-    if (preference || p["call_booked"] === true) {
+    const booked = typeof p["callback_slot"] === "string" ? slotForStaff(p["callback_slot"]) : null;
+    if (booked) {
+      // D97: a real booked slot.
+      field("Callback booked", booked);
+      if (preference) field("Caller's words", `"${preference}"`);
+    } else if (preference || p["call_booked"] === true) {
       field("Callback", "requested");
       if (preference) {
         const said = formatSaidAt(row.created_at);
