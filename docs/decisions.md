@@ -1723,6 +1723,8 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - 006 applied to Supabase from commit 015702d on 2026-10-01. The file is wrapped in `begin;` … `commit;`, like 001–005.
   - User-verified after applying: RLS is true on `notification_outbox`.
   - EXECUTE on `queue_notification`, `create_support_ticket_guarded` and `create_escalation_with_ticket` (v3) is held by `service_role` and not by `anon`.
+- 007 applied to Supabase from commit 6d5ba75 on 2026-10-02. The file is wrapped in `begin;` … `commit;`.
+  - User-verified after applying: RLS is true on `call_passes`; EXECUTE on `redeem_call_pass` is held by `service_role` and not by `anon`.
 
 ## Task 1 findings, classified
 
