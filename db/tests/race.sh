@@ -99,5 +99,34 @@ PA=$(grep '^pass:' "$TEST_TMP/PA.out"); PB=$(grep '^pass:' "$TEST_TMP/PB.out")
 LINKED=$(pg -At -c "select conversation_id from call_passes where pass_hash='$PH'")
 echo "=== Call pass race: A=$PA B=$PB linked=$LINKED"
 check '[[ "$PA" == "pass: ok" && "$PB" == "pass: reused" && "$LINKED" == "conv-A" ]]' "one pass, two concurrent conversations: exactly one redeems it (007)"
+
+# ---- Migration 009 (D97): two calls book the same callback slot at once. A books and holds its
+# transaction open; B must block on the unique index, then get slot_taken (not an error).
+pg -c "insert into conversations(conversation_id,channel) values ('race-slot-a','voice'),('race-slot-b','voice')" >/dev/null
+pg -c "insert into turn_attempts(attempt_id,conversation_id,turn_index,transcript_hash) values ('ATT-RSA','race-slot-a',0,'h'),('ATT-RSB','race-slot-b',0,'h')" >/dev/null
+BOOK() { echo "select 'slot: created=' || created || ' taken=' || slot_taken from create_escalation_with_ticket(
+  p_attempt_id => '$1', p_conversation_id => '$2', p_ticket_idempotency_key => 'tk-$2', p_escalation_idempotency_key => 'ek-$2',
+  p_category => 'account', p_ticket_summary => 'Race', p_reason => 'Race', p_user_name => 'Efua Mensah', p_user_email => 'efua@accrastack.example',
+  p_preferred_time_text => 'Monday at 10 AM', p_callback_slot => '2030-10-07 10:00+01');"; }
+pg -At > "$TEST_TMP/SA.out" 2>&1 <<SQL &
+set role service_role;
+begin;
+$(BOOK ATT-RSA race-slot-a)
+select '' from pg_sleep(3);
+commit;
+SQL
+PID_SA=$!
+sleep 1
+pg -At > "$TEST_TMP/SB.out" 2>&1 <<SQL &
+set role service_role;
+$(BOOK ATT-RSB race-slot-b)
+SQL
+PID_SB=$!
+wait $PID_SA $PID_SB
+SA=$(grep '^slot:' "$TEST_TMP/SA.out"); SB=$(grep '^slot:' "$TEST_TMP/SB.out")
+BOOKED=$(pg -At -c "select count(*) from escalations where callback_slot = '2030-10-07 10:00+01' and status in ('open','in progress')")
+B_TICKETS=$(pg -At -c "select count(*) from support_tickets where conversation_id = 'race-slot-b'")
+echo "=== Slot race: A=$SA B=$SB booked=$BOOKED b_tickets=$B_TICKETS"
+check '[[ "$SA" == "slot: created=true taken=false" && "$SB" == "slot: created=false taken=true" && "$BOOKED" == 1 && "$B_TICKETS" == 0 ]]' "one slot, two concurrent bookings: one wins, the other gets slot_taken and writes nothing (009)"
 echo "--- failures: $FAILS"
 exit $FAILS

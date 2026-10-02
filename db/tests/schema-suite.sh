@@ -85,7 +85,7 @@ case "$E" in *"P0001: ESCALATION_KEY_CONFLICT:"*) ok "plain-ticket key collision
 eq "$(q "select count(*) from escalations where idempotency_key='esc-C'")" 0 "no escalation written on key collision"
 
 echo "--- privileges"
-SIG="create_escalation_with_ticket(text,text,text,text,text,text,text,text,text,text,text,text,boolean,text)"
+SIG="create_escalation_with_ticket(text,text,text,text,text,text,text,text,text,text,text,text,boolean,text,timestamptz)"
 eq "$(q "select has_function_privilege('anon','$SIG','execute')")" f "anon has no EXECUTE"
 eq "$(q "select has_function_privilege('authenticated','$SIG','execute')")" f "authenticated has no EXECUTE"
 eq "$(q "select has_function_privilege('service_role','$SIG','execute')")" t "service_role has EXECUTE"
@@ -239,7 +239,7 @@ E2=$(call_enr ATT-FULL true "'tomorrow morning'")
 eq "$(echo "$E2" | cut -d'|' -f1-2)" "$(echo "$E1" | cut -d'|' -f1-2)" "full attempt returns the SAME ticket and escalation"
 eq "$(echo "$E2" | cut -d'|' -f3-4)" "false|true" "full attempt: created=false, updated=true"
 eq "$(q "select count(*) from escalations where idempotency_key='esc-enr'")" 1 "still exactly one escalation row"
-eq "$(q "select preferred_time_text||'|'||call_booked from escalations where idempotency_key='esc-enr'")" "tomorrow morning|true" "missing time filled, call_booked true"
+eq "$(q "select preferred_time_text||'|'||call_booked from escalations where idempotency_key='esc-enr'")" "tomorrow morning|false" "missing time filled; call_booked stays false (009/D97: call_booked means a SLOT is booked)"
 E3=$(call_enr ATT-FULL true "'Friday 3pm'")
 eq "$(echo "$E3" | cut -d'|' -f3-4)" "false|false" "a later, different time: updated=false"
 eq "$(q "select preferred_time_text from escalations where idempotency_key='esc-enr'")" "tomorrow morning" "a set time is never overwritten"
@@ -325,8 +325,48 @@ SR "select status from redeem_call_pass('conv-f2','$(H 28)')" >/dev/null
 neg "set role service_role; select apply_call_pass_identity('conv-f2','voice',null)" "conversation already verified as another customer"
 eq "$(q "select has_function_privilege('anon','apply_call_pass_identity(text,text,text)','execute')")|$(q "select has_function_privilege('authenticated','apply_call_pass_identity(text,text,text)','execute')")|$(q "select has_function_privilege('service_role','apply_call_pass_identity(text,text,text)','execute')")" "f|f|t" "only service_role executes apply_call_pass_identity"
 
+echo "--- migration 009: callback slots (D97)"
+MON10="2030-10-07 10:00+01"   # a Monday, 10:00 Lagos
+pg -c "insert into conversations(conversation_id,channel) values ('call-slot-a','voice'),('call-slot-b','voice'),('call-slot-c','voice')" >/dev/null
+pg -c "insert into turn_attempts(attempt_id,conversation_id,turn_index,transcript_hash) values ('ATT-SA','call-slot-a',0,'h-sa'),('ATT-SB','call-slot-b',0,'h-sb'),('ATT-SC','call-slot-c',0,'h-sc')" >/dev/null
+SLOT="select coalesce(ticket_id,'-')||'|'||coalesce(escalation_id,'-')||'|'||created||'|'||updated||'|'||slot_taken from create_escalation_with_ticket(
+  p_attempt_id => ATT, p_conversation_id => CONV, p_ticket_idempotency_key => TK, p_escalation_idempotency_key => EK,
+  p_category => 'account', p_ticket_summary => 'Account restricted', p_reason => 'Account restriction',
+  p_user_name => 'Amara Okafor', p_user_email => 'amara@lagosledger.example', p_preferred_time_text => 'Monday at 10 AM', p_callback_slot => SLOTV)"
+call_slot() { SR "$(echo "$SLOT" | sed "s/ATT/'$1'/; s/CONV/'$2'/; s/TK/'tk-$2'/; s/EK/'ek-$2'/; s/SLOTV/$3/")"; }
+A=$(call_slot ATT-SA call-slot-a "'$MON10'::timestamptz")
+eq "$(echo "$A" | cut -d'|' -f3,5)" "true|false" "v4: a valid slot books (created, not taken)"
+eq "$(q "select call_booked||'|'||(callback_slot = '$MON10'::timestamptz) from escalations where idempotency_key='ek-call-slot-a'")" "true|true" "call_booked = (callback_slot is not null)"
+eq "$(q "select (payload->>'callback_slot') is not null from notification_outbox where kind='escalation_created' and conversation_id='call-slot-a'")" t "the outbox payload carries the slot"
+TICKETS_BEFORE=$(q "select count(*) from support_tickets")
+B=$(call_slot ATT-SB call-slot-b "'$MON10'::timestamptz")
+eq "$B" "-|-|false|false|true" "the same slot on another call: slot_taken (not an error)"
+eq "$(q "select count(*) from support_tickets")|$(q "select count(*) from escalations where conversation_id='call-slot-b'")" "$TICKETS_BEFORE|0" "slot taken: nothing written (no ticket, no escalation)"
+neg "set role service_role; $(echo "$SLOT" | sed "s/ATT/'ATT-SC'/; s/CONV/'call-slot-c'/; s/TK/'tk-past'/; s/EK/'ek-past'/; s/SLOTV/now() + interval '10 minutes'/")" "a slot less than 30 minutes ahead (CALLBACK_SLOT_PAST)"
+NOSLOT=$(call_slot ATT-SC call-slot-c null)
+eq "$(echo "$NOSLOT" | cut -d'|' -f3,5)|$(q "select call_booked from escalations where idempotency_key='ek-call-slot-c'")" "true|false|f" "no slot (time declined): created with call_booked false"
+ENRICH=$(call_slot ATT-SC call-slot-c "'2030-10-07 11:30+01'::timestamptz")
+eq "$(echo "$ENRICH" | cut -d'|' -f3,4,5)" "false|true|false" "enrichment: a missing slot is filled (updated)"
+eq "$(q "select call_booked||'|'||to_char(callback_slot at time zone 'Africa/Lagos','HH24:MI') from escalations where idempotency_key='ek-call-slot-c'")" "true|11:30" "the filled slot, call_booked true"
+AGAIN=$(call_slot ATT-SC call-slot-c "'2030-10-07 14:00+01'::timestamptz")
+eq "$(echo "$AGAIN" | cut -d'|' -f4)|$(q "select to_char(callback_slot at time zone 'Africa/Lagos','HH24:MI') from escalations where idempotency_key='ek-call-slot-c'")" "false|11:30" "a set slot is never overwritten"
+eq "$(q "select count(*) from notification_outbox where kind='escalation_updated' and conversation_id='call-slot-c' and dedupe_key like '%:callback_slot'")" 1 "one escalation_updated notification for the slot"
+ESC_A=$(q "select escalation_id from escalations where idempotency_key='ek-call-slot-a'")
+neg "update escalations set callback_slot='2030-10-05 10:00+01' where escalation_id='$ESC_A'" "a Saturday slot (check constraint)"
+neg "update escalations set callback_slot='2030-10-07 17:00+01' where escalation_id='$ESC_A'" "a 17:00 slot (after 16:30)"
+neg "update escalations set callback_slot='2030-10-07 08:30+01' where escalation_id='$ESC_A'" "an 08:30 slot (before 09:00)"
+neg "update escalations set callback_slot='2030-10-07 10:15+01' where escalation_id='$ESC_A'" "a 10:15 slot (not :00/:30)"
+neg "update escalations set callback_slot='2030-10-07 10:00:30+01' where escalation_id='$ESC_A'" "a slot with seconds"
+neg "update escalations set callback_slot='$MON10' where idempotency_key='ek-call-slot-c'" "a second OPEN escalation on the same slot (unique index)"
+pg -c "update escalations set status='closed' where escalation_id='$ESC_A'" >/dev/null
+pg -c "update escalations set callback_slot='$MON10' where idempotency_key='ek-call-slot-c'" >/dev/null && ok "closing an escalation frees its slot" || bad "closing an escalation frees its slot"
+FREE="select string_agg(to_char(s at time zone 'Africa/Lagos','Dy HH24:MI'), ',' order by s) from next_free_slots('2030-10-07 09:00+01', 4) s"
+eq "$(SR "$FREE")" "Mon 09:00,Mon 09:30,Mon 10:30,Mon 11:00" "next_free_slots skips the taken slot (10:00, now call-slot-c's), weekday hours only"
+eq "$(SR "select to_char(s at time zone 'Africa/Lagos','Dy HH24:MI') from next_free_slots('2030-10-04 16:45+01', 1) s")" "Mon 09:00" "after Friday 16:30 the next slot is Monday 09:00"
+eq "$(q "select has_function_privilege('anon','next_free_slots(timestamptz,integer)','execute')")|$(q "select has_function_privilege('service_role','next_free_slots(timestamptz,integer)','execute')")" "f|t" "only service_role executes next_free_slots"
+
 # Privileges on every new or replaced function.
-for fn in "check_attempt_scope(text,text,integer)" "create_support_ticket_guarded(text,text,text,text,text,text,text,text)" "create_escalation_with_ticket(text,text,text,text,text,text,text,text,text,text,text,text,boolean,text)" "set_verified_customer(text,text,text)" "log_conversation_event_guarded(text,text,integer,text,text,jsonb)" "begin_turn_attempt(text,text,text,integer,text,text,text)" "abandon_stale_conversations(integer)"; do
+for fn in "check_attempt_scope(text,text,integer)" "create_support_ticket_guarded(text,text,text,text,text,text,text,text)" "create_escalation_with_ticket(text,text,text,text,text,text,text,text,text,text,text,text,boolean,text,timestamptz)" "set_verified_customer(text,text,text)" "log_conversation_event_guarded(text,text,integer,text,text,jsonb)" "begin_turn_attempt(text,text,text,integer,text,text,text)" "abandon_stale_conversations(integer)"; do
   eq "$(q "select has_function_privilege('anon','$fn','execute')")|$(q "select has_function_privilege('authenticated','$fn','execute')")|$(q "select has_function_privilege('service_role','$fn','execute')")" "f|f|t" "only service_role executes ${fn%%(*}"
 done
 
