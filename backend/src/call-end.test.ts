@@ -117,3 +117,16 @@ describe("console diagnosis without secrets (D81)", () => {
     assert.equal(clean["error"]["nested"]["msg"], "see [jwt]");
   });
 });
+
+describe("silence timeout after the idle check-in (D96)", () => {
+  it("the caller had spoken -> 'Call ended': no response, start a new call whenever ready", () => {
+    assert.deepEqual(endedOf(m.describeEnd({ lastEndedReason: "silence-timed-out", heardCaller: true, seconds: 70 })), {
+      kind: "ended", headline: "Call ended", text: "The call ended because there was no response. Start a new call whenever you're ready.",
+    });
+  });
+  it("no caller speech at all -> the existing 'We couldn't hear you…' microphone message", () => {
+    const f = failureOf(m.describeEnd({ lastEndedReason: "silence-timed-out", heardCaller: false, seconds: 30 }));
+    assert.deepEqual([f.group, f.kind], ["user", "noAudio"]);
+    assert.match(m.failureMessage(f, "in-call").lines.join(" "), /We couldn't hear you, so the call ended\./);
+  });
+});

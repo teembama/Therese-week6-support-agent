@@ -140,3 +140,37 @@ describe("confirmations go to the model; declined_offer only after an offer (D90
     assert.equal(matchSocial("No thanks.", "No problem. Is there anything else I can help you with?"), "goodbye");
   });
 });
+
+describe("Vapi's idle check-in is skipped like a fixed Vapi line (D96)", async () => {
+  const { previousAgentLine, isVapiIdleLine } = await import("./social-fast-path.js");
+  const { parseVapiBody } = await import("./vapi.js");
+  const IDLE = "Are you still there? I'm here if you need anything.";
+  const ANYTHING_ELSE = "No problem. Is there anything else I can help you with?";
+  const OFFER = "I can connect you with a RelayPay specialist if you'd like.";
+  it("recognises the idle line (and not ordinary agent lines)", () => {
+    assert.equal(isVapiIdleLine(IDLE), true);
+    assert.equal(isVapiIdleLine("are you still there?"), true);
+    assert.equal(isVapiIdleLine(ANYTHING_ELSE), false);
+  });
+  it("turn indexing: an idle line in Vapi's messages doesn't change the turn index (user messages only)", () => {
+    const body = (msgs: Array<[string, string]>) => ({ call: { id: "c" }, messages: msgs.map(([role, content]) => ({ role, content })) });
+    const without = parseVapiBody(body([["assistant", "Hi, this is RelayPay support."], ["user", "Fees?"], ["assistant", ANYTHING_ELSE], ["user", "No thanks."]]));
+    const withIdle = parseVapiBody(body([["assistant", "Hi, this is RelayPay support."], ["user", "Fees?"], ["assistant", ANYTHING_ELSE], ["assistant", IDLE], ["user", "No thanks."]]));
+    assert.ok(without.ok && withIdle.ok);
+    assert.equal(withIdle.ok && withIdle.turn.turnIndex, without.ok && without.turn.turnIndex);
+    assert.equal(withIdle.ok && withIdle.turn.turnIndex, 1);
+  });
+  it("anything-else then the idle line, then 'No thanks' -> still goodbye (D73)", () => {
+    const prev = previousAgentLine([{ role: "agent", text: ANYTHING_ELSE }, { role: "agent", text: IDLE }]);
+    assert.equal(prev, ANYTHING_ELSE);
+    assert.equal(matchSocial("No thanks.", prev), "goodbye");
+  });
+  it("an offer then the idle line, then 'No thanks' -> still a declined offer; after a read-back it still goes to the model (D90)", () => {
+    assert.equal(matchSocial("No thanks.", previousAgentLine([{ role: "agent", text: OFFER }, { role: "agent", text: IDLE }])), "declined_offer");
+    assert.equal(matchSocial("No.", previousAgentLine([{ role: "agent", text: "I have your email as amara@lagosledger.example. Is that correct?" }, { role: "agent", text: IDLE }])), null);
+  });
+  it("only the greeting before the idle line: the greeting is the previous line", () => {
+    assert.equal(previousAgentLine([{ role: "agent", text: "Hi, this is RelayPay support. How can I help you today?" }, { role: "agent", text: IDLE }]), "Hi, this is RelayPay support. How can I help you today?");
+    assert.equal(previousAgentLine([{ role: "agent", text: IDLE }]), null);
+  });
+});

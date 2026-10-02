@@ -113,3 +113,23 @@ export function goodbyeAllowed(callerText: string, previousAgentLine: string | n
   if (askedAnythingElse(previousAgentLine)) return true;
   return /\b(?:bye|goodbye|good bye|that's all|that's it|nothing else)\b/.test(normalise(callerText));
 }
+
+/**
+ * D96: Vapi's idle check-in ("Are you still there? I'm here if you need anything.", a
+ * customer.speech.timeout hook) is Vapi's own fixed line, like the greeting. It appears in the
+ * history as an agent message, but it isn't the agent's last real question: skip it, so
+ * "No thanks" after "anything else? … Are you still there?" is still a goodbye (D73), and a "no"
+ * after an offer is still a declined offer.
+ */
+export function isVapiIdleLine(text: string): boolean {
+  return /^are you still there\b/.test(normalise(text));
+}
+
+/** The agent's last REAL line (Vapi's idle check-in skipped), or null. */
+export function previousAgentLine(history: ReadonlyArray<{ role: string; text: string }>): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i]!;
+    if (h.role === "agent" && !isVapiIdleLine(h.text)) return h.text;
+  }
+  return null;
+}

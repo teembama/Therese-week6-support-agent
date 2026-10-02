@@ -103,6 +103,9 @@ export function describeEnd({ endedByUser = false, lastEndedReason = null, heard
   const failure = (group, kind, code) => ({ kind: "failure", failure: { group, kind, code } });
   if (endedByUser) return ended("You ended the call.");
   const r = lastEndedReason;
+  // D96: a silence timeout AFTER the caller had spoken (e.g. after Vapi's "Are you still there?")
+  // is a normal ending, not a microphone problem; with no caller speech at all it still is one.
+  if (r === "silence-timed-out" && heardCaller) return ended("The call ended because there was no response. Start a new call whenever you're ready.");
   if (r === "silence-timed-out" || (r && r.includes("did-not-receive-customer-audio"))) return failure("user", "noAudio", r.slice(0, 60));
   if (r === "customer-did-not-give-microphone-permission") return failure("user", "micBlocked", r);
   if (r === "exceeded-max-duration") return ended("The call reached its 4-minute limit. Start a new call to keep going.");

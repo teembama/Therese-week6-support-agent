@@ -150,7 +150,7 @@ describe("landing hero (D95)", () => {
   it("a static, decorative line illustration: aria-hidden, no fills or animation", () => {
     const art = landing.slice(landing.indexOf('<div class="hero-art"'), landing.indexOf("</section>"));
     assert.match(art, /<div class="hero-art" aria-hidden="true">/);
-    assert.ok(!/<(?:animate|animateTransform|linearGradient|radialGradient|text)/.test(art));
+    assert.ok(!/<(?:animate|animateTransform|linearGradient|radialGradient|text)\b/.test(art));
     assert.ok(!/fill="(?!none)/.test(art));
   });
   it("three reassurances below the hero, each with a small icon", () => {

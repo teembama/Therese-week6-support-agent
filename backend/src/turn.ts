@@ -42,7 +42,7 @@ import {
   TURN_HARD_CAP_MS,
 } from "./config.js";
 import { sentences, socialLine, StreamingGate, type GateEvidence, type ObservedTools, type SocialIntent } from "./gate.js";
-import { goodbyeAllowed, matchSocial } from "./social-fast-path.js";
+import { goodbyeAllowed, matchSocial, previousAgentLine } from "./social-fast-path.js";
 import { ANYTHING_ELSE_LINE, fillerFor, needsAnythingElse, wantsEarlyFiller } from "./filler.js";
 import { beginTurnAttempt, finishTurnAttempt, type AnswerType, type AttemptFinalStatus, type AttemptMetrics } from "./persistence.js";
 import { retryOnce, withTimeout } from "./bounded.js";
@@ -188,10 +188,6 @@ export async function recordGateBlocked(db: Db, ctx: LogContext, reason: string)
 }
 
 /** The last thing the agent said, as Vapi reports it in the conversation history. */
-function previousAgentLine(history: HistoryEntry[]): string | null {
-  for (let i = history.length - 1; i >= 0; i--) if (history[i]!.role === "agent") return history[i]!.text;
-  return null;
-}
 
 interface FixedLine {
   line: string;
