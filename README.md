@@ -14,9 +14,9 @@ Everything it says passes a grounding gate in code before it is spoken.
 From the landing page, choose **Customer support**. The call page offers two paths (D88). Choose one, then press **Start call**. While the call connects you hear a ringback tone and see "Ringing…".
 - **I'm an existing customer:** enter the account's contact name and email. Demo customer: **Amara** (or **Amara Okafor**), **amara@lagosledger.example**. The call is identified as that customer (LagosLedger, CUS-1001) from its first turn and greets you by first name. Claiming to be someone else during the call is refused: one account per call.
   - Details that don't match one customer get "We couldn't find an account matching those details." (it never says which detail was wrong), and no call starts.
-- **Continue as a guest:** the call behaves exactly as the PRD describes. The agent asks who you are and checks two details by voice (for example "I'm Amara from LagosLedger"). After a guest call that checked an identity, the page suggests the existing-customer path next time.
+- **Continue as a guest:** the call behaves exactly as the PRD describes. The agent asks who you are and checks two details by voice (for example "I'm Amara from LagosLedger"). **A guest needs the owner's customer ID to look up a transaction or payout (D98):** for TXN-9001 say "My customer ID is CUS-1001" (PAY-7002 → CUS-1003, TXN-9004 → CUS-1004). Without it the agent asks for it; a wrong ID gets the same answer as an unknown reference, and lookups stop after 2 failures in a call. After a guest call that checked an identity, the page suggests the existing-customer path next time.
 
-**Callback booking (D97):** when a specialist is needed, the agent books a real callback slot: Monday to Friday, 9 AM to 5 PM Lagos time, every 30 minutes, and never a slot that is already taken. Say a day and time ("Monday at 11 AM"). A weekend, an out-of-hours time or a vague "tomorrow morning" is refused with the reason and three free slots to choose from. The booking shows on the staff dashboard under Scheduled callbacks and in Discord.
+**Callback booking (D97, D98):** when a specialist is needed, the agent books a real callback slot. No slot, no callback: if the caller won't give a time, the agent logs a ticket and says a specialist will review it. Slots: Monday to Friday, 9 AM to 5 PM Lagos time, every 30 minutes, and never a slot that is already taken. Say a day and time ("Monday at 11 AM"). A weekend, an out-of-hours time or a vague "tomorrow morning" is refused with the reason and three free slots to choose from. The booking shows on the staff dashboard under Scheduled callbacks and in Discord.
 
 **What this enforces (and what it doesn't):**
 - Every call needs a **one-time call pass** from the backend, issued just before the call starts. It expires after 5 minutes and works for **one call only**. A call without a valid pass hears "Please log in on the RelayPay page to use voice support." and nothing else: the agent doesn't run.
@@ -27,7 +27,8 @@ From the landing page, choose **Customer support**. The call page offers two pat
 
 - **URL:** `/staff` on the live service (https://relaypay-backend-production-aa34.up.railway.app/staff). **Staff account:** `care@relaypay.example`; the password is provided separately in the submission.
 - From the landing page, choose **Staff sign in**.
-- **Read-only.** Two filters: **Raised tickets** (tickets without an escalation) and **Scheduled callbacks** (escalations with a booked callback slot, sorted by slot time, D97). Press **Refresh** for new records.
+- Two filters: **Raised tickets** (tickets without an escalation) and **Scheduled callbacks** (escalations with a booked callback slot, sorted by slot time, D97). Press **Refresh** for new records.
+- **Close (D98):** open and in-progress cards have a **Close** button, with a confirmation ("Close ESC-…? Its callback slot will be freed."). The server allows staff only (401/403 otherwise) and records who closed it and when. Closed items stay listed, marked closed.
 - **Real calls only by default.** Add `?include_test=1` to the URL to include test and eval data: `/staff?include_test=1`.
 - Only staff accounts can see it; a customer account gets "This account isn't staff." It shows no support notes and no amounts (D87).
 

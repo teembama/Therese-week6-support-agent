@@ -46,7 +46,7 @@ Each beat follows: **what the user does → what the system does → what happen
 - **SAY:** "Retrieval runs in the backend before the model, and every sentence is checked against the knowledge it cited before it's spoken."
 
 **2. A lookup, with the filler line**
-- **Caller:** "Can you check transaction TXN-9001?"
+- **Caller:** "Can you check transaction TXN-9001? My customer ID is CUS-1001." (A guest needs the owner's customer ID, D98.)
 - **You hear:** "One moment while I check that." straight away, then "…TXN-9001 is a payout that's currently processing. The estimated arrival date on the record has passed. Would you like me to log a ticket?"
 - **SAY:** "The filler is a fixed backend line, spoken the moment it hears a reference, before the model runs. The lookup tool never returns amounts."
 

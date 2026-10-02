@@ -2009,6 +2009,32 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - Afterwards the judge's evidence gained the slot as the tool speaks it, plus a booking procedure note. Not rerun: the $0.12 cap was reached.
   - Spend about $0.12.
 
+### D98. Guest lookups need the customer ID; no escalation without a booked slot; staff can close records (2026-10-02)
+
+- **Guest TXN/PAY lookups need the owner's customer ID** (`guestLookupGate` in `mcp-server/src/tools/common.ts`, used by `lookup_transaction` and `lookup_payout`). This closes the F1 enumeration gap: a 4-digit reference alone no longer returns a status.
+  - Enforced in the tool, only when the call has no verified customer. Form-identified and voice-verified callers are unchanged (the existing ownership rule still applies).
+  - No ID → `denied`, `customer_id_required`: "ask the caller for their RelayPay customer ID (it looks like CUS-1001)". Nothing about the record.
+  - A wrong ID, an unknown ID or an unknown reference → the **identical** `not_found` (`no_match`: "No record matches this reference and customer ID… Do not say which one was wrong.").
+  - After **2 failed attempts** in a call (counted from `tool_calls`), every further guest lookup is `denied`, `guest_lookup_locked`, with a ticket offered.
+  - Spoken IDs are normalised like references ("cus 1001" → CUS-1001).
+  - Each refusal is logged in `tool_calls.result_summary` (`customer_id_required <ref>`, `customer_id_mismatch <ref>`, `guest_lookup_locked <ref>`).
+- **No callback without a booked slot** (`create_escalation`):
+  - No time, or `preferred_time_declined`, is now refused with nothing written: "An escalation needs a booked callback day and time… create a support ticket instead… tell the caller a specialist will review it. Never say a callback is arranged, booked or noted."
+  - The prompt's escalation step and the form-call context line say the same. Times are spoken only from the tool's booked result. The D97 slot rules, refusals and alternatives are unchanged.
+- **Staff Close** (`POST /staff/records/close {type: "ticket"|"escalation", id}`, `handleStaffClose` in `backend/src/staff.ts`):
+  - The server checks the Supabase session and `app_metadata.role = "staff"`: no or a bad token → 401, a non-staff account → 403, a malformed or mismatched ID → 400, unknown → 404. A closed record returns 200 `closed: false` (idempotent).
+  - It sets `status = 'closed'` and writes a `conversation_events` row ("<id> closed by staff <email> at <time>", metadata `action`, `closed_by`, `closed_at`). No migration: who and when live in the event row.
+  - Closing an escalation frees its callback slot (the 009 unique index covers open and in-progress escalations only).
+  - The dashboard shows a **Close** button on open and in-progress cards, with a confirmation ("Close ESC-…? Its callback slot will be freed."). Closed items stay listed, marked closed. All three statuses the database allows (open, in progress, closed) are handled.
+- **Tests:**
+  - Unit: backend `test:gate` 355/355 (close authorised and unauthorised, idempotent, 404/400, nothing changed on refusal; `closeAction`/`isClosed`); MCP 42/42 (an escalation with no time or a declined time is refused with the ticket message); shared 28/28; `db:test` passes.
+  - `test:tools` (live DB): no ID → `customer_id_required` (TXN and PAY); the owners' IDs (also spoken "cus 1001") → status; a wrong ID and an unknown reference → the identical response; the third attempt → `guest_lookup_locked`; each refusal logged; a declined time → refused, nothing written. `test:mcp` OK.
+  - The eval runner's guest S4 (CUS-1001), S5 (CUS-1003), S6 (CUS-1004) and the amount-request scenario, and `test-deployed`'s S4 runs, now give the owner's customer ID. Not rerun: about $0.08, over the round's $0.10 cap.
+- **Live** (deploy `44acdcd4`, commit `292b66b`), `scripts/test-d98-live.ts`, $0.036:
+  - **Guest lookup:** "Can you check transaction TXN-9001?" → "Could I have your RelayPay customer ID? It looks like CUS followed by four digits." "CUS-1002" → "I couldn't find a record matching that transaction reference and customer ID. Could you double-check both…". "CUS-1001" → "…TXN-9001 is showing as processing… that date has now passed. Would you like me to log a support ticket…". `tool_calls`: `customer_id_required`, `customer_id_mismatch`, success. 6/6.
+  - **Declined time (form-Amara dispute):** ×2. Both runs wrote one ticket, no escalation, and never said a callback was arranged. Run 1 4/5: after the ticket the agent said only "Is there anything else I can help you with?" (the model wrote no confirmation sentence; the backend added the anything-else line), so "a specialist will review it" wasn't spoken. Run 2 5/5: "A RelayPay specialist will review it and follow up with you." Wording variance; the prompt wasn't changed.
+  - `check-staff --close-ticket` 24/24: Close with no token → 401, a customer session → 403 (status unchanged), staff → 200 with who and when, the event row written, unknown → 404, wrong type → 400. `test:callpass` 14/14.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

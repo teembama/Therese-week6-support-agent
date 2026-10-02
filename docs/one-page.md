@@ -1,6 +1,6 @@
 # RelayPay Voice Support Agent: one-page guide
 
-**Live:** https://relaypay-backend-production-aa34.up.railway.app · **Records:** Supabase · **Logs:** Railway `relaypay-backend` · **Production:** commit `a39d0c1`, migrations 001–009
+**Live:** https://relaypay-backend-production-aa34.up.railway.app · **Records:** Supabase · **Logs:** Railway `relaypay-backend` · **Production:** commit `292b66b`, migrations 001–009
 
 ## Why it exists
 
@@ -9,17 +9,16 @@ RelayPay's support team is overloaded, and much of its volume is repetitive: fee
 ## How to use it
 
 - **Customers:** open the live link, choose **Customer support**, then **I'm an existing customer** (the account's name and email, e.g. Amara / amara@lagosledger.example) or **Continue as a guest**.
-  - Press **Start call**: you hear a ringback until it connects.
-  - Ask, e.g., "What fees do you charge for international payments?" or "Can you check TXN-9001?".
-- **Staff:** **Staff sign in**, then the read-only dashboard: **Raised tickets** and **Scheduled callbacks**.
+  - Press **Start call** (a ringback plays until it connects) and ask, e.g., "What fees do you charge?" or, as a guest, "Can you check TXN-9001? My customer ID is CUS-1001."
+- **Staff:** **Staff sign in**, then the dashboard: **Raised tickets** and **Scheduled callbacks**; **Close** frees a callback slot.
 
 ## What it does, and doesn't
 
 - **It does:**
   - answer general questions only from the approved knowledge base;
-  - check account, transaction (`TXN-####`) and payout (`PAY-####`) status once the caller is identified (by the form, or by two spoken details as a guest);
+  - check account, transaction (`TXN-####`) and payout (`PAY-####`) status once identified; a guest also gives the owner's customer ID (2 misses lock lookups);
   - log a ticket for a failed or delayed payment;
-  - escalate to a specialist and book a callback.
+  - escalate with a booked callback (no time → a ticket a specialist will review).
 - **It never** states amounts, balances, stored emails or internal notes, explains compliance decisions, promises outcomes, or discusses another customer's records. When it can't confirm something, it offers a specialist.
 
 ## Callback booking (D97)

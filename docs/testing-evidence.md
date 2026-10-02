@@ -1,8 +1,8 @@
 # Testing evidence
 
-## Final state (2026-10-02, 20:00 WAT): production commit `a39d0c1`, deploy `b3480c6d`, migrations 001–009
+## Final state (2026-10-02, 21:15 WAT): production commit `292b66b`, deploy `44acdcd4`, migrations 001–009
 
-- **Unit:** backend `test:gate` 351/351; MCP 42/42; shared 28/28. Local Postgres: the schema suite and `race.sh`, including 009 (callback slots) and two concurrent bookings of one slot (one wins, the other `slot_taken`, nothing written).
+- **Unit:** backend `test:gate` 355/355; MCP 42/42; shared 28/28. Local Postgres: the schema suite and `race.sh`, including 009 (callback slots) and two concurrent bookings of one slot (one wins, the other `slot_taken`, nothing written).
 - **Live tools:** `test:tools` passes against migration 009: every callback refusal reason with the business hours and 3 free slots, nothing written on a refusal, a taken slot on a second call.
 - **Callback booking (D97):**
   - **Before:** the user's call `01a0fdeb…` (19:44 WAT, still D96) stored "Saturday 5:00 PM" as free text on **ESC-19123A45**, after the agent itself offered "Saturday, Sunday, or another day". This is why the slot rule lives in the tool and the database. ESC-19123A45 was closed after recording.
@@ -10,7 +10,13 @@
     - Guest "Saturday at 5 PM": refused (`outside_hours`) with the hours and three Monday slots, then booked; no weekend suggested by the agent.
     - Form-Amara "Saturday at 10am" ×2: 13/13 and 12/13 (run 2 gave the hours but not the reason in words).
     - Guest S7 "Monday at 11 AM": 0/1 (judge only), then 1/1 unchanged.
-- **Call paths:** `test:callpass` 14/14; staff check 16/16.
+- **D98 (guest lookups, no callback without a slot, staff Close):**
+  - `test:tools`: no customer ID → `customer_id_required`; the owner's ID (also spoken "cus 1001") → status; a wrong ID and an unknown reference → the identical response; the 3rd attempt → `guest_lookup_locked`; each refusal logged in `tool_calls`; a declined time → no escalation, nothing written.
+  - Live guest call (`scripts/test-d98-live.ts`): TXN-9001 with no ID → asked for the customer ID; CUS-1002 → "I couldn't find a record matching that transaction reference and customer ID"; CUS-1001 → "processing". 6/6.
+  - Live declined time (form-Amara dispute) ×2: one ticket, no escalation, no callback claimed in both. Run 1 4/5 (the agent said only "Is there anything else I can help you with?" after the ticket, not "a specialist will review it"); run 2 5/5 ("A RelayPay specialist will review it and follow up with you."). Spend $0.036 (cap $0.10).
+  - Staff Close, live: no token → 401, customer → 403 (nothing changed), staff → 200 with who and when plus an event row, 404, 400.
+  - Eval S4/S5/S6 scripts updated with the owners' customer IDs; not rerun (about $0.08, over the cap).
+- **Call paths:** `test:callpass` 14/14; staff check 24/24 (with `--close-ticket`).
 - **Live voice calls today:** see the Voice flow row in the table below.
 
 ---

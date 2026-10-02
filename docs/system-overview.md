@@ -335,7 +335,7 @@ Production: commit `a39d0c1` (deploy `b3480c6d`, Railway EU West), migrations 00
 - A form pass sets the conversation's verified customer before the first turn (`apply_call_pass_identity`, from the pass row, never from speech). The agent then gets a backend-written context line (D89, D90): don't re-ask identity, keep the typed first name, confirm the typed email.
   - A spoken claim to be someone else gets the fixed one-account line (D89).
   - `create_escalation` on a form call takes the name and email from the account (D90).
-- Guests verify by voice as in the PRD, and get a nudge (D88).
+- Guests verify by voice as in the PRD, and get a nudge (D88). A guest's TXN/PAY lookup needs the owner's customer ID, and locks after 2 failures in a call (D98).
 - `/calls/pass` is limited to 10 requests per minute per client IP (Railway's `x-real-ip`).
 - This is **identification, not authentication**: name and email aren't secrets (docs/limitations.md).
 
@@ -369,7 +369,7 @@ Production: commit `a39d0c1` (deploy `b3480c6d`, Railway EU West), migrations 00
 **Staff dashboard (D87, D93 kept items, D95).**
 - `/staff`: Supabase Auth in the browser (publishable key; session in `sessionStorage`), then `GET /staff/records?type=tickets|callbacks`. The backend verifies the token and requires `app_metadata.role = "staff"`.
 - **Raised tickets:** tickets not linked to an escalation, newest first. **Scheduled callbacks:** escalations with a booked `callback_slot`, sorted by slot time (D97).
-- Whitelisted fields only (amounts in free text masked); test conversations hidden unless `?include_test=1`; 60 requests per minute per IP; read-only.
+- Whitelisted fields only (amounts in free text masked); test conversations hidden unless `?include_test=1`; 60 requests per minute per IP. **Close (D98):** `POST /staff/records/close` (staff only, 401/403 otherwise) sets a ticket or escalation to closed, freeing its slot, and logs who and when in `conversation_events`; closed cards stay listed.
 - Cards in a 3 / 2 / 1-column grid; counts say "1 raised ticket" / "2 raised tickets"; Log out returns to `/`.
 - The page and API are 404 unless `STAFF_DASHBOARD_ENABLED=1`.
 
