@@ -7,11 +7,11 @@ A voice customer-support agent for RelayPay, a (fictional) cross-border payments
 
 Everything it says passes a grounding gate in code before it is spoken.
 
-**Live:** https://relaypay-backend-production-aa34.up.railway.app: a landing page with **Customer support** (the call page, `/support`: choose a path, click **Start call** and allow the microphone) and **Staff** (`/staff`).
+**Live:** https://relaypay-backend-production-aa34.up.railway.app: a landing page with two buttons, **Customer support** (the call page, `/support`: choose a path, click **Start call** and allow the microphone) and **Staff sign in** (`/staff`). The header on every page has **Home** and a **Start a call** button (on the landing and call pages).
 
 ### Starting a call (graders)
 
-The call page offers two paths (D88). Choose one, then press **Start call**.
+From the landing page, choose **Customer support**. The call page offers two paths (D88). Choose one, then press **Start call**. While the call connects you hear a ringback tone and see "Ringing…".
 - **I'm an existing customer:** enter the account's contact name and email. Demo customer: **Amara** (or **Amara Okafor**), **amara@lagosledger.example**. The call is identified as that customer (LagosLedger, CUS-1001) from its first turn and greets you by first name. Claiming to be someone else during the call is refused: one account per call.
   - Details that don't match one customer get "We couldn't find an account matching those details." (it never says which detail was wrong), and no call starts.
 - **Continue as a guest:** the call behaves exactly as the PRD describes. The agent asks who you are and checks two details by voice (for example "I'm Amara from LagosLedger"). After a guest call that checked an identity, the page suggests the existing-customer path next time.
@@ -26,7 +26,8 @@ The call page offers two paths (D88). Choose one, then press **Start call**.
 ### Staff dashboard (graders)
 
 - **URL:** `/staff` on the live service (https://relaypay-backend-production-aa34.up.railway.app/staff). **Staff account:** `care@relaypay.example`; the password is provided separately in the submission.
-- **Read-only.** Two filters: **Raised tickets** (tickets without an escalation) and **Scheduled callbacks** (escalations with a callback time). Press **Refresh** for new records.
+- From the landing page, choose **Staff sign in**.
+- **Read-only.** Two filters: **Raised tickets** (tickets without an escalation) and **Scheduled callbacks** (escalations with a booked callback slot, sorted by slot time, D97). Press **Refresh** for new records.
 - **Real calls only by default.** Add `?include_test=1` to the URL to include test and eval data: `/staff?include_test=1`.
 - Only staff accounts can see it; a customer account gets "This account isn't staff." It shows no support notes and no amounts (D87).
 
@@ -52,12 +53,12 @@ The call page offers two paths (D88). Choose one, then press **Start call**.
 
 | Component | Where | What it does |
 | --- | --- | --- |
-| Voice page | `backend/public/` | A static page served at `/`. It starts a Vapi web call with the public key and assistant ID from `/config`. |
+| Web pages | `backend/public/` | Static pages with a shared header and footer: the landing page at `/`, the call page at `/support` (starts a Vapi web call with the public key and assistant ID from `/config`, after getting a one-time call pass), and the staff dashboard at `/staff`. |
 | Vapi assistant | Vapi dashboard | Speech-to-text (Soniox), text-to-speech and endpointing. Its "Custom LLM" is our backend. **Vapi runs no tools.** |
 | Backend | `backend/` | The OpenAI-compatible `/chat/completions` endpoint for Vapi. It runs one agent turn per request (Claude Agent SDK), gates what is spoken, records everything, and handles the end-of-call webhook. |
 | MCP server | `mcp-server/` | A stdio MCP server, spawned per turn, with 6 tools: `lookup_customer`, `lookup_transaction`, `lookup_payout`, `create_support_ticket`, `create_escalation`, `log_conversation_event`. Identity, ownership, write caps and idempotency are enforced here and in the database, not by the model. |
 | Shared | `shared/` | Supabase client, retrieval, grounding checks, logging helpers. |
-| Database | `db/migrations/001–005` | Tables, row-level security, and guarded write functions (atomic escalation with its ticket, attempt-scoped writes). |
+| Database | `db/migrations/001–009` | Tables, row-level security, guarded write functions (atomic escalation with its ticket, attempt-scoped writes), escalation enrichment and the notification outbox (006), one-time call passes (007, 008), and callback slots with no double booking (009). |
 | Scripts | `scripts/` | Seed verification, tests, evals, and the MCP Inspector launcher. |
 
 The full design is in [docs/system-overview.md](docs/system-overview.md), and every decision with its reason is in [docs/decisions.md](docs/decisions.md).
@@ -105,6 +106,8 @@ The full design is in [docs/system-overview.md](docs/system-overview.md), and ev
    5. `db/migrations/005_guarded_writes_and_events.sql`
    6. `db/migrations/006_escalation_enrichment_and_outbox.sql`
    7. `db/migrations/007_call_passes.sql`
+   8. `db/migrations/008_call_pass_sources.sql`
+   9. `db/migrations/009_callback_slots.sql`
 
    Migrations are append-only: never edit one that has been applied.
 4. **Seed the business data** (customers, transactions and payouts from `assets/seed-data/*.csv`; upserts, so it's safe to rerun):

@@ -1,5 +1,21 @@
 # Testing evidence
 
+## Final state (2026-10-02, 20:00 WAT): production commit `a39d0c1`, deploy `b3480c6d`, migrations 001–009
+
+- **Unit:** backend `test:gate` 351/351; MCP 42/42; shared 28/28. Local Postgres: the schema suite and `race.sh`, including 009 (callback slots) and two concurrent bookings of one slot (one wins, the other `slot_taken`, nothing written).
+- **Live tools:** `test:tools` passes against migration 009: every callback refusal reason with the business hours and 3 free slots, nothing written on a refusal, a taken slot on a second call.
+- **Callback booking (D97):**
+  - **Before:** the user's call `01a0fdeb…` (19:44 WAT, still D96) stored "Saturday 5:00 PM" as free text on **ESC-19123A45**, after the agent itself offered "Saturday, Sunday, or another day". This is why the slot rule lives in the tool and the database. ESC-19123A45 was closed after recording.
+  - **After:**
+    - Guest "Saturday at 5 PM": refused (`outside_hours`) with the hours and three Monday slots, then booked; no weekend suggested by the agent.
+    - Form-Amara "Saturday at 10am" ×2: 13/13 and 12/13 (run 2 gave the hours but not the reason in words).
+    - Guest S7 "Monday at 11 AM": 0/1 (judge only), then 1/1 unchanged.
+- **Call paths:** `test:callpass` 14/14; staff check 16/16.
+- **Live voice calls today:** see the Voice flow row in the table below.
+
+---
+
+
 The scenario suite was run twice on 2026-10-01: a **BEFORE** run, one round of fixes (D64–D68), then an **AFTER** run with the same scenarios, checks and judge. The BEFORE run is recorded unchanged in Appendix A.
 
 | | BEFORE | AFTER |
@@ -72,14 +88,14 @@ The AFTER judge cost more because every call now carries the approved-procedure 
 
 **Login (L1, D86), 2026-10-02:** `test:login` 18/18 against the deployed service with `CUSTOMER_LOGIN_REQUIRED=1`; S1, S3, S7 ×1 with real one-time passes (`eval-2026-10-02T11-20-20-912Z-login`) **3/3**, $0.050.
 
-**Web page round and D78 (2026-10-01, evening):** unit-tested and deployed; **live check pending.**
+**Web page round and D78 (2026-10-01, evening):** unit-tested and deployed. **Live check done 2026-10-02** (the user's smoke calls; the result for each item is below).
 
 | Change | Commit / deploy | Evidence so far | Live check |
 | --- | --- | --- | --- |
-| D79 captions toggle really hides and shows | `590af9f` / `5c4736b3` | `captions.test.ts` (toggle state, the `[hidden]` CSS rule, the initial markup) | pending |
-| D80 full-call scrollable captions, "Jump to latest", same-speaker fragments merged | `d572812` / `5c4736b3` | `captions.test.ts` (all lines kept, the live "corridor—" merge, scroll decision, panel markup) | pending |
-| D81 failures by type (user-fixable / network / our side), "Reference: <code>" line | `125b230` / `5c4736b3` | `call-end.test.ts` (each mapping, including the live mid-call daily-error and the start-method-error signalling disconnect) | pending |
-| D78 evidence-free decline: fixed line by reason (off_topic / not_covered) | `68119a4` / `1319faf5` | `tool-grounding.test.ts`, `social-fast-path.test.ts` (weather → off-topic line; "no thanks" after it → goodbye; crypto-style miss → safe line; missing or invalid reason → safe line) | pending |
+| D79 captions toggle really hides and shows | `590af9f` / `5c4736b3` | `captions.test.ts` (toggle state, the `[hidden]` CSS rule, the initial markup) | **passed** (user's smoke test 2026-10-02: Call A and check C passed; page-only, nothing in the database) |
+| D80 full-call scrollable captions, "Jump to latest", same-speaker fragments merged | `d572812` / `5c4736b3` | `captions.test.ts` (all lines kept, the live "corridor—" merge, scroll decision, panel markup) | **passed** (user's smoke test 2026-10-02; page-only) |
+| D81 failures by type (user-fixable / network / our side), "Reference: <code>" line | `125b230` / `5c4736b3` | `call-end.test.ts` (each mapping, including the live mid-call daily-error and the start-method-error signalling disconnect) | **not triggered live** (no failure occurred in the smoke calls; unit-tested only) |
+| D78 evidence-free decline: fixed line by reason (off_topic / not_covered) | `68119a4` / `1319faf5` | `tool-grounding.test.ts`, `social-fast-path.test.ts` (weather → off-topic line; "no thanks" after it → goodbye; crypto-style miss → safe line; missing or invalid reason → safe line) | **off-topic line passed live; goodbye took a second decline**: call `01a0fc9e…` (12:37 UTC): "What's the weather in Lagos?" → the off-topic line (passed). "Uh, no thanks." → "No problem. Is there anything else…?", not goodbye: "uh" is not a filler the fast path strips, so the model answered and the goodbye guard gave the declined-offer line. "No." → "Thanks for calling RelayPay. Goodbye.". Ended `customer-ended-call`. Open: add "uh"/"um" to the fast path's fillers (not done: docs-only round). |
 
 **Pending 2-minute smoke test, before recording the Loom:**
 1. A call whose **first** question is about the weather → the off-topic line.
@@ -108,7 +124,7 @@ A run passes only if **all deterministic checks pass** and **the LLM judge finds
 | Ticket creation (S6) | Asks for the reference first; creates a ticket stored in Supabase. | r1/r2: clarify, then lookup (failed, beneficiary details), then "Done. A support ticket has been logged and the team will follow up on your payout." One ticket linked to TXN-9004 (high), with a `ticket_created` event. | **2/3**; **after2 3/3** (BEFORE 0/3) | **BEFORE:** every ticket was stored, but the confirmations went beyond the evidence. "…and **get your payment sorted**" is an outcome promise, and "references start with **INV** or TXN" invents a prefix. **Fix:** outcome verbs without "will" are flagged; only TXN/PAY/CUS prefixes are allowed in format descriptions; the prompt now says to confirm a follow-up but never its channel or time (D65). The AFTER notes show the INV sentence filtered. **AFTER r3 failed** on routing: lookup_transaction marked a failed record `requires_escalation/payment`, which contradicted the prompt's ticket rule. **Fix:** D69 (failed → `offer_ticket`; only "review required" escalates). after2: 3/3. **Earlier:** caps, idempotency, and ownership on tickets (D43/D57). |
 | Human escalation (S7) | Escalates; collects name, email and time; creates the escalation record; no compliance explanation; no promise. | Name, then email (read back and confirmed), then "tomorrow morning". "I've noted tomorrow morning as your preferred callback time. A RelayPay support specialist will follow up with you…" One escalation with its ticket and an `escalation_created` event. | **3/3** (BEFORE 0/3) | **BEFORE:** the judge flagged "A RelayPay specialist needs to look at a restricted account" (required by escalation-rules.md) 3/3, and "will follow up with you **at efua@…**" (the channel). **Fix:** D66 for the procedural statement; D65's prompt rule against stating a follow-up channel or time. **Earlier:** an 8 s timeout after the escalation, the respelled email, and "right away" / "in most cases" (D38/D41/D46). |
 | Unsupported question (S8) | Declines to guarantee; uses approved timeline knowledge. | "No, RelayPay can't guarantee payment timelines. Payment timelines depend on external banking systems and regulatory checks." In r1 the trailing clause was trimmed (D64). | **1/3**; **after2 1/3** (BEFORE 2/3) | **r2 (and after2 r1, r2):** "…which are **outside our control**" was spoken. That's an unsupported addition in an answer (G1), which pattern checks can't catch (D63). **r3:** the reply is correct, but the runner's "no arrival promise" regex matched (since fixed: a match after a denial in the same clause no longer counts) "I can't confirm when your payout **will arrive**", a denial. That's a false positive in the check; the judge found nothing. See Remaining failures. |
-| Voice flow (S9) | Vapi captures speech; the backend responds; audio returns; Supabase logs the call and tool calls. | **Live calls** (see (b)). Two end-to-end calls have Vapi metrics. The latest (`01a0f455…`) had 3 turns including a successful `lookup_transaction`, average turn latency 2655 ms. | **2 complete calls with metrics** | No new live call today. **Earlier:** speculative partial transcripts (D28); a 42.6 s wait on "thank you" (D35); the CSP blocked the first deployed call (D55); "no, thank you" to an offer ended the call (D56). **Open:** the end-call phrase has never fired (D36). |
+| Voice flow (S9) | Vapi captures speech; the backend responds; audio returns; Supabase logs the call and tool calls. | **Live calls** (see (b)). **2026-10-02** (Vapi end-of-call metrics from `conversations.vapi_metrics`): `01a0fc9e…` guest, 3 turns, `customer-ended-call`, 43 s, avg turn 5358 ms (model 1813, transcriber 3115); `01a0fca1…` form-Amara, 13 turns, `customer-ended-call`, 195 s, avg turn 4601 ms (model 2284); `01a0fd32…` form-Amara, 11 turns, `silence-timed-out`, 178 s, avg turn 3527 ms (model 1312); `01a0fdeb…` guest, 12 turns, `customer-ended-call`, 214 s, avg turn 3011 ms (model 1651), the D97 "before" call (ESC-19123A45); `01a0fdff…` guest, 1 turn (fees answer), no end-of-call report yet; plus 2 calls with no turns (`01a0fca0…` 5 s, `01a0fca6…` 10 s, both ended by the caller). Earlier: `01a0f455…`, 3 turns, avg 2655 ms. | **5 calls with turns today (4 with full Vapi metrics)** | Today's calls also confirmed the call pass at `call.assistantOverrides.variableValues.callPass` (D86/D88) and the D89 identity-switch line (`01a0fca1…`, turn 10). **Earlier:** speculative partial transcripts (D28); a 42.6 s wait on "thank you" (D35); the CSP blocked the first deployed call (D55); "no, thank you" to an offer ended the call (D56). **Open:** the end-call phrase has never fired (D36). |
 | Logging | Every call's records written. | AFTER: all 34 conversations have matching rows in every table (see (c)). | **34/34** (BEFORE 34/34) | **Earlier:** missing usage (D18), replaced attempts unrecorded (D28), a 0-turn call recorded as completed (D61; 6 rows corrected on approval). **Now:** a failed event write is noted in `tool_calls` instead of failing the action (D68). |
 
 ## BEFORE vs AFTER per scenario

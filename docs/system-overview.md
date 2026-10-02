@@ -23,8 +23,10 @@ Every turn, attempt, retrieval, tool call, ticket, escalation and event is recor
 
 ## 2. Architecture
 
+> The features added on 2026-10-02 (the web pages, call passes, migrations 006–009, callback booking, the outbox and Discord, the staff dashboard and the call-page extras) are summarised in [section 15](#15-final-features-2026-10-02).
+
 ```
-Browser page (GET /, app.js; Vapi Web SDK 2.7.1 + daily-js 0.87.0 from esm.sh)
+Browser page (GET /support, app.js; Vapi Web SDK 2.7.1 + daily-js 0.87.0 from esm.sh)
    │  microphone audio (WebRTC, Daily)
    ▼
 Vapi (STT, endpointing, TTS)  ── may send several requests per caller turn (speculative partials)
@@ -301,12 +303,88 @@ Server-side figures are from request receipt (`ms_first_token` = first gated sen
 
 ## 14. Doc/code discrepancies found
 
-1. **`docs/limitations.md`, Grounding row.** It says the only repair is the "your" removal and "every other flag still drops the sentence". The code also trims flagged trailing clauses (`SentenceFilter.trimTrailingClause`, D64).
-2. **`docs/limitations.md` G1 row, and D63.** They say the offline LLM judge is "not yet built". It exists: `scripts/eval-scenarios.ts` (Sonnet 5.5 judge, used for BEFORE, AFTER and after2).
+1. **`docs/limitations.md`, Grounding row.** *(Resolved 2026-10-02: the row now describes the D64 trim.)* It says the only repair is the "your" removal and "every other flag still drops the sentence". The code also trims flagged trailing clauses (`SentenceFilter.trimTrailingClause`, D64).
+2. **`docs/limitations.md` G1 row, and D63.** *(Resolved: the G1 row now says the offline judge is built.)* They say the offline LLM judge is "not yet built". It exists: `scripts/eval-scenarios.ts` (Sonnet 5.5 judge, used for BEFORE, AFTER and after2).
 3. **`docs/testing-evidence.md` §(e).** It says the init regression's cause "hasn't been determined". `docs/latency.md` (later section) and commit `3e0c4fd` attribute it to container variance.
 4. **`backend/src/gate.ts` header comment** (lines 14–19, 26–32). It says there are no agent tools and that clarify/decline get the promise checks only. The code gives every non-social type the full filter (`filterOptionsFor`, D58) and attaches six tools. The `SentenceFilterOptions.mode` comment ("promises" for clarify/decline) is stale the same way: the gate never uses `"promises"` mode.
-5. **`gate_blocked` events.** `log-conversation-event.ts` and D39 say the backend records gate blocks as events, but no code writes `gate_blocked`. Blocks are recorded only as `answer_type = blocked` with a note in `confidence_note`.
-6. **`.env.example`** lists `RELAYPAY_ATTACH_MCP`, which no code reads. The real test knobs are `RELAYPAY_TEST_DETACH_MCP` and `RELAYPAY_TEST_MCP_TOOLSET`. It also omits `ATTEMPT_ID` and `MCP_TOOLSET` from the per-turn MCP variables.
-7. **Fly.io references.** `server.ts` (the uncaughtException comment) and D34 say "Fly.io restarts crashed machines"; the service runs on Railway (`railway.json` `restartPolicyType: ON_FAILURE`).
-8. **`create_escalation`'s `follow_up_summary` vs the prompt.** The tool description says "Read follow_up_summary to the caller", and without a preferred time the summary says the specialist "will follow up with you by email at <email>". The system prompt (D65) says never to say HOW the follow-up happens, including by email. The filter doesn't flag a channel statement without a timeline word.
+5. **`gate_blocked` events.** *(Resolved by D71: `turn.ts` writes a `gate_blocked` event.)* `log-conversation-event.ts` and D39 say the backend records gate blocks as events, but no code writes `gate_blocked`. Blocks are recorded only as `answer_type = blocked` with a note in `confidence_note`.
+6. **`.env.example`** *(Resolved: `RELAYPAY_ATTACH_MCP` is no longer listed.)* lists `RELAYPAY_ATTACH_MCP`, which no code reads. The real test knobs are `RELAYPAY_TEST_DETACH_MCP` and `RELAYPAY_TEST_MCP_TOOLSET`. It also omits `ATTEMPT_ID` and `MCP_TOOLSET` from the per-turn MCP variables.
+7. **Fly.io references.** *(Resolved: no Fly.io reference remains in `server.ts`.)* `server.ts` (the uncaughtException comment) and D34 say "Fly.io restarts crashed machines"; the service runs on Railway (`railway.json` `restartPolicyType: ON_FAILURE`).
+8. **`create_escalation`'s `follow_up_summary` vs the prompt.** *(Resolved by D70: `follow_up_summary` is now only "A RelayPay support representative will follow up.")* The tool description says "Read follow_up_summary to the caller", and without a preferred time the summary says the specialist "will follow up with you by email at <email>". The system prompt (D65) says never to say HOW the follow-up happens, including by email. The filter doesn't flag a channel statement without a timeline word.
 9. **Minor.** `attempt_is_active` (migration 003) is described as "used by the MCP write path", but no code calls it. `guardedRpc` deliberately avoids a pre-check.
+
+## 15. Final features (2026-10-02)
+
+Production: commit `a39d0c1` (deploy `b3480c6d`, Railway EU West), migrations 001–009 applied. Each item names the decision that records it.
+
+**Web pages and the persistent header (D52, D92, D95, D96).**
+- `/` is a landing page: a hero with two buttons, **Customer support** (→ `/support`) and **Staff sign in** (→ `/staff`), a static line illustration and three reassurances.
+- `/support` is the call page; `/staff` is the staff dashboard. Old call-page addresses (`/index.html`, `/support/`, `/call`) redirect to `/support`.
+- Every page has the same header and footer. They are rendered on the server from one source (`siteHeader` / `siteFooter` / `renderPage` in `backend/src/web.ts`), filled into `<!-- @header … -->` / `<!-- @footer -->` placeholders.
+  - The header is a full-width white bar with a 2px teal bottom line. It is sticky on wider screens and scrolls away on phones.
+  - It holds the logo and the RelayPay wordmark (→ `/`), the only nav link (**Home**, underlined in teal with `aria-current` on `/`), and on the right either **Start a call** (`/`, `/support`) or "Signed in as <email>" with **Log out** (the staff dashboard).
+  - Every page also has a skip link. The footer is "© 2026 RelayPay · Demo project".
+- Content sits in the same centred 1200px container as the header.
+
+**Two call paths and the one-time call pass (D86, D88, migrations 007–008).**
+- With `CUSTOMER_LOGIN_REQUIRED=1`, every call needs a one-time pass from `POST /calls/pass`:
+  - `{mode: "customer", name, email}` (name and email must match one customer, ignoring case and spacing; any mismatch gets the identical 422);
+  - or `{mode: "guest"}`.
+- The pass is 32 random bytes, stored only as its SHA-256 in `call_passes` with a source (`form_customer` / `guest` / `login`). It expires after 5 minutes. It is redeemed once by one conversation (`redeem_call_pass`, row lock) and travels in the call as `call.assistantOverrides.variableValues.callPass` (confirmed in live logs).
+- A call without a valid pass hears the fixed login line and the agent doesn't run.
+- A form pass sets the conversation's verified customer before the first turn (`apply_call_pass_identity`, from the pass row, never from speech). The agent then gets a backend-written context line (D89, D90): don't re-ask identity, keep the typed first name, confirm the typed email.
+  - A spoken claim to be someone else gets the fixed one-account line (D89).
+  - `create_escalation` on a form call takes the name and email from the account (D90).
+- Guests verify by voice as in the PRD, and get a nudge (D88).
+- `/calls/pass` is limited to 10 requests per minute per client IP (Railway's `x-real-ip`).
+- This is **identification, not authentication**: name and email aren't secrets (docs/limitations.md).
+
+**Migrations 006–009.**
+- 006: escalation enrichment (a missing field filled, never overwritten), the `escalation_updated` event, and `notification_outbox` written in the same transaction as the ticket or escalation.
+- 007: `call_passes` and `redeem_call_pass`.
+- 008: pass sources and `apply_call_pass_identity`.
+- 009: callback slots (below).
+- All are service_role only, with RLS on.
+
+**Callback slot booking (D97, migration 009).**
+- **Rules:** Monday to Friday, 09:00–16:30 Africa/Lagos (WAT, UTC+1, no DST), 30-minute slots, at least 30 minutes ahead, one open escalation per slot. Public holidays are out of scope.
+- **Parsing:** `create_escalation` parses the caller's words with `chrono-node` 2.10.1 (pinned) relative to the current Lagos time, forward-dated (`mcp-server/src/tools/callback-slot.ts`).
+  - It needs an explicit time, and rounds to a slot only within 10 minutes.
+  - With no AM/PM, 1–7 o'clock means the afternoon.
+- **Outcomes:** **booked** (`callback_slot`, plus `callback_booked_for`, e.g. "Monday 5 October at 10 AM Lagos time"), or a refusal with `reason`: `weekend`, `outside_hours`, `past`, `taken`, `needs_specific_time` or `not_a_slot`.
+  - A refusal carries a plain-words message, the sentence "Callbacks are available Monday to Friday, 9 AM to 5 PM Lagos time." and **the next 3 free slots** for speech (from `next_free_slots`; in the morning or afternoon when the caller named one). Nothing is written.
+- **Database:** `escalations.callback_slot` has a **CHECK constraint** (weekday, 09:00–16:30 Lagos, :00/:30, no seconds) and a **partial UNIQUE index** on the slot for `status in ('open', 'in progress')`; closing an escalation frees its slot.
+  - `create_escalation_with_ticket` v4 returns `slot_taken` (nothing written) instead of raising, rejects a slot under 30 minutes ahead, and sets `call_booked = (callback_slot is not null)`.
+- **Gate:** a refusal's result is evidence for the gate, so the agent can say the reason, the hours and the offered slots. A booking is confirmed as "booked for <callback_booked_for>".
+
+**Notification outbox and Discord (D82, D83).**
+- Each new ticket, escalation and escalation update queues one `notification_outbox` row (unique `dedupe_key`; no amounts or notes).
+- The backend sender posts pending rows to `DISCORD_WEBHOOK_URL`, after each persisted turn and every 60 s.
+  - It claims a row before sending (a compare-and-set on `attempts`) and marks it sent only on a 2xx.
+  - It retries once, honouring Discord's 429 `retry_after`, then marks the row failed.
+  - A row interrupted mid-send for over 10 minutes is marked failed, not resent.
+  - Rows from test conversations are marked "skipped (not posted)".
+- The message has a bold label per line, the customer as verified or not, and either "**Callback booked:** Mon 5 Oct, 10:00 WAT" (D97) or the requested/not-requested lines.
+
+**Staff dashboard (D87, D93 kept items, D95).**
+- `/staff`: Supabase Auth in the browser (publishable key; session in `sessionStorage`), then `GET /staff/records?type=tickets|callbacks`. The backend verifies the token and requires `app_metadata.role = "staff"`.
+- **Raised tickets:** tickets not linked to an escalation, newest first. **Scheduled callbacks:** escalations with a booked `callback_slot`, sorted by slot time (D97).
+- Whitelisted fields only (amounts in free text masked); test conversations hidden unless `?include_test=1`; 60 requests per minute per IP; read-only.
+- Cards in a 3 / 2 / 1-column grid; counts say "1 raised ticket" / "2 raised tickets"; Log out returns to `/`.
+- The page and API are 404 unless `STAFF_DASHBOARD_ENABLED=1`.
+
+**Call page extras.**
+- **Live captions (D77, D79, D80):** final lines only (caller speech as recognised, the agent's text as spoken), same-speaker fragments merged, the whole call kept in a scrollable full-height panel on desktop, "Jump to latest" when scrolled up, a Hide/Show toggle, aria-live. Page memory only.
+- **References panel (D84):** `GET /calls/:callId/records`, polled every 3 s during the call and once after it ends.
+  - It is scoped to the Vapi call ID, and only UUIDs are looked up; an unknown ID gets the same empty shape.
+  - It returns references only (ticket and category; escalation, linked ticket and callback preference) plus `identity_checked` for the guest nudge.
+  - Each entry has a **Copy** button.
+- **Ringback (D96):** a Web Audio two-tone ringback (440 + 480 Hz, 2 s on / 4 s off, low volume) while the call is placed, with "Ringing…" in the aria-live status.
+  - It stops on connect (call-start or the first assistant speech), an error, End call, any failure or leaving the page, and never plays during a connected call.
+  - After 15 s without connecting, the page shows its network "Connection problem" message.
+- **Idle check-in (D96):** "Are you still there? I'm here if you need anything." is a Vapi `customer.speech.timeout` hook. The user configures it in Vapi (recommended: `timeoutSeconds` 15, `triggerMaxCount` 1, `triggerResetMode` `onUserSpeech`, `silenceTimeoutSeconds` 28).
+  - The backend treats the line like the greeting: it skips it when deciding goodbye versus declined offer, and turn numbering only counts the caller's messages.
+  - A `silence-timed-out` ending after the caller had spoken shows "Call ended: there was no response"; with no caller speech, it shows the microphone message.
+- **After a call (D90):** the page returns to the path chooser without a reload; the last captions and the references stay until the next call starts.
+
+**Fillers and follow-up (D91).** "One moment while I check that." is spoken at request start for a reference or status question, and when a lookup tool starts; "One moment while I set that up." when a ticket or escalation is being created. After a successful write, a reply that doesn't end with a question gets "Is there anything else I can help you with?".
