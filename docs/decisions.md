@@ -1826,6 +1826,26 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - **guest S7** (`eval-2026-10-02T15-14-35-806Z-d90-guest`): **1/1**, unchanged flow ($0.034).
     - Total spend for this round about $0.06 (cap $0.06).
 
+### D91. Filler and follow-up polish: early filler, filler by tool kind, anything-else after a write (2026-10-02)
+
+- **a. Early filler:**
+  - When the caller's latest message names a TXN-/PAY- reference (also spoken: "T X N nine zero zero one", "pay seven zero zero two") or asks about their account, transaction or payout status, the backend speaks "One moment while I check that." **at request start**, before the database work and the model. It isn't repeated in the turn.
+  - A replayed turn (D28) strips the filler from its stored response, so it isn't heard twice.
+  - Not for general questions, greetings, or "pay" without a reference.
+- **b. Filler by tool:** lookups "One moment while I check that."; `create_support_ticket` and `create_escalation` "One moment while I set that up."; `log_conversation_event` none.
+- **c. After a successful ticket or escalation:** if the spoken reply doesn't end with a question, the backend appends the fixed "Is there anything else I can help you with?". It is the D73 anything-else context, so "no thanks" after it is a goodbye.
+- Fixed backend lines only: no prompt, gate or filter change.
+- **Tests:**
+  - Unit `filler.test.ts`: references written and spoken; status questions; negatives; filler by tool; the append rule; the D73 goodbye after the appended line. `test:gate` 320/320.
+- **Live** (deploy `ebf5a370`):
+  - **Guest S4, S6, S7** (`eval-2026-10-02T15-37-45-312Z-d91-guest`): **S4 1/1, S6 1/1, S7 0/1.**
+    - S4 turn 0 spoke the early filler.
+    - S6 and S7 spoke "One moment while I set that up."
+    - S7's escalation turn got the appended "Is there anything else I can help you with?".
+    - **The S7 failure is the judge flagging model wording on turn 0** ("a restricted account is serious and needs a specialist"): no tools, no filler, so not a D91 change. It is the known number-free unsupported-claim gap (G1, docs/limitations.md). Earlier S7 runs passed with different wording.
+  - **Form-Amara dispute** (`test-form-escalation.ts`, the form-path equivalent of S7, whose scripted caller is Efua): **5/5**. Early filler; the typed email confirmed; the time asked; "One moment while I set that up."; one escalation with the account's name and email; the reply ended "Is there anything else I can help you with?".
+  - Spend about $0.095 (cap $0.10).
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
