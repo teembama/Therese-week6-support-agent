@@ -84,7 +84,7 @@ function escapeXml(text: string): string {
  * backend from the pass's customer (never the caller's words); not part of the system prompt.
  */
 export function formCallContext(firstName: string, customerId: string): string {
-  return `The caller is already identified as ${firstName} (${customerId}) via the call page. Don't ask for their name, company or email to verify them.`;
+  return `The caller is already identified as ${firstName} (${customerId}) via the call page. Don't ask for their name, company or email to verify them. If they say they are someone else, call lookup_customer with the details they give.`;
 }
 
 export function buildTurnPrompt(history: HistoryEntry[], callerMessage: string, chunks: KbChunk[], callContext?: string): string {

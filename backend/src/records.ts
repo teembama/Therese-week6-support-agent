@@ -98,9 +98,40 @@ export function createRateLimiter(limit: number, windowMs = 60_000, now: () => n
 
 /** The client IP: the first X-Forwarded-For hop (Railway's proxy sets it), else the socket address. */
 export function clientIp(req: IncomingMessage): string {
-  const xff = req.headers["x-forwarded-for"];
-  const first = (Array.isArray(xff) ? xff[0] : xff)?.split(",")[0]?.trim();
-  return first || req.socket.remoteAddress || "unknown";
+  const header = (name: string) => {
+    const v = req.headers[name];
+    return (Array.isArray(v) ? v[0] : v)?.split(",")[0]?.trim() || "";
+  };
+  const source = header("x-real-ip") ? "x-real-ip" : header("x-forwarded-for") ? "x-forwarded-for" : "socket";
+  const raw = source === "socket" ? req.socket.remoteAddress ?? "" : header(source);
+  if (!ipShapeLogged) {
+    // D89: once per process, WHICH source keyed the limiter and its masked shape (no address).
+    ipShapeLogged = true;
+    console.log(JSON.stringify({ event: "client_ip_source", source, shape: raw.replace(/[0-9]/g, "9").replace(/[a-f]/gi, "x").slice(0, 60) }));
+  }
+  return normaliseIp(raw) || "unknown";
+}
+let ipShapeLogged = false;
+
+/**
+ * D89: the rate-limit key for an address. A port is dropped ("1.2.3.4:5678", "[::1]:5678"), an
+ * IPv4-mapped IPv6 becomes IPv4, and IPv6 is grouped by its /64 (one household or phone network),
+ * so a rotating port or IPv6 suffix can't bypass the limit (live test-callpass: 17 requests, no 429).
+ */
+export function normaliseIp(raw: string): string {
+  let ip = raw.trim();
+  const bracket = /^\[([^\]]+)\](?::\d+)?$/.exec(ip);
+  if (bracket) ip = bracket[1]!;
+  else if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(ip)) ip = ip.slice(0, ip.lastIndexOf(":"));
+  ip = ip.replace(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i, "$1");
+  if (ip.includes(":")) {
+    const parts = ip.toLowerCase().split("::");
+    const head = parts[0] ? parts[0].split(":") : [];
+    const tail = parts.length > 1 && parts[1] ? parts[1].split(":") : [];
+    const full = parts.length > 1 ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill("0"), ...tail] : head;
+    return `${full.slice(0, 4).map((h) => h || "0").join(":")}::/64`;
+  }
+  return ip;
 }
 
 export async function handleRecords(

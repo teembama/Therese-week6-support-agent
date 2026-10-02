@@ -129,3 +129,15 @@ describe("records endpoint: HTTP (D84)", () => {
     }
   });
 });
+
+describe("rate-limit key (D89)", () => {
+  it("drops ports, unmaps IPv4-in-IPv6, and groups IPv6 by /64", async () => {
+    const { normaliseIp } = await import("./records.js");
+    assert.equal(normaliseIp("102.216.203.166:54321"), "102.216.203.166");
+    assert.equal(normaliseIp("102.216.203.166"), "102.216.203.166");
+    assert.equal(normaliseIp("::ffff:10.0.0.1"), "10.0.0.1");
+    assert.equal(normaliseIp("[2001:db8:1:2:aaaa::1]:443"), "2001:db8:1:2::/64");
+    assert.equal(normaliseIp("2001:db8:1:2:bbbb:cccc:dddd:eeee"), "2001:db8:1:2::/64");
+    assert.equal(normaliseIp("2001:db8::1"), "2001:db8:0:0::/64");
+  });
+});

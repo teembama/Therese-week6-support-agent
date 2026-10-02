@@ -60,7 +60,7 @@ describe("form-call context line (D89)", async () => {
   const { buildTurnPrompt, formCallContext } = await import("./prompt.js");
   it("a form-identified call gets the context block in the TURN input (not the system prompt); others don't", () => {
     const line = formCallContext("Amara", "CUS-1001");
-    assert.equal(line, "The caller is already identified as Amara (CUS-1001) via the call page. Don't ask for their name, company or email to verify them.");
+    assert.equal(line, "The caller is already identified as Amara (CUS-1001) via the call page. Don't ask for their name, company or email to verify them. If they say they are someone else, call lookup_customer with the details they give.");
     const withCtx = buildTurnPrompt([], "Can you check my account status?", [], line);
     assert.ok(withCtx.includes("<call_context>\nThe caller is already identified as Amara (CUS-1001) via the call page."));
     assert.ok(withCtx.indexOf("<call_context>") < withCtx.indexOf("<caller_message"));
