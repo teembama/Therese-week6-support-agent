@@ -8,6 +8,7 @@ import { classifyFailure, describeEnd, failureMessage, isCallOverError, sanitize
 import { appendFinal, isNearBottom, speakerLabel, toggleState } from "/captions.js";
 import { announcement, copyText, describeEntry, mergeRecords, POLL_MS, recordsUrl } from "/records.js";
 import { callOverrides, GUEST_NUDGE, passRequest, passResult, shouldNudge } from "/call-path.js";
+import { createRingback, RINGING_TEXT } from "/ringback.js";
 
 const SDK_URL = "https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0";
 const MAX_CALL_MS = 4 * 60_000; // matches the note on the page; the assistant's own limit should be 240 s too
@@ -284,6 +285,7 @@ function failWithMessage(message) {
 
 /** Show a classified failure: its group's headline and next step, plus a small reference line. */
 function fail(failure, phase = callStartedAt ? "in-call" : "starting") {
+  ringback.stop();
   const { headline, lines } = failureMessage(failure, phase);
   stopTimer();
   if (inCall && vapi) {
@@ -331,9 +333,21 @@ function stopTimer() {
 
 
 
+// ---- Ringback (D96): while the call connects; stops on connect, error, End call or leaving the page.
+// After 15 s without connecting: the network "Connection problem" message.
+const ringback = createRingback({
+  createContext: () => new (window.AudioContext || window.webkitAudioContext)(),
+  onTimeout: () => {
+    fail({ group: "network", kind: "network", code: "connect-timeout" }, "starting");
+    try { vapi?.stop(); } catch { /* not started */ }
+  },
+});
+window.addEventListener("pagehide", () => ringback.stop());
+
 // ---- Wiring.
 function attach(v) {
   v.on("call-start", () => {
+    ringback.markConnected();
     inCall = true;
     ui.captions.hidden = false;
     ui.rightEmpty.hidden = true;
@@ -342,18 +356,23 @@ function attach(v) {
     startRecordsPolling();
     ui.end.focus();
   });
-  v.on("speech-start", () => setState("speaking", "Live: RelayPay is speaking", "You can interrupt at any time."));
+  v.on("speech-start", () => {
+    ringback.markConnected(); // the first assistant speech also means connected
+    setState("speaking", "Live: RelayPay is speaking", "You can interrupt at any time.");
+  });
   v.on("speech-end", () => { if (inCall) setState("listening", "Live: listening", "Go ahead and speak."); });
   v.on("message", (m) => {
     if (m?.type === "status-update" && m.status === "ended" && typeof m.endedReason === "string") lastEndedReason = m.endedReason;
     // Vapi transcript messages: only FINAL lines are shown (caller speech as recognised; the
     // assistant's text as spoken), never partials.
+    if (m?.type === "transcript" && m.role === "assistant") ringback.markConnected();
     if (m?.type === "transcript" && m.transcriptType === "final" && (m.role === "user" || m.role === "assistant")) {
       if (m.role === "user" && String(m.transcript ?? "").trim()) heardCaller = true;
       addCaption(m.role, m.transcript);
     }
   });
   v.on("call-end", () => {
+    ringback.stop();
     stopRecordsPolling();
     const wasInCall = inCall || callOverByVapi;
     if (!ui.error.hidden) { inCall = false; stopTimer(); return; } // an error already explained what happened
@@ -365,6 +384,7 @@ function attach(v) {
     explainEnd();
   });
   v.on("error", (e) => {
+    ringback.stop();
     if (isCallOverError(e, Boolean(callStartedAt))) {
       // The call is ending (Vapi's reason, or a drop); call-end (or this fallback) explains how.
       console.info("[relaypay] call ended by the transport", sanitizeForLog(e));
@@ -377,6 +397,7 @@ function attach(v) {
 }
 
 async function startCall() {
+  ringback.reset(); // a new attempt may ring again
   clearError();
   cspBlocked = null; // only violations during THIS attempt count
   endedByUser = false;
@@ -409,8 +430,9 @@ async function startCall() {
     callPath = path;
     overrides = callOverrides(result.pass, result.firstName);
   }
-  setState("connecting", "Connecting", "Connecting you to RelayPay support…");
   setButtons({ start: false, end: true });
+  // D96: ring while the call is being placed; "Ringing…" is announced by the aria-live status.
+  setState("connecting", "Connecting", ringback.start() ? RINGING_TEXT : "Connecting you to RelayPay support…");
   try {
     // The call's ID (an unguessable UUID; also our conversation ID) scopes the references panel.
     let call;
@@ -432,6 +454,7 @@ async function startCall() {
 }
 
 function endCall() {
+  ringback.stop();
   endedByUser = true;
   setButtons({ start: false, end: false });
   setState("ended", "Ending call", "Hanging up…");
