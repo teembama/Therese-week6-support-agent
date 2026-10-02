@@ -84,7 +84,25 @@ export function safeProjection(c: CustomerRow): Record<string, unknown> {
 
 const NOT_VERIFIED_MESSAGE = "The details given do not match one customer record. Do not say which detail was wrong. Ask the caller to check their details, or offer to connect them with RelayPay support.";
 
-export const handler = withWriteToolLogging(name, "Verify identity (two identifiers) and return the safe customer projection", async (args, { db, ctx }): Promise<ToolOutcome> => {
+/**
+ * L1b guest nudge (D88): on a GUEST call (the call page's "Continue as a guest" pass), the result
+ * carries a short line the agent may say once. Rules are unchanged: the two-identifier check runs
+ * exactly as before. A lookup failure here only drops the hint.
+ */
+export const GUEST_HINT = "For a quicker check, you can also start a new call as an existing customer.";
+async function isGuestCall(db: Parameters<typeof verifiedCustomerId>[0], conversationId: string): Promise<boolean> {
+  const { data, error } = await db.from("call_passes").select("source").eq("conversation_id", conversationId).maybeSingle();
+  return !error && (data as { source?: string } | null)?.source === "guest";
+}
+
+export const handler = withWriteToolLogging(name, "Verify identity (two identifiers) and return the safe customer projection", async (args, deps): Promise<ToolOutcome> => {
+  const outcome = await lookup(args, deps);
+  if (outcome.status === "error" || !outcome.result || typeof outcome.result !== "object") return outcome;
+  if (!(await isGuestCall(deps.db, deps.ctx.conversationId))) return outcome;
+  return { ...outcome, result: { ...(outcome.result as Record<string, unknown>), guest_hint: GUEST_HINT, guest_hint_use: "You may say guest_hint once in this call, at a natural point. It is optional." }, resultSummary: `${outcome.resultSummary ?? outcome.status} +guest_hint` };
+});
+
+async function lookup(args: unknown, { db, ctx }: Parameters<Parameters<typeof withWriteToolLogging>[2]>[1]): Promise<ToolOutcome> {
   const parsed = parseArgs(inputSchema, args, "Identifiers must be short strings.");
   if (!parsed.ok) return parsed.outcome;
   const input = parsed.data;
@@ -177,4 +195,4 @@ export const handler = withWriteToolLogging(name, "Verify identity (two identifi
     result: { found: true, verified: true, ...safeProjection(c) },
     resultSummary: `verified ${c.customer_id} (given: ${given.join(",")})${note}`,
   };
-});
+}

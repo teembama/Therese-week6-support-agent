@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Batch 2B tool tests: the six support tools through the real MCP client and stdio server,
 // against Supabase, in a fresh 'test-tools-…' conversation with a real active attempt.
 // Requires migration 005 and a built mcp-server (npm run build). No agent involved.
@@ -346,6 +347,46 @@ async function main(): Promise<number> {
   }
   await db.rpc("finish_turn_attempt", { p_attempt_id: enrAttempt, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });
   await db.from("conversations").update({ ended_at: new Date().toISOString(), final_status: "completed", summary: "Enrichment test run (migration 006)" }).eq("conversation_id", enrConversation);
+
+  // ---- L1b (D88): the guest nudge. A lookup_customer result on a GUEST call carries the hint;
+  // on any other call it doesn't. The identity check itself is unchanged.
+  console.log("\n== Guest nudge (L1b, D88)");
+  const guestConversation = `${conversationId}-guest`;
+  const guestAttempt = newAttemptId();
+  await db.rpc("begin_turn_attempt", {
+    p_conversation_id: guestConversation, p_channel: "test", p_caller: "scripts/test-tools.ts", p_turn_index: 0,
+    p_attempt_id: guestAttempt, p_transcript_hash: transcriptHash("guest"), p_user_transcript: "guest",
+  });
+  const { error: passError } = await db.from("call_passes").insert({
+    pass_hash: createHash("sha256").update(`guest-${guestConversation}`).digest("hex"), source: "guest", used_at: new Date().toISOString(), conversation_id: guestConversation,
+  });
+  check(!passError, "a redeemed guest pass linked to the test conversation", passError?.message);
+  const guestClient = new Client({ name: "relaypay-test-tools-guest", version: "0.1.0" });
+  await guestClient.connect(new StdioClientTransport({
+    command: process.execPath,
+    args: [SERVER],
+    env: {
+      ...getDefaultEnvironment(),
+      SUPABASE_URL: process.env["SUPABASE_URL"]!,
+      SUPABASE_SERVICE_ROLE_KEY: process.env["SUPABASE_SERVICE_ROLE_KEY"]!,
+      CONVERSATION_ID: guestConversation,
+      TURN_INDEX: "0",
+      ATTEMPT_ID: guestAttempt,
+    },
+    stderr: "pipe",
+  }));
+  try {
+    const g = ((await guestClient.callTool({ name: "lookup_customer", arguments: { contact_name: "Amara", company_name: "LagosLedger" } })).structuredContent ?? {}) as Structured;
+    console.log(`  guest lookup_customer -> ${JSON.stringify(g).slice(0, 300)}`);
+    check(JSON.stringify(g).includes('"verified":true'), "guest call: the two-identifier check still verifies Amara (rules unchanged)", JSON.stringify(g));
+    check(JSON.stringify(g).includes("For a quicker check, you can also start a new call as an existing customer."), "guest call: the result carries the guest hint");
+  } finally {
+    await guestClient.close();
+  }
+  const mainLookups = ((await db.from("tool_calls").select("result_summary").eq("conversation_id", conversationId).eq("tool_name", "lookup_customer")).data ?? []) as Structured[];
+  check(mainLookups.length > 0 && !mainLookups.some((r) => String(r["result_summary"]).includes("guest_hint")), "non-guest call: no guest hint on any lookup_customer", JSON.stringify(mainLookups.slice(0, 2)));
+  await db.rpc("finish_turn_attempt", { p_attempt_id: guestAttempt, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });
+  await db.from("conversations").update({ ended_at: new Date().toISOString(), final_status: "completed", summary: "Guest nudge test run (L1b)" }).eq("conversation_id", guestConversation);
 
   // Close whichever attempt is still active (the replacing one, if the guard test ran).
   await db.rpc("finish_turn_attempt", { p_attempt_id: newer ?? attemptId, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });

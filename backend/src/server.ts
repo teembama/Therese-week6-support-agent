@@ -148,6 +148,14 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
     const { pass, source } = extractCallPass(json);
     const access = await checkAccess!(turn.callId, pass);
     if (!access.cached) log({ event: "call_access", conversation_id: turn.callId, turn_index: turn.turnIndex, status: access.status, pass_source: source, role: access.role, mapped: access.customerId !== null });
+    // L1b (D88): a form-matched pass verifies the call before its first turn runs, from the PASS's
+    // customer (never the caller's words). Best-effort: on failure the call stays unverified and
+    // the usual voice check applies.
+    if (!access.cached && access.status === "ok") {
+      const { data: applied, error: applyError } = await db.rpc("apply_call_pass_identity", { p_conversation_id: turn.callId, p_channel: channelFor(turn.callId), p_caller: turn.caller });
+      if (applyError) log({ event: "call_identity_failed", conversation_id: turn.callId, code: applyError.code ?? null });
+      else if (applied) log({ event: "call_identity_applied", conversation_id: turn.callId, source: "form_customer" });
+    }
     if (access.status === "error") denied = { line: FALLBACK_LINE, statusReason: "login_check_failed", note: "login check failed (database)" };
     else if (access.status !== "ok") denied = { line: LOGIN_LINE, statusReason: "login_required", note: `login_required: pass ${access.status}` };
   }

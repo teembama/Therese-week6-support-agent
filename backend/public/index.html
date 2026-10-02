@@ -19,23 +19,24 @@
       </div>
     </header>
 
-    <section id="login" class="login" aria-labelledby="login-title" hidden>
-      <h2 id="login-title">Log in to talk to RelayPay support</h2>
-      <p id="login-message" class="login-message" role="status" aria-live="polite"></p>
-      <form id="login-form" class="login-form" novalidate>
-        <label for="login-email">Email</label>
-        <input id="login-email" name="email" type="email" autocomplete="username" required>
-        <label for="login-password">Password</label>
-        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
-        <p id="login-error" class="login-error" role="alert" hidden></p>
-        <button id="login-submit" type="submit" class="button primary">Log in</button>
+    <section id="path" class="path" aria-labelledby="path-title" hidden>
+      <h2 id="path-title">How would you like to continue?</h2>
+      <div class="path-options" role="group" aria-labelledby="path-title">
+        <button id="path-customer" type="button" class="path-button" aria-pressed="false" aria-controls="customer-form">I'm an existing customer</button>
+        <button id="path-guest" type="button" class="path-button" aria-pressed="false">Continue as a guest</button>
+      </div>
+      <form id="customer-form" class="login-form" novalidate hidden>
+        <p class="path-hint">Enter the contact name and email on your RelayPay account, then press Start call.</p>
+        <label for="customer-name">Name</label>
+        <input id="customer-name" name="name" type="text" autocomplete="name" required>
+        <label for="customer-email">Email</label>
+        <input id="customer-email" name="email" type="email" autocomplete="email" required>
+        <p id="customer-error" class="login-error" role="alert" hidden></p>
       </form>
+      <p id="guest-note" class="path-hint" hidden>If you need help with your account, you'll be asked for your details on the call.</p>
     </section>
 
-    <div id="account" class="account" hidden>
-      <p>Signed in as <strong id="account-email"></strong></p>
-      <button id="logout" type="button" class="link-button">Log out</button>
-    </div>
+    <p id="guest-nudge" class="nudge" role="status" hidden></p>
 
     <div id="call-ui" class="call-ui">
     <section class="status" aria-label="Call status">

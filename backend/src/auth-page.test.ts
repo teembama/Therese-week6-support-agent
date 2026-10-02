@@ -47,13 +47,16 @@ describe("page login (D86)", () => {
     const pkg = JSON.parse(readFileSync(resolve(publicDir, "..", "..", "node_modules", "@supabase", "supabase-js", "package.json"), "utf8")) as { version: string };
     assert.equal(a.SUPABASE_JS_URL, `https://esm.sh/@supabase/supabase-js@${pkg.version}`);
   });
-  it("markup: a labelled login form (email, password autocomplete), an alert for errors, log out, the call UI wrapper", () => {
+  it("staff page markup: a labelled login form (email, password autocomplete) and an error alert", () => {
+    const html = readFileSync(resolve(publicDir, "staff.html"), "utf8");
+    assert.match(html, /type="email"[^>]*autocomplete="username"|autocomplete="username"[^>]*type="email"/);
+    assert.match(html, /type="password"/);
+    assert.match(html, /role="alert"/);
+  });
+  it("the call page has no customer login any more (L1b): no password field, no Supabase client", () => {
     const html = readFileSync(resolve(publicDir, "index.html"), "utf8");
-    assert.match(html, /<section id="login"[^>]*hidden>/);
-    assert.match(html, /<label for="login-email">Email<\/label>\s*<input id="login-email"[^>]*autocomplete="username"/);
-    assert.match(html, /<input id="login-password"[^>]*type="password"[^>]*autocomplete="current-password"/);
-    assert.match(html, /id="login-error"[^>]*role="alert"/);
-    assert.match(html, /id="logout"/);
-    assert.match(html, /<div id="call-ui"/);
+    const js = readFileSync(resolve(publicDir, "app.js"), "utf8");
+    assert.ok(!/type="password"/.test(html) && !/id="login"/.test(html));
+    assert.ok(!js.includes("supabase") && !js.includes("/auth.js"));
   });
 });

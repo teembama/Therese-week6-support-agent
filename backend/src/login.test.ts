@@ -100,7 +100,7 @@ describe("POST /calls/pass (D86)", () => {
       const body = (await r.json()) as { pass: string; expiresInSeconds: number };
       assert.match(body.pass, /^[A-Za-z0-9_-]{43}$/);
       assert.equal(body.expiresInSeconds, 300);
-      assert.deepEqual(inserted, [{ pass_hash: sha256Hex(body.pass), user_id: "u1", role: "customer", customer_id: "CUS-1001" }]);
+      assert.deepEqual(inserted, [{ pass_hash: sha256Hex(body.pass), source: "login", user_id: "u1", role: "customer", customer_id: "CUS-1001" }]);
       const logText = JSON.stringify(logs);
       assert.ok(!logText.includes(body.pass) && !logText.includes(TOKEN) && !logText.includes("u1"), logText);
     } finally {

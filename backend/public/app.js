@@ -7,7 +7,7 @@
 import { classifyFailure, describeEnd, failureMessage, isCallOverError, sanitizeForLog } from "/call-end.js";
 import { appendFinal, isNearBottom, speakerLabel, toggleState } from "/captions.js";
 import { announcement, copyText, describeEntry, mergeRecords, POLL_MS, recordsUrl } from "/records.js";
-import { authView, callOverrides, loginErrorMessage, MESSAGES, passOutcome, SUPABASE_JS_URL, validLoginForm } from "/auth.js";
+import { callOverrides, GUEST_NUDGE, passRequest, passResult, shouldNudge } from "/call-path.js";
 
 const SDK_URL = "https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0";
 const MAX_CALL_MS = 4 * 60_000; // matches the note on the page; the assistant's own limit should be 240 s too
@@ -19,9 +19,9 @@ const ui = {
   start: el("start"), end: el("end"),
   captions: el("captions"), captionsLines: el("captions-lines"), captionsToggle: el("captions-toggle"), captionsJump: el("captions-jump"),
   records: el("records"), recordsList: el("records-list"), recordsLive: el("records-live"),
-  login: el("login"), loginForm: el("login-form"), loginEmail: el("login-email"), loginPassword: el("login-password"),
-  loginError: el("login-error"), loginMessage: el("login-message"), loginSubmit: el("login-submit"),
-  account: el("account"), accountEmail: el("account-email"), logout: el("logout"), callUi: el("call-ui"),
+  path: el("path"), pathCustomer: el("path-customer"), pathGuest: el("path-guest"), customerForm: el("customer-form"),
+  customerName: el("customer-name"), customerEmail: el("customer-email"), customerError: el("customer-error"),
+  guestNote: el("guest-note"), guestNudge: el("guest-nudge"), callUi: el("call-ui"),
 };
 
 let vapi = null;
@@ -139,7 +139,9 @@ async function fetchRecords(id) {
   try {
     const res = await fetch(recordsUrl(id), { cache: "no-store" });
     if (!res.ok) return;
-    const { entries, added } = mergeRecords(recordEntries, await res.json());
+    const json = await res.json();
+    if (json?.identity_checked === true) identityChecked = true;
+    const { entries, added } = mergeRecords(recordEntries, json);
     if (!added.length) return;
     recordEntries = entries;
     for (const entry of added) ui.recordsList.append(recordItem(entry));
@@ -190,101 +192,77 @@ function stopRecordsPolling() {
   recordsTimer = null;
   const id = callId;
   callId = null;
-  if (id) setTimeout(() => void fetchRecords(id), 2000);
+  if (id) setTimeout(() => void fetchRecords(id).then(maybeNudge), 2000);
 }
 
-// ---- Login (L1, D86): when the server enforces it, the call UI is shown only with a Supabase
-// session. Each call gets a ONE-TIME pass from POST /calls/pass (the backend verifies the token
-// and the account's role), carried to the backend in the call's variableValues. The browser
-// never reads tables; the session lives in sessionStorage (this tab only).
-let loginRequired = false;
-let supabase = null;
-let loggingOut = false;
-function applyAuth(event, session) {
-  const v = authView(event, session, { userInitiated: loggingOut });
-  loggingOut = false;
-  if (v.view === "call") {
-    ui.login.hidden = true;
-    ui.account.hidden = false;
-    ui.accountEmail.textContent = v.email;
-    ui.callUi.hidden = false;
-    return;
-  }
-  if (inCall && vapi) {
-    endedByUser = true;
-    try { vapi.stop(); } catch { /* already stopped */ }
-  }
-  ui.callUi.hidden = true;
-  ui.account.hidden = true;
-  ui.login.hidden = false;
-  ui.loginMessage.textContent = v.message;
-  ui.loginError.hidden = true;
-  ui.loginSubmit.disabled = false;
+// ---- Call paths (L1b, D88): when the server requires a call pass, the caller chooses
+// "I'm an existing customer" (name + email, matched by the backend to one customer; the call is
+// verified from its first turn and greeted by first name) or "Continue as a guest" (the call is
+// exactly as before). Each call gets a ONE-TIME pass from POST /calls/pass, carried to the backend
+// in the call's variableValues. Nothing is stored; the browser never reads tables.
+let passRequired = false;
+let path = null;
+let callPath = null;
+let identityChecked = false;
+function choosePath(next) {
+  if (inCall) return;
+  path = next;
+  ui.pathCustomer.setAttribute("aria-pressed", String(next === "customer"));
+  ui.pathGuest.setAttribute("aria-pressed", String(next === "guest"));
+  ui.customerForm.hidden = next !== "customer";
+  ui.guestNote.hidden = next !== "guest";
+  ui.customerError.hidden = true;
+  if (vapi && assistantId) setButtons({ start: true, end: false });
+  if (next === "customer") ui.customerName.focus();
 }
-async function submitLogin(e) {
-  e.preventDefault();
-  const email = ui.loginEmail.value.trim();
-  const password = ui.loginPassword.value;
-  if (!validLoginForm(email, password)) return showLoginError(MESSAGES.missing);
-  ui.loginSubmit.disabled = true;
-  ui.loginError.hidden = true;
-  try {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return showLoginError(loginErrorMessage(error));
-    ui.loginPassword.value = "";
-    ui.loginMessage.textContent = "";
-  } catch (err) {
-    showLoginError(loginErrorMessage(err));
-  } finally {
-    ui.loginSubmit.disabled = false;
+function lockPath(locked) {
+  ui.pathCustomer.disabled = locked;
+  ui.pathGuest.disabled = locked;
+  ui.customerName.disabled = locked;
+  ui.customerEmail.disabled = locked;
+}
+function showCustomerError(message) {
+  ui.customerError.textContent = message;
+  ui.customerError.hidden = false;
+  setState("ready", "Ready", message);
+  setButtons({ start: true, end: false, startText: "Start call" });
+  lockPath(false);
+  (ui.customerName.value.trim() ? ui.customerEmail : ui.customerName).focus();
+}
+function maybeNudge() {
+  if (shouldNudge(callPath, identityChecked)) {
+    ui.guestNudge.textContent = GUEST_NUDGE;
+    ui.guestNudge.hidden = false;
   }
 }
-function showLoginError(message) {
-  ui.loginError.textContent = message;
-  ui.loginError.hidden = false;
-  ui.loginSubmit.disabled = false;
-  ui.loginEmail.focus();
-}
-async function logout() {
-  loggingOut = true;
-  try { await supabase.auth.signOut(); } catch { applyAuth("SIGNED_OUT", null); }
-}
-/** A one-time pass for this call, or null (the page then shows why, or the login form). */
+/** A one-time pass (and the matched first name) for this call, or null (the page shows why). */
 async function getCallPass() {
-  const { data } = await supabase.auth.getSession();
-  const token = data?.session?.access_token;
-  if (!token) {
-    applyAuth("SIGNED_OUT", null);
+  const req = passRequest(path, ui.customerName.value, ui.customerEmail.value);
+  if (!req.ok) {
+    if (path === "customer") showCustomerError(req.message);
+    else failWithMessage(req.message);
     return null;
   }
-  let res;
+  let status = 0;
+  let body = null;
   try {
-    res = await fetch("/calls/pass", { method: "POST", headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+    const res = await fetch("/calls/pass", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req.body), cache: "no-store" });
+    status = res.status;
+    body = await res.json().catch(() => null);
   } catch {
-    failWithMessage(MESSAGES.network);
-    return null;
+    status = 0;
   }
-  const outcome = passOutcome(res.status);
-  if (outcome.kind === "relogin") {
-    await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
-    applyAuth("SIGNED_OUT", null);
-    return null;
-  }
-  if (outcome.kind === "error") {
-    failWithMessage(outcome.message);
-    return null;
-  }
-  const body = await res.json().catch(() => null);
-  if (typeof body?.pass !== "string") {
-    failWithMessage(MESSAGES.unavailable);
-    return null;
-  }
-  return body.pass;
+  const result = passResult(status, body);
+  if (result.kind === "ok") return result;
+  if (result.kind === "no_match") showCustomerError(result.message);
+  else failWithMessage(result.message);
+  return null;
 }
 function failWithMessage(message) {
   setState("error", "Couldn't start the call", message);
   showError("Couldn't start the call", [message]);
   setButtons({ start: true, end: false, startText: "Try again" });
+  lockPath(false);
 }
 
 /** Show a classified failure: its group's headline and next step, plus a small reference line. */
@@ -401,17 +379,32 @@ async function startCall() {
     return failFromError(err);
   }
   let overrides;
-  if (loginRequired) {
-    setState("connecting", "Connecting", "Checking your login…");
-    const pass = await getCallPass();
-    if (!pass) return;
-    overrides = callOverrides(pass);
+  if (passRequired) {
+    lockPath(true);
+    ui.customerError.hidden = true;
+    ui.guestNudge.hidden = true;
+    identityChecked = false;
+    setState("connecting", "Connecting", path === "customer" ? "Checking your details…" : "Getting your call ready…");
+    const result = await getCallPass();
+    if (!result) return;
+    callPath = path;
+    overrides = callOverrides(result.pass, result.firstName);
   }
   setState("connecting", "Connecting", "Connecting you to RelayPay support…");
   setButtons({ start: false, end: true });
   try {
     // The call's ID (an unguessable UUID; also our conversation ID) scopes the references panel.
-    const call = await (overrides ? vapi.start(assistantId, overrides) : vapi.start(assistantId));
+    let call;
+    try {
+      call = await (overrides ? vapi.start(assistantId, overrides) : vapi.start(assistantId));
+    } catch (err) {
+      // If the per-call greeting override is refused, start once more with the assistant's own
+      // greeting: the pass is redeemed only on the first turn, so it is still valid.
+      if (!overrides?.firstMessage) throw err;
+      console.info("[relaypay] greeting override refused; starting with the default greeting", sanitizeForLog(err));
+      const { firstMessage: _unused, ...rest } = overrides;
+      call = await vapi.start(assistantId, rest);
+    }
     callId = typeof call?.id === "string" ? call.id : null;
     if (inCall) startRecordsPolling();
   } catch (err) {
@@ -453,28 +446,17 @@ async function init() {
     return fail({ group: "ourSide", kind: "component", code: "sdk-load-failed" }, "starting");
   }
   if (config.loginRequired) {
-    loginRequired = true;
-    ui.callUi.hidden = true;
-    let createClient;
-    try {
-      ({ createClient } = await import(SUPABASE_JS_URL));
-    } catch (err) {
-      console.error("[relaypay] login component failed to load", sanitizeForLog(err));
-      ui.callUi.hidden = false;
-      return fail({ group: "ourSide", kind: "component", code: "login-load-failed" }, "starting");
-    }
-    supabase = createClient(config.supabaseUrl, config.supabasePublishableKey, {
-      auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
-    });
-    ui.loginForm.addEventListener("submit", submitLogin);
-    ui.logout.addEventListener("click", logout);
-    supabase.auth.onAuthStateChange((event, session) => applyAuth(event, session));
+    passRequired = true;
+    ui.path.hidden = false;
+    ui.pathCustomer.addEventListener("click", () => choosePath("customer"));
+    ui.pathGuest.addEventListener("click", () => choosePath("guest"));
+    ui.customerForm.addEventListener("submit", (e) => { e.preventDefault(); if (!ui.start.disabled) void startCall(); });
   }
   assistantId = config.vapiAssistantId;
   vapi = new Vapi(config.vapiPublicKey);
   attach(vapi);
-  setState("ready", "Ready", "Press Start call to talk to RelayPay support.");
-  setButtons({ start: true, end: false, startText: "Start call" });
+  setState("ready", "Ready", passRequired ? "Choose how you'd like to continue, then press Start call." : "Press Start call to talk to RelayPay support.");
+  setButtons({ start: !passRequired || path !== null, end: false, startText: "Start call" });
 }
 
 init();

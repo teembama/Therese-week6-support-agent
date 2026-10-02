@@ -50,6 +50,13 @@ const STOP_ON_NETWORK = process.argv.includes("--stop-on-network-error");
  * bytes, only the SHA-256 stored), sent where Vapi sends it: call.assistantOverrides.variableValues.
  */
 const LOGIN_EMAIL = argValue("--login-email");
+/**
+ * L1b (D88): --path guest, or --path customer --form-name NAME --form-email EMAIL. Every
+ * conversation gets its pass from the DEPLOYED POST /calls/pass, exactly as the call page does.
+ */
+const PATH = argValue("--path");
+const FORM_NAME = argValue("--form-name");
+const FORM_EMAIL = argValue("--form-email");
 let mintPass: (() => Promise<string>) | null = null;
 const callPasses = new Map<string, string>();
 const isNetworkError = (err: unknown) => /fetch failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|UND_ERR_CONNECT_TIMEOUT|ConnectTimeout/i.test(`${(err as Error)?.message ?? ""} ${String((err as { cause?: { code?: string } })?.cause?.code ?? "")}`);
@@ -633,7 +640,17 @@ async function main(): Promise<number> {
   process.loadEnvFile(resolve(REPO, ".env"));
   const db = createServiceClient();
   PROCEDURE = procedureCorpus();
-  if (LOGIN_EMAIL) {
+  if (PATH === "guest" || PATH === "customer") {
+    const body = PATH === "guest" ? { mode: "guest" } : { mode: "customer", name: FORM_NAME, email: FORM_EMAIL };
+    if (PATH === "customer" && (!FORM_NAME || !FORM_EMAIL)) throw new Error("--path customer needs --form-name and --form-email");
+    mintPass = async () => {
+      const r = await fetch(`${BASE_URL}/calls/pass`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const j = (await r.json().catch(() => ({}))) as { pass?: string };
+      if (r.status !== 200 || !j.pass) throw new Error(`POST /calls/pass (${PATH}) -> HTTP ${r.status}`);
+      return j.pass;
+    };
+    console.log(`path: every conversation gets a one-time pass from POST /calls/pass as ${PATH === "guest" ? "a guest" : `the existing customer "${FORM_NAME}"`}`);
+  } else if (LOGIN_EMAIL) {
     const { data, error } = await db.auth.admin.listUsers({ perPage: 200 });
     if (error) throw new Error(`auth users read failed: ${error.message}`);
     const user = data.users.find((u) => u.email?.toLowerCase() === LOGIN_EMAIL.toLowerCase());

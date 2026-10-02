@@ -19,6 +19,7 @@ const FILES: Record<string, { file: string; type: string }> = {
   "/captions.js": { file: "captions.js", type: "text/javascript; charset=utf-8" },
   "/records.js": { file: "records.js", type: "text/javascript; charset=utf-8" },
   "/auth.js": { file: "auth.js", type: "text/javascript; charset=utf-8" },
+  "/call-path.js": { file: "call-path.js", type: "text/javascript; charset=utf-8" },
   "/app.css": { file: "app.css", type: "text/css; charset=utf-8" },
   "/favicon.svg": { file: "favicon.svg", type: "image/svg+xml" },
 };

@@ -141,6 +141,20 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
 .account { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; font-size: 0.9rem; color: var(--muted); }
 .account p { margin: 0; }
 
+/* Call paths (L1b, D88): existing customer (name + email) or guest. */
+.path { border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: grid; gap: 10px; }
+.path h2 { margin: 0; font-size: 1.05rem; color: var(--primary); }
+.path-options { display: flex; gap: 10px; flex-wrap: wrap; }
+.path-button {
+  flex: 1 1 12rem; min-height: 48px; padding: 0 16px; border-radius: 12px; cursor: pointer; font: inherit; font-weight: 650;
+  border: 2px solid var(--primary); background: var(--surface); color: var(--primary);
+}
+.path-button[aria-pressed="true"] { background: var(--primary); color: #fff; }
+.path-button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.path-button:disabled { cursor: not-allowed; opacity: 0.55; }
+.path-hint { margin: 0; font-size: 0.9rem; color: var(--muted); }
+.nudge { margin: 0; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--teal); color: var(--ink); background: var(--surface); }
+
 /* Screen-reader-only text (the references panel's announcements and button context). */
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;

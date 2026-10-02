@@ -27,9 +27,14 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export interface TicketRecord { reference: string; category: string; follow_up: string }
 export interface EscalationRecord { reference: string; linked_ticket: string; callback_preference: string | null }
-export interface CallRecords { tickets: TicketRecord[]; escalations: EscalationRecord[] }
+export interface CallRecords {
+  tickets: TicketRecord[];
+  escalations: EscalationRecord[];
+  /** L1b (D88): lookup_customer ran on this call (the page's guest nudge). No result details. */
+  identity_checked: boolean;
+}
 
-export const EMPTY_RECORDS: CallRecords = { tickets: [], escalations: [] };
+export const EMPTY_RECORDS: CallRecords = { tickets: [], escalations: [], identity_checked: false };
 
 /** The call ID in GET /calls/:callId/records, or null when the path isn't this route. */
 export function matchRecordsRoute(method: string | undefined, pathname: string): string | null {
@@ -47,10 +52,11 @@ export const callHash = (callId: string) => createHash("sha256").update(callId).
 
 /** The call's references. Unknown or malformed call ID: the empty shape (no database read for a malformed one). */
 export async function readCallRecords(db: Db, callId: string): Promise<CallRecords> {
-  if (!UUID.test(callId)) return { tickets: [], escalations: [] };
-  const [tickets, escalations] = await Promise.all([
+  if (!UUID.test(callId)) return { tickets: [], escalations: [], identity_checked: false };
+  const [tickets, escalations, lookups] = await Promise.all([
     db.from("support_tickets").select("ticket_id, category, created_at").eq("conversation_id", callId).order("created_at"),
     db.from("escalations").select("escalation_id, ticket_id, preferred_time_text, created_at").eq("conversation_id", callId).order("created_at"),
+    db.from("tool_calls").select("id", { count: "exact", head: true }).eq("conversation_id", callId).eq("tool_name", "lookup_customer"),
   ]);
   if (tickets.error) throw new Error(`support_tickets read failed (${tickets.error.code})`);
   if (escalations.error) throw new Error(`escalations read failed (${escalations.error.code})`);
@@ -70,6 +76,7 @@ export async function readCallRecords(db: Db, callId: string): Promise<CallRecor
       linked_ticket: String(e["ticket_id"]),
       callback_preference: typeof e["preferred_time_text"] === "string" && e["preferred_time_text"].trim() ? e["preferred_time_text"].trim().slice(0, 200) : null,
     })),
+    identity_checked: !lookups.error && (lookups.count ?? 0) > 0,
   };
 }
 

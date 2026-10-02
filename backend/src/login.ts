@@ -78,24 +78,111 @@ export function bearerToken(req: IncomingMessage): string | null {
   return m ? m[1]! : null;
 }
 
-/** POST /calls/pass. */
+/** The generic answer for any failed customer match: never which detail was wrong (D88). */
+export const NO_MATCH_MESSAGE = "We couldn't find an account matching those details.";
+
+/** Case- and spacing-insensitive form of a typed name: "  amara   OKAFOR " -> "amara okafor". */
+export const normaliseFormName = (s: string) => s.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+/** A typed email, trimmed and lowercased. */
+export const normaliseFormEmail = (s: string) => s.normalize("NFKC").trim().toLowerCase();
+
+/**
+ * L1b (D88): the customer a name + email identifies, or null. BOTH must match the SAME customer:
+ * the email exactly (after normalising), and the name as the full contact name or its first name.
+ */
+export function matchFormCustomer<T extends { customer_id: string; contact_name: string; contact_email: string }>(
+  customers: T[], name: string, email: string,
+): T | null {
+  const n = normaliseFormName(name);
+  const e = normaliseFormEmail(email);
+  if (!n || !e || e.length > 254 || n.length > 100) return null;
+  const hits = customers.filter((c) => {
+    if (normaliseFormEmail(c.contact_email) !== e) return false;
+    const full = normaliseFormName(c.contact_name);
+    return n === full || n === full.split(" ")[0];
+  });
+  return hits.length === 1 ? hits[0]! : null;
+}
+
+/** The first name used in the greeting: the first word of the contact name, letters only. */
+export const firstNameOf = (contactName: string) => (contactName.trim().split(/\s+/)[0] ?? "").replace(/[^\p{L}'-]/gu, "").slice(0, 40);
+
+async function readJson(req: IncomingMessage, max = 2048): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > max) return null;
+    chunks.push(c as Buffer);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * POST /calls/pass. Three ways to get a one-time pass:
+ *   - body {mode: "customer", name, email} (L1b, D88): name AND email must match one customer;
+ *     the pass carries that customer (source form_customer). No match -> 422 with the generic
+ *     message and no pass. Identification, not authentication: name and email aren't secrets.
+ *   - body {mode: "guest"} (L1b): a pass with no customer (source guest); the call is as before.
+ *   - Authorization: Bearer <Supabase token> (L1, D86; source login): kept for staff and tests.
+ */
 export async function handleCallPass(
   req: IncomingMessage,
   res: ServerResponse,
   db: Db,
   opts: { allow: (key: string) => boolean; log: (e: Record<string, unknown>) => void; headers: Record<string, string> },
 ): Promise<void> {
-  req.resume();
   const send = (status: number, body: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store", ...opts.headers });
     res.end(JSON.stringify(body));
   };
   if (!opts.allow(clientIp(req))) {
+    req.resume();
     opts.log({ event: "call_pass_rate_limited" });
     return send(429, { error: "too many requests" });
   }
   const token = bearerToken(req);
-  if (!token) return send(401, { error: "login required" });
+  if (!token) {
+    const body = (await readJson(req)) as { mode?: unknown; name?: unknown; email?: unknown } | null;
+    const issue = async (row: Record<string, unknown>) => {
+      const pass = randomBytes(32).toString("base64url");
+      const { error } = await db.from("call_passes").insert({ pass_hash: sha256Hex(pass), ...row });
+      if (error) {
+        opts.log({ event: "call_pass_failed", code: error.code ?? null });
+        return null;
+      }
+      return pass;
+    };
+    if (body?.mode === "guest") {
+      const pass = await issue({ source: "guest" });
+      if (!pass) return send(503, { error: "voice support unavailable" });
+      opts.log({ event: "call_pass_issued", source: "guest" });
+      return send(200, { pass, expiresInSeconds: 300 });
+    }
+    if (body?.mode === "customer" && typeof body.name === "string" && typeof body.email === "string") {
+      const { data, error } = await db.from("customers").select("customer_id, contact_name, contact_email").limit(10_000);
+      if (error) {
+        opts.log({ event: "call_pass_failed", code: error.code ?? null });
+        return send(503, { error: "voice support unavailable" });
+      }
+      const c = matchFormCustomer((data ?? []) as Array<{ customer_id: string; contact_name: string; contact_email: string }>, body.name, body.email);
+      if (!c) {
+        opts.log({ event: "call_pass_denied", source: "form_customer", reason: "no match" });
+        return send(422, { error: "no_match", message: NO_MATCH_MESSAGE });
+      }
+      const pass = await issue({ source: "form_customer", customer_id: c.customer_id });
+      if (!pass) return send(503, { error: "voice support unavailable" });
+      opts.log({ event: "call_pass_issued", source: "form_customer" });
+      return send(200, { pass, expiresInSeconds: 300, firstName: firstNameOf(c.contact_name) });
+    }
+    if (body && typeof body === "object" && "mode" in body) return send(400, { error: "mode must be customer (with name and email) or guest" });
+    return send(401, { error: "login required" });
+  }
+  req.resume();
   const { data, error } = await db.auth.getUser(token);
   if (error || !data?.user) {
     opts.log({ event: "call_pass_denied", reason: "invalid or expired session" });
@@ -107,7 +194,7 @@ export async function handleCallPass(
     return send(403, { error: "this account can't use voice support" });
   }
   const pass = randomBytes(32).toString("base64url");
-  const { error: insertError } = await db.from("call_passes").insert({ pass_hash: sha256Hex(pass), user_id: caller.userId, role: caller.role, customer_id: caller.customerId });
+  const { error: insertError } = await db.from("call_passes").insert({ pass_hash: sha256Hex(pass), source: "login", user_id: caller.userId, role: caller.role, customer_id: caller.customerId });
   if (insertError) {
     opts.log({ event: "call_pass_failed", code: insertError.code ?? null });
     return send(503, { error: "voice support unavailable" });
