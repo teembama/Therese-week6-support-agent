@@ -1871,6 +1871,12 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 
 ### D93. Full-page staff and landing pages, one nav bar, teal accents (UI only; 2026-10-02)
 
+> **D93 reverted; layout redesign pending a reference from the user.** At the user's request, the D93 code commit (`4bcd570`) was reverted with `git revert` (`33c28a1`), returning `/`, `/support` and `/staff` to the D92 UI. Only two changes were kept, reapplied as a small new commit:
+> - Log out on the staff dashboard is a button (`button secondary small`) that signs out and goes to the landing page (`/`);
+> - the count text is singular or plural ("1 raised ticket", "2 raised tickets", "1 scheduled callback").
+>
+> Everything below describes the reverted design, kept for the record.
+
 - **No change** to auth, the API, data, the voice agent or the call logic.
 - **One nav bar on every page:** a full-width white bar with the "R" logo and a deep blue title on the left, and a thin teal line along its bottom.
   - `/` and `/support`: "RelayPay support" (with Home on /support).
