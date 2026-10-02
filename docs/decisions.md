@@ -1869,6 +1869,33 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - Part 2 changed only static pages and routes, not the turn path.
     - The check now prints both texts and their sources on failure.
 
+### D93. Full-page staff and landing pages, one nav bar, teal accents (UI only; 2026-10-02)
+
+- **No change** to auth, the API, data, the voice agent or the call logic.
+- **One nav bar on every page:** a full-width white bar with the "R" logo and a deep blue title on the left, and a thin teal line along its bottom.
+  - `/` and `/support`: "RelayPay support" (with Home on /support).
+  - `/staff`: "RelayPay staff dashboard", with "Signed in as <email>" and a **Log out button** on the right, shown only when signed in.
+- **Staff dashboard:**
+  - A full page: the filters and Refresh, then the cards in a full-width responsive grid (several columns on desktop, one on mobile).
+  - Log out signs out and goes to `/`.
+  - Counts are singular or plural: "1 raised ticket", "2 raised tickets", "1 scheduled callback".
+  - The login view has the same nav bar, without Log out.
+- **Landing:** a full page with two large choices (Customer support, deep blue; Staff, white with a deep blue edge).
+- **`/support`:** keeps its two-column layout, with the shared nav bar.
+- **Teal, used sparingly:**
+  - the nav bar line;
+  - the **active filter** (teal outline and underline, plus `aria-pressed`);
+  - focus rings and links;
+  - card left accents (unchanged);
+  - the "High priority" badge outline;
+  - the call status indicator for listening (circle) and speaking (square; the shape still tells them apart);
+  - "Jump to latest";
+  - the landing choices' hover and focus.
+  - Deep blue stays primary: buttons, headings and nav text.
+  - Contrast: teal `#0f766e` on white 5.4:1 and on `#f7f7f4` 5.1:1, both above AA 4.5:1.
+- **Accessibility:** a skip link and a focusable main on each new page, native buttons, labels unchanged, and teal focus rings.
+- **Tests:** `layout.test.ts` (nav bar markup, Log out button and redirect, full-page layouts, the teal rules, primary still deep blue) and `staff-view.test.ts` (singular/plural counts). `test:gate` 329/329. Live `check-staff` 16/16 (deploy `26565edc`).
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
