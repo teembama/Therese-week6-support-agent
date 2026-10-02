@@ -78,8 +78,13 @@ export function emptyText(type) {
   return type === "tickets" ? "No raised tickets yet." : "No scheduled callbacks yet.";
 }
 
-/** The count line announced after a load. */
+/** The count line announced after a load: "1 raised ticket", "2 raised tickets" (D93). */
 export function countText(type, n) {
-  const label = FILTERS.find((f) => f.type === type)?.label.toLowerCase() ?? type;
-  return `${n} ${label}${n === 100 ? " (latest 100)" : ""}.`;
+  const [one, many] = type === "callbacks" ? ["scheduled callback", "scheduled callbacks"] : ["raised ticket", "raised tickets"];
+  return `${n} ${n === 1 ? one : many}${n === 100 ? " (latest 100)" : ""}.`;
+}
+
+/** A badge's class: "High priority" gets the teal outline (D93). */
+export function badgeClass(text) {
+  return text === "High priority" ? "badge badge-high" : "badge";
 }

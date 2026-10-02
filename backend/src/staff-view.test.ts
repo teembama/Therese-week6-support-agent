@@ -19,6 +19,7 @@ interface View {
   cardFor(type: string, r: Record<string, unknown>): { title: string; badges: string[]; fields: Array<[string, string]> };
   emptyText(type: string): string;
   countText(type: string, n: number): string;
+  badgeClass(text: string): string;
 }
 const v = (await import(pathToFileURL(resolve(publicDir, "staff-view.js")).href)) as View;
 
@@ -55,6 +56,10 @@ describe("staff dashboard view (D87)", () => {
     assert.equal(v.emptyText("tickets"), "No raised tickets yet.");
     assert.equal(v.emptyText("callbacks"), "No scheduled callbacks yet.");
     assert.equal(v.countText("callbacks", 3), "3 scheduled callbacks.");
+    assert.equal(v.countText("tickets", 1), "1 raised ticket.");
+    assert.equal(v.countText("tickets", 2), "2 raised tickets.");
+    assert.equal(v.countText("callbacks", 1), "1 scheduled callback.");
+    assert.equal(v.countText("callbacks", 0), "0 scheduled callbacks.");
     assert.equal(v.countText("tickets", 100), "100 raised tickets (latest 100).");
   });
   it("markup: labelled login, two aria-pressed filter buttons, refresh, a live status region", () => {
