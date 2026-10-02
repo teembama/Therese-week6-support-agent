@@ -69,7 +69,11 @@ async function main() {
   const denied = ((tc ?? []) as Array<{ status: string; result_summary: string }>).some((t) => t.status === "denied" && /already_verified_other/.test(t.result_summary));
   check(denied, "\"I'm Felicia\" -> lookup_customer denied: already_verified_other (D74)", JSON.stringify(tc));
   check(a1.includes("I can only help with one account per call. If you need help with another account, please start a new call, or I can connect you with a specialist."), "D89: the FIXED one-account line is spoken", a1);
-  const { data: t1 } = await db.from("conversation_turns").select("answer_type, confidence_note").eq("conversation_id", call).eq("turn_index", 1).maybeSingle();
+  let t1: { answer_type?: string } | null = null;
+  for (let i = 0; i < 20 && !t1; i++) {
+    t1 = (await db.from("conversation_turns").select("answer_type, confidence_note").eq("conversation_id", call).eq("turn_index", 1).maybeSingle()).data as { answer_type?: string } | null;
+    if (!t1) await new Promise((r) => setTimeout(r, 500));
+  }
   const { data: t1a } = await db.from("turn_attempts").select("status_reason").eq("conversation_id", call).eq("turn_index", 1).eq("status", "completed");
   check(t1?.answer_type === "decline" && ((t1a ?? []) as Array<{ status_reason: string }>).some((x) => x.status_reason === "identity_switch"), "D89: recorded as answer_type decline, reason identity_switch", JSON.stringify({ t1, t1a }));
   check(!/restricted|Scale|Starter|Growth|plan|status/i.test(a1), "nothing about any account is disclosed in the refusal", a1);

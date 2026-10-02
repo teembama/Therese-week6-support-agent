@@ -1768,6 +1768,33 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - form-Amara S3 (`eval-2026-10-02T11-56-46-404Z-form-amara`): **1/1**, $0.008; the call was already verified by the form, so `lookup_customer` returned "already verified CUS-1001".
 - **Known gap:** the agent doesn't know a form call is verified until it calls `lookup_customer`, so on a vague first question ("can you check my account status?") it still asks for a name or company. Giving it that context means a prompt change, which is out of scope today. The greeting already uses the first name.
 
+### D89. Two fixes after L1b: the identity-switch line, and form-identified calls don't re-ask identity (2026-10-02)
+
+- **1. Identity-switch wording** (the D88 live failure):
+  - When `lookup_customer` returned `already_verified_other` in this attempt (D74), the gate speaks the FIXED line **"I can only help with one account per call. If you need help with another account, please start a new call, or I can connect you with a specialist."** and discards the model's text, like D67/D78.
+  - The check runs **before** header validation, so a mislabelled reply (the live case: `type=answer; tool=lookup_customer` citing the denied tool) can't be blocked into the generic decline. Later messages in the same turn add nothing.
+  - Recorded as `answer_type` decline, attempt status reason **`identity_switch`**, a turn note, and an `identity_switch_line` log event.
+  - The gate, filter and prompt are otherwise unchanged.
+- **2. Form-identified calls don't re-ask identity** (FORM calls only; guests unchanged):
+  - **Context line:** each turn of a conversation identified by a form pass gets a backend-written `<call_context>` block in the **turn input** (not the system prompt): "The caller is already identified as <first name> (<customer_id>) via the call page. Don't ask for their name, company or email to verify them. If they say they are someone else, call lookup_customer with the details they give."
+    - **The last sentence was added beyond the requested wording.** Without it, the first live run had the agent answer "I'm Felicia" by looking up CUS-1001 from the context, so `already_verified_other` never fired. The filter dropped its own "one account" sentence, and the caller heard a reply implying a specialist could look into Felicia's account.
+    - The line is built from the pass's customer (first name from `customers.contact_name`), cached per conversation per process, and recomputed after a restart, because redemption returns the linked customer.
+  - **`lookup_customer` on a verified call** with no identifiers, or with the call's own `customer_id`, returns that customer's safe projection ("already verified …").
+- **Rate-limit key (found while testing):** the limiter now keys on `x-real-ip` (set by Railway; then `x-forwarded-for`, then the socket), with ports dropped, IPv4-mapped IPv6 unmapped and IPv6 grouped by /64. It logs which source it used, masked, once per process.
+  - A temporary hash-only diagnostic showed that **this laptop's public IPv4 alternates between requests** (carrier NAT on a phone hotspot). Per-IP limiting therefore can't limit this client consistently, and the live rate-limit check is flaky from this network.
+  - The limiter itself is correct: unit-tested, and it gave 429 after 10 when the IP was stable.
+  - The diagnostic log was removed (commit `071cc95`).
+- **Tests:**
+  - **Unit:** `identity-switch.test.ts` covers the live mislabelled reply → the fixed line, recorded as a decline; any or no header → only the line; a later message adds nothing; no switch → the D67 behaviour as before; the context block in the turn input only for form calls; the rate-limit key forms. `test:gate` 308/308.
+  - **`test:tools` (live DB):** a verified call with no identifiers, or with its own `customer_id`, returns the safe projection; the guest checks are unchanged.
+- **Live** (deploy `7f998037`, then the same code without the diagnostic as `328dc401`):
+  - **`test:callpass` 13/14 on the final run.** Every behaviour check passed, and the identity-switch record was verified directly:
+    - form-Amara "Hi, can you check my account status?" → `lookup_customer` succeeds with no re-asking: "Hi Amara. Your account is active and on the Growth plan…";
+    - "Actually, I'm Felicia from AccraStack…" → `lookup_customer` denied `already_verified_other` → **the fixed one-account line**, recorded `decline`/`identity_switch`, nothing disclosed, still CUS-1001;
+    - the identical 422 for any mismatch, and guest.
+    - The one failure is the rate-limit check from this rotating-IP network (see above). One earlier run got 429 after 10.
+  - **S3 ×1 as form-Amara** (`d89-form`) and **S3 ×1 as guest** (`eval-2026-10-02T12-23-11-121Z-d89-guest`): **2/2**, $0.019 (cap $0.05).
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
