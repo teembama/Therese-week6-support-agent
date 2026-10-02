@@ -16,6 +16,8 @@ The call page offers two paths (D88). Choose one, then press **Start call**.
   - Details that don't match one customer get "We couldn't find an account matching those details." (it never says which detail was wrong), and no call starts.
 - **Continue as a guest:** the call behaves exactly as the PRD describes. The agent asks who you are and checks two details by voice (for example "I'm Amara from LagosLedger"). After a guest call that checked an identity, the page suggests the existing-customer path next time.
 
+**Callback booking (D97):** when a specialist is needed, the agent books a real callback slot: Monday to Friday, 9 AM to 5 PM Lagos time, every 30 minutes, and never a slot that is already taken. Say a day and time ("Monday at 11 AM"). A weekend, an out-of-hours time or a vague "tomorrow morning" is refused with the reason and three free slots to choose from. The booking shows on the staff dashboard under Scheduled callbacks and in Discord.
+
 **What this enforces (and what it doesn't):**
 - Every call needs a **one-time call pass** from the backend, issued just before the call starts. It expires after 5 minutes and works for **one call only**. A call without a valid pass hears "Please log in on the RelayPay page to use voice support." and nothing else: the agent doesn't run.
 - The existing-customer path is **identification, not authentication**: a name and an email aren't secrets. Real customer authentication (a login or an emailed code) is future work (docs/limitations.md).

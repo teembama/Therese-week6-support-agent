@@ -1964,6 +1964,51 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
 - **Also fixed:** a literal backspace character (from an escaped `\b` in an earlier scripted edit) had made a D95 layout test's "no animation or gradients" regex unable to match, so that check always passed. The repo was scanned and that was the only one.
 - **Tests:** `test:gate` 349/349; MCP 29/29; shared 28/28. Live (deploy `7d7e54f6`): `test:callpass` 14/14; `check-staff` 16/16.
 
+### D97. Real callback booking: Monday-Friday 09:00-16:30 Lagos, 30-minute slots, no double booking (migration 009; 2026-10-02)
+
+- **Why** (the instructor requires it):
+  - Until D96 a callback time was free text ("a preference, never a commitment").
+  - The live "before" case (user's call `01a0fdeb…`, D96, 19:44 WAT): the agent itself offered "Saturday, Sunday, or another day". The caller said "Saturday 5:00 PM", and production stored it as free text on escalation ESC-19123A45 ("I've noted Saturday 5:00 PM as your preferred callback time").
+  - The rule therefore has to live in the tool and the database, not the prompt. ESC-19123A45 was closed after it was recorded.
+- **Rules:**
+  - Monday to Friday, 09:00-17:00 Africa/Lagos (WAT, UTC+1, no DST), in 30-minute slots (09:00 … 16:30).
+  - A slot must be at least 30 minutes ahead.
+  - One open ("open" or "in progress") escalation per slot.
+- **Database (migration 009):**
+  - `escalations.callback_slot timestamptz`, with a CHECK (weekday, 09:00-16:30 Lagos, :00/:30, no seconds) and a partial UNIQUE index on the slot for open escalations, so closing an escalation frees its slot.
+  - `create_escalation_with_ticket` v4 adds `p_callback_slot`:
+    - raises `CALLBACK_SLOT_PAST` under 30 minutes ahead;
+    - `call_booked = (callback_slot is not null)`;
+    - a taken slot returns `slot_taken = true` with nothing written (the ticket insert rolls back with it);
+    - enrichment fills a missing slot, never overwriting; the outbox payload carries the slot;
+    - every earlier guard is kept.
+  - `next_free_slots(p_from, p_count)` is read-only. Both functions are service_role only.
+- **Parsing** (`mcp-server/src/tools/callback-slot.ts`, deterministic, server-side): `chrono-node` 2.10.1 (pinned), relative to the current Lagos time, forward-dated ("Monday" = the next Monday).
+  - It needs an explicit time: "morning"/"afternoon" → `needs_specific_time`, offering slots in that part of the day.
+  - It rounds to a slot only within 10 minutes; otherwise `not_a_slot` (added for "4:45": "Callbacks are booked on the hour or half hour").
+  - With no AM/PM, 1-7 o'clock means the afternoon.
+  - Checks run in order: vague → time of day (outside hours: before 08:50 or from 17:00) → weekend → past.
+- **Tool** (`create_escalation`):
+  - The caller's words are parsed. The outcome is either **booked** (`callback_slot`, plus `callback_booked_for` "Monday 5 October at 10 AM Lagos time") or `invalid_input` with `callback_refused`.
+  - A refusal gives `reason` (weekend | outside_hours | past | taken | needs_specific_time | not_a_slot), a plain-words `message`, the `business_hours` sentence ("Callbacks are available Monday to Friday, 9 AM to 5 PM Lagos time.") and 3 free slots for speech. Nothing is written.
+  - `preferred_time_declined` still means no callback. The verbatim words are kept in `preferred_time_text`.
+- **Agent:**
+  - The prompt and tool description got a small addition to the escalation steps: on a refusal, say why, say the hours, offer only the returned slots (type=clarify, tool=create_escalation); confirm a booking as "Your callback is booked for <callback_booked_for>"; days, times and hours only from the tool.
+  - A refusal's result is gate evidence (`turn.ts`), so the filter lets those times through.
+- **Discord:** "**Callback booked:** Mon 5 Oct, 10:00 WAT" (plus the caller's words).
+- **Staff dashboard:** "Scheduled callbacks" now lists booked slots only, sorted by slot time, each card showing "Callback booked". Older rows that had `call_booked` but no slot are no longer listed.
+- **Tests:**
+  - Local Postgres: schema checks for 009 (weekend, 17:00, 08:30, :15 and seconds rejected; a second open escalation on a slot blocked; closing frees it; `slot_taken` writes nothing; under 30 minutes rejected; slot enrichment never overwrites; `next_free_slots` skips taken slots and goes Friday → Monday). One 006 expectation was updated: a time text no longer sets `call_booked`.
+  - `race.sh`: two concurrent bookings of one slot → one wins, the other `slot_taken`, nothing written.
+  - Unit: `callback-slot.test.ts` (MCP 42/42), with the user's examples; backend 351/351 (Discord slot line, staff booked-slot filter and sort).
+  - `test:tools` (live 009): every refusal reason with the hours and 3 slots; morning-only slots for "morning"; nothing written; a taken slot on a second call. The run uses currently free slots and closes its own escalations.
+- **Live** (deploy `b3480c6d`, commit `a39d0c1`):
+  - **Guest "Saturday at 5 PM":** refused by the tool (`outside_hours`: 17:00 is checked before the day). The agent said "Saturday is outside our callback hours. Callbacks are available Monday to Friday, 9 AM to 5 PM Lagos time" and offered the tool's three Monday slots. The caller picked "Monday 5 October at 9 AM"; booked and confirmed. **The agent did not suggest a weekend day before the tool ran** (it asked "what day and time would work best"). No row at the refusal; one row after the booking.
+  - **Form-Amara "Saturday at 10am" ×2:** run 1 13/13 ("Callbacks can't be booked at the weekend. Callbacks are available Monday to Friday…", three Monday slots, booked, "Your callback is booked for Monday 5 October at 9 AM Lagos time"). Run 2 12/13: the same refusal, slots and booking, but the agent said only the hours, not the reason in words (wording variance; the prompt was not changed).
+  - **Guest S7 ("Monday at 11 AM"):** run 1 failed on the judge only. The DB checks passed (one escalation, slot booked, "Your callback is booked for Monday 5 October at 11 AM Lagos time"); the judge, whose procedure notes predated booking, called the confirmation "strengthened". **Run 2 passed 1/1 with no change** (judge variance).
+  - Afterwards the judge's evidence gained the slot as the tool speaks it, plus a booking procedure note. Not rerun: the $0.12 cap was reached.
+  - Spend about $0.12.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
@@ -1983,6 +2028,7 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - EXECUTE on `queue_notification`, `create_support_ticket_guarded` and `create_escalation_with_ticket` (v3) is held by `service_role` and not by `anon`.
 - 007 applied to Supabase from commit 6d5ba75 on 2026-10-02. The file is wrapped in `begin;` … `commit;`.
   - User-verified after applying: RLS is true on `call_passes`; EXECUTE on `redeem_call_pass` is held by `service_role` and not by `anon`.
+- 009 applied to Supabase on 2026-10-02 (commit a39d0c1). Verified: `escalations.callback_slot` exists; anon gets "permission denied" on `create_escalation_with_ticket` (v4) and `next_free_slots`, and service_role runs them.
 - 008 applied to Supabase from commit e736ba4 on 2026-10-02. The file is wrapped in `begin;` … `commit;`.
   - User-verified after applying: `call_passes.source` exists; EXECUTE on `apply_call_pass_identity` is held by `service_role` and not by `anon`.
 

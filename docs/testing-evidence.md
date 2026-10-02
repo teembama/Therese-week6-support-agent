@@ -55,6 +55,15 @@ The AFTER judge cost more because every call now carries the approved-procedure 
 
 **Filler and follow-up (D91), 2026-10-02:** guest S4 1/1, S6 1/1, S7 0/1. The S7 failure is **G1 variance** (accepted by the user): the judge flagged the turn-0 wording "a restricted account is serious and needs a specialist", a number-free claim the runtime filter can't catch (docs/limitations.md, G1). That turn used no tools and no filler, so it is not a D91 regression; form-Amara dispute 5/5. Early filler, write filler and the appended anything-else were all observed live.
 
+**Callback booking (D97), 2026-10-02:**
+- **Before (D96, the user's live call `01a0fdeb…`, 19:44 WAT):** the agent offered "Saturday, Sunday, or another day", and "Saturday 5:00 PM" was stored as free text on ESC-19123A45. This shows why the rule must live in the tool and the database, not the prompt. Closed after recording.
+- **After (deploy `b3480c6d`):**
+  - `test:tools`: all refusals plus a taken slot; nothing written.
+  - Guest "Saturday at 5 PM": refused (`outside_hours`) with the hours and three Monday slots, then booked; the agent never suggested a weekend.
+  - Form-Amara "Saturday at 10am" ×2: 13/13 and 12/13 (run 2 gave the hours but not the reason in words).
+  - Guest S7 "Monday at 11 AM": 0/1, then 1/1 unchanged (judge variance on "booked for"; the DB checks passed both times).
+  - About $0.12.
+
 **Smoke-test fixes (D90), 2026-10-02:** form-Amara dispute 5/5 (the typed email is confirmed without asking, the time is asked, one escalation with the account's name and email); guest S7 1/1 ($0.034). The pass field is confirmed live.
 
 **Call paths and fixes (L1b D88, D89), 2026-10-02:**
