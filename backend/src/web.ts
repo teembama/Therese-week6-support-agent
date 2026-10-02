@@ -23,6 +23,18 @@ const FILES: Record<string, { file: string; type: string }> = {
   "/favicon.svg": { file: "favicon.svg", type: "image/svg+xml" },
 };
 
+/** The staff dashboard page and its scripts (L2, D87): served only while STAFF_DASHBOARD_ENABLED is on. */
+const STAFF_FILES: Record<string, { file: string; type: string }> = {
+  "/staff": { file: "staff.html", type: "text/html; charset=utf-8" },
+  "/staff.js": { file: "staff.js", type: "text/javascript; charset=utf-8" },
+  "/staff-view.js": { file: "staff-view.js", type: "text/javascript; charset=utf-8" },
+};
+
+/** The staff dashboard flag, read at call time (L2, D87). */
+export function staffDashboardEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return /^(1|true)$/i.test(env["STAFF_DASHBOARD_ENABLED"]?.trim() ?? "");
+}
+
 /** The Supabase project origin for connect-src, or "" when unset or not https. */
 export function supabaseOrigin(url: string | undefined): string {
   try {
@@ -72,7 +84,7 @@ function load(file: string): Buffer {
 
 export function isPublicRoute(method: string | undefined, pathname: string): boolean {
   if (method === "POST" && pathname === "/csp-report") return true;
-  return (method === "GET" || method === "HEAD") && (pathname in FILES || pathname === "/config" || pathname === "/health");
+  return (method === "GET" || method === "HEAD") && (pathname in FILES || pathname === "/config" || pathname === "/health" || (pathname in STAFF_FILES && staffDashboardEnabled()));
 }
 
 /** Just the host of a URL-ish CSP field ("https://c.daily.co/x.js" -> "c.daily.co"; keywords pass through). */
@@ -122,9 +134,11 @@ export function handlePublic(req: IncomingMessage, res: ServerResponse, pathname
     const supabaseUrl = supabaseOrigin(env["SUPABASE_URL"]);
     const supabasePublishableKey = env["SUPABASE_PUBLISHABLE_KEY"]?.trim();
     if (loginRequired && (!supabaseUrl || !supabasePublishableKey)) return send(503, "application/json", JSON.stringify({ error: "login not configured" }), { "Cache-Control": "no-store" });
-    const login = loginRequired ? { loginRequired, supabaseUrl, supabasePublishableKey } : { loginRequired };
+    // The staff dashboard (L2, D87) needs the same public Auth settings, even with customer login off.
+    const staffDashboard = staffDashboardEnabled(env);
+    const login = loginRequired || staffDashboard ? { loginRequired, staffDashboard, supabaseUrl, supabasePublishableKey } : { loginRequired, staffDashboard };
     return send(200, "application/json", JSON.stringify({ vapiPublicKey, vapiAssistantId, ...login }), { "Cache-Control": "no-store" });
   }
-  const entry = FILES[pathname]!;
+  const entry = (FILES[pathname] ?? STAFF_FILES[pathname])!;
   send(200, entry.type, load(entry.file));
 }

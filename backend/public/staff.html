@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RelayPay Staff Dashboard</title>
+  <meta name="description" content="Raised tickets and scheduled callbacks for RelayPay support staff.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/staff.js"></script>
+</head>
+<body class="staff-body">
+  <main class="card staff-card" aria-labelledby="title">
+    <header class="brand">
+      <span class="logo" aria-hidden="true">R</span>
+      <div>
+        <h1 id="title">RelayPay staff dashboard</h1>
+        <p class="lede">Raised tickets and scheduled callbacks. Read-only.</p>
+      </div>
+    </header>
+
+    <p id="page-error" class="error" role="alert" hidden></p>
+
+    <section id="login" class="login" aria-labelledby="login-title" hidden>
+      <h2 id="login-title">Staff log in</h2>
+      <p id="login-message" class="login-message" role="status" aria-live="polite"></p>
+      <form id="login-form" class="login-form" novalidate>
+        <label for="login-email">Email</label>
+        <input id="login-email" name="email" type="email" autocomplete="username" required>
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        <p id="login-error" class="login-error" role="alert" hidden></p>
+        <button id="login-submit" type="submit" class="button primary">Log in</button>
+      </form>
+    </section>
+
+    <section id="dashboard" class="dashboard" aria-labelledby="records-title" hidden>
+      <div class="account">
+        <p>Signed in as <strong id="account-email"></strong></p>
+        <button id="logout" type="button" class="link-button">Log out</button>
+      </div>
+      <div class="staff-toolbar">
+        <div class="filters" role="group" aria-label="Show">
+          <button type="button" class="filter-button" data-type="tickets" aria-pressed="true">Raised tickets</button>
+          <button type="button" class="filter-button" data-type="callbacks" aria-pressed="false">Scheduled callbacks</button>
+        </div>
+        <button id="refresh" type="button" class="button secondary small">Refresh</button>
+      </div>
+      <h2 id="records-title" class="visually-hidden">Records</h2>
+      <p id="records-status" class="records-status" role="status" aria-live="polite"></p>
+      <ul id="records-list" class="staff-list"></ul>
+    </section>
+  </main>
+  <noscript><p class="note">This page needs JavaScript.</p></noscript>
+</body>
+</html>

@@ -33,7 +33,8 @@ import { matchRoute, MIN_TOKEN_LENGTH, redactPath, sha256 } from "./routing.js";
 import { parseVapiBody } from "./vapi.js";
 import { classifyEvent, recordEndOfCall } from "./vapi-events.js";
 import { retryOnce } from "./bounded.js";
-import { handleCspReport, handlePublic, isPublicRoute, SECURITY_HEADERS } from "./web.js";
+import { handleCspReport, handlePublic, isPublicRoute, SECURITY_HEADERS, staffDashboardEnabled } from "./web.js";
+import { handleStaffRecords, STAFF_RATE_LIMIT_PER_MINUTE } from "./staff.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -298,6 +299,7 @@ function main(): void {
   const db = createServiceClient();
   const recordsAllow = createRateLimiter(RECORDS_RATE_LIMIT_PER_MINUTE);
   const callPassAllow = createRateLimiter(CALL_PASS_RATE_LIMIT_PER_MINUTE);
+  const staffAllow = createRateLimiter(STAFF_RATE_LIMIT_PER_MINUTE);
   checkAccess = createAccessChecker(db);
   const port = Number(process.env["PORT"] || 8787);
 
@@ -314,6 +316,14 @@ function main(): void {
       handleCallPass(req, res, db, { allow: callPassAllow, log, headers: SECURITY_HEADERS }).catch((err: unknown) => {
         log({ event: "request_error", stage: "call_pass", ...errorDetails(err) });
         if (!res.headersSent) sendJson(res, 503, { error: "voice support unavailable" });
+      });
+      return;
+    }
+    // Staff dashboard API (L2, D87): staff-only, read-only. 404 while the flag is off.
+    if (req.method === "GET" && pathname === "/staff/records" && staffDashboardEnabled()) {
+      handleStaffRecords(req, res, db, { allow: staffAllow, log, headers: SECURITY_HEADERS }).catch((err: unknown) => {
+        log({ event: "request_error", stage: "staff_records", ...errorDetails(err) });
+        if (!res.headersSent) sendJson(res, 503, { error: "records unavailable" });
       });
       return;
     }
