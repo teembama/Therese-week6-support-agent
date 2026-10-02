@@ -256,3 +256,23 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
 .landing-option.primary { background: var(--primary); border-color: var(--primary); }
 .landing-option.primary strong, .landing-option.primary span { color: #fff; }
 .landing-option.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+
+/* ---- Landing page decoration (D94): line drawings around the card, desktop only, and three
+   plain reassurances inside the card. Thin deep blue strokes with small teal accents; no fills
+   and no animation. The card itself is unchanged. */
+.landing-art { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+.landing-art .art { position: absolute; width: 8.5rem; height: 8.5rem; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: 0.55; }
+.art-line { stroke: var(--primary); fill: none; }
+.art-accent { stroke: var(--teal); fill: none; }
+.art-left-top { top: 16%; right: calc(50% + 17rem + 4rem); }
+.art-left-bottom { top: 60%; right: calc(50% + 17rem + 6rem); }
+.art-right-top { top: 22%; left: calc(50% + 17rem + 5rem); }
+.art-right-bottom { top: 64%; left: calc(50% + 17rem + 3.5rem); }
+@media (max-width: 1180px) { .landing-art { display: none; } }
+.landing-body > .card { position: relative; z-index: 1; }
+.reassurances {
+  list-style: none; margin: 0; padding: 12px 0 0; border-top: 1px solid var(--border);
+  display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.85rem; color: var(--muted);
+}
+.reassurances li { display: flex; align-items: center; gap: 6px; }
+.reassure-icon { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--teal); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }

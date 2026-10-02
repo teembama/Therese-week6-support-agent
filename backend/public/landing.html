@@ -8,7 +8,32 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/app.css">
 </head>
-<body>
+<body class="landing-body">
+  <!-- D94: decorative line drawings in the space around the card (desktop only; hidden on narrow
+       screens). Original, thin strokes: deep blue lines with small teal accents, no fills. -->
+  <div class="landing-art" aria-hidden="true">
+    <svg class="art art-left-top" viewBox="0 0 120 120" focusable="false">
+      <path class="art-line" d="M26 66 V58 a34 34 0 0 1 68 0 V66"/>
+      <rect class="art-line" x="18" y="62" width="16" height="28" rx="6"/>
+      <rect class="art-line" x="86" y="62" width="16" height="28" rx="6"/>
+      <path class="art-line" d="M94 90 v6 a12 12 0 0 1 -12 12 H66"/>
+      <rect class="art-accent" x="58" y="104" width="10" height="8" rx="3"/>
+    </svg>
+    <svg class="art art-left-bottom" viewBox="0 0 120 120" focusable="false">
+      <rect class="art-line" x="22" y="34" width="76" height="52" rx="8"/>
+      <path class="art-line" d="M40 34 v52" stroke-dasharray="4 5"/>
+      <path class="art-line" d="M52 50 H86 M52 62 H78"/>
+      <path class="art-accent" d="M54 74 l6 6 l12 -12"/>
+    </svg>
+    <svg class="art art-right-top" viewBox="0 0 120 120" focusable="false">
+      <path class="art-line" d="M40 30 c-6 0 -12 6 -12 12 c0 26 24 50 50 50 c6 0 12 -6 12 -12 l-12 -10 l-10 8 c-10 -4 -20 -14 -24 -24 l8 -10 z"/>
+      <path class="art-accent" d="M74 30 a16 16 0 0 1 16 16 M74 18 a28 28 0 0 1 28 28"/>
+    </svg>
+    <svg class="art art-right-bottom" viewBox="0 0 120 120" focusable="false">
+      <path class="art-line" d="M24 60 v0 M36 50 v20 M48 40 v40 M60 46 v28 M72 34 v52 M84 48 v24 M96 56 v8"/>
+      <path class="art-accent" d="M48 40 v40"/>
+    </svg>
+  </div>
   <main class="card" aria-labelledby="title">
     <header class="brand">
       <span class="logo" aria-hidden="true">R</span>
@@ -28,6 +53,12 @@
         <span>Sign in to see raised tickets and scheduled callbacks.</span>
       </a>
     </nav>
+
+    <ul class="reassurances">
+      <li><svg class="reassure-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 8.5 l3 3 l7 -7"/></svg>Answers from approved RelayPay information</li>
+      <li><svg class="reassure-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 8.5 l3 3 l7 -7"/></svg>Your references shown on screen</li>
+      <li><svg class="reassure-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 8.5 l3 3 l7 -7"/></svg>A specialist when you need one</li>
+    </ul>
 
     <p class="note">Voice calls use your microphone and last at most 4 minutes.</p>
   </main>

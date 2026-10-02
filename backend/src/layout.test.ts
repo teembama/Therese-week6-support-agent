@@ -80,3 +80,34 @@ describe("kept from D93 after the revert", () => {
     assert.match(logout, /location\.assign\("\/"\)/);
   });
 });
+
+describe("landing decoration (D94)", () => {
+  const landing = read("landing.html");
+  const css = read("app.css");
+  it("3-4 decorative line drawings, aria-hidden, outside the card, hidden on narrow screens", () => {
+    const art = landing.slice(landing.indexOf('<div class="landing-art"'), landing.indexOf('<main class="card"'));
+    assert.match(art, /<div class="landing-art" aria-hidden="true">/);
+    const count = (art.match(/<svg class="art /g) ?? []).length;
+    assert.ok(count >= 3 && count <= 4, `${count} drawings`);
+    assert.ok(!/<(?:animate|animateTransform|linearGradient|radialGradient|text)\b/.test(art), "no animation, gradients or text");
+    assert.ok(!/fill="(?!none)/.test(art), "no fills");
+    assert.match(css, /@media \(max-width: 1180px\) \{ \.landing-art \{ display: none; \} \}/);
+    assert.match(css, /\.landing-art \{ position: fixed; inset: 0; pointer-events: none;/);
+    assert.match(css, /\.art-line \{ stroke: var\(--primary\); fill: none; \}/);
+    assert.match(css, /\.art-accent \{ stroke: var\(--teal\); fill: none; \}/);
+  });
+  it("three plain reassurances inside the card, under the options, each with a tiny teal icon", () => {
+    const card = landing.slice(landing.indexOf('<main class="card"'));
+    const opts = card.indexOf('class="landing-options"');
+    const strip = card.indexOf('class="reassurances"');
+    assert.ok(opts > 0 && strip > opts, "under the options, inside the card");
+    for (const t of ["Answers from approved RelayPay information", "Your references shown on screen", "A specialist when you need one"]) assert.ok(card.includes(t), t);
+    assert.equal((card.match(/class="reassure-icon"[^>]*aria-hidden="true"/g) ?? []).length, 3);
+    assert.match(css, /\.reassure-icon \{[^}]*stroke: var\(--teal\);/);
+  });
+  it("the card itself is unchanged: header, the two options, the note", () => {
+    assert.match(landing, /<main class="card" aria-labelledby="title">\s*<header class="brand">\s*<span class="logo" aria-hidden="true">R<\/span>/);
+    assert.match(landing, /<a class="landing-option primary" href="\/support">[\s\S]*<a class="landing-option" href="\/staff">/);
+    assert.match(landing, /<p class="note">Voice calls use your microphone and last at most 4 minutes.<\/p>/);
+  });
+});
