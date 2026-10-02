@@ -9,15 +9,23 @@
   <link rel="stylesheet" href="/app.css">
   <script type="module" src="/app.js"></script>
 </head>
-<body>
-  <main class="card" aria-labelledby="title">
-    <header class="brand">
-      <span class="logo" aria-hidden="true">R</span>
-      <div>
-        <h1 id="title">RelayPay voice support</h1>
-        <p class="lede">Ask about fees, payouts or a transaction, out loud.</p>
-      </div>
+<body class="support-body">
+  <a class="skip-link" href="#start">Skip to Start call</a>
+  <main class="support" aria-labelledby="title">
+    <header class="topbar">
+      <a class="brand brand-link" href="/" aria-label="RelayPay home">
+        <span class="logo" aria-hidden="true">R</span>
+        <span class="brand-name">RelayPay</span>
+      </a>
+      <a class="link-button" href="/">Home</a>
     </header>
+
+    <div class="support-grid">
+    <div class="col col-left">
+    <div class="intro">
+      <h1 id="title">RelayPay voice support</h1>
+      <p class="lede">Ask about fees, payouts or a transaction, out loud.</p>
+    </div>
 
     <section id="path" class="path" aria-labelledby="path-title" hidden>
       <h2 id="path-title">How would you like to continue?</h2>
@@ -59,6 +67,22 @@
       <button id="end" type="button" class="button secondary" disabled>End call</button>
     </div>
 
+    <section class="tips" aria-labelledby="tips-title">
+      <h2 id="tips-title">Try asking…</h2>
+      <ul>
+        <li>“What fees does RelayPay charge for international payments?”</li>
+        <li>“Can you check my account status?”</li>
+        <li>“How long do international payouts take?”</li>
+      </ul>
+    </section>
+
+    </div>
+
+    <p class="note">Calls are logged for quality and last at most 4 minutes. Your browser will ask to use your microphone.</p>
+    </div>
+
+    <aside class="col col-right" aria-label="Captions and references">
+    <p id="right-empty" class="right-empty">Live captions and your call references appear here during a call.</p>
     <section id="captions" class="captions" aria-labelledby="captions-title" hidden>
       <div class="captions-head">
         <h2 id="captions-title">Live captions</h2>
@@ -75,18 +99,8 @@
       <p id="records-live" class="visually-hidden" aria-live="polite" aria-atomic="true"></p>
     </section>
 
-    <section class="tips" aria-labelledby="tips-title">
-      <h2 id="tips-title">Try asking…</h2>
-      <ul>
-        <li>“What fees does RelayPay charge for international payments?”</li>
-        <li>“Can you check transaction T X N nine zero zero one?”</li>
-        <li>“How long do international payouts take?”</li>
-      </ul>
-    </section>
-
+    </aside>
     </div>
-
-    <p class="note">Calls are logged for quality and last at most 4 minutes. Your browser will ask to use your microphone.</p>
   </main>
   <noscript><p class="note">This page needs JavaScript to start a voice call.</p></noscript>
 </body>

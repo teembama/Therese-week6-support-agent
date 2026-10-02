@@ -17,7 +17,7 @@ const ui = {
   icon: el("state-icon"), label: el("state-label"), status: el("status"), timer: el("timer"),
   error: el("error"), errorTitle: el("error-title"), errorSteps: el("error-steps"), errorRef: el("error-ref"),
   start: el("start"), end: el("end"),
-  captions: el("captions"), captionsLines: el("captions-lines"), captionsToggle: el("captions-toggle"), captionsJump: el("captions-jump"),
+  rightEmpty: el("right-empty"), captions: el("captions"), captionsLines: el("captions-lines"), captionsToggle: el("captions-toggle"), captionsJump: el("captions-jump"),
   records: el("records"), recordsList: el("records-list"), recordsLive: el("records-live"),
   path: el("path"), pathCustomer: el("path-customer"), pathGuest: el("path-guest"), customerForm: el("customer-form"),
   customerName: el("customer-name"), customerEmail: el("customer-email"), customerError: el("customer-error"),
@@ -336,6 +336,7 @@ function attach(v) {
   v.on("call-start", () => {
     inCall = true;
     ui.captions.hidden = false;
+    ui.rightEmpty.hidden = true;
     setState("listening", "Live: listening", "Go ahead and speak.");
     startTimer();
     startRecordsPolling();

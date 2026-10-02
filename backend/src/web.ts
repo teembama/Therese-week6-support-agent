@@ -13,7 +13,9 @@ import { fileURLToPath } from "node:url";
 const PUBLIC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "public");
 
 const FILES: Record<string, { file: string; type: string }> = {
-  "/": { file: "index.html", type: "text/html; charset=utf-8" },
+  // D92: a landing page at / (customer support or staff); the call page moved to /support.
+  "/": { file: "landing.html", type: "text/html; charset=utf-8" },
+  "/support": { file: "index.html", type: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/call-end.js": { file: "call-end.js", type: "text/javascript; charset=utf-8" },
   "/captions.js": { file: "captions.js", type: "text/javascript; charset=utf-8" },
@@ -83,9 +85,12 @@ function load(file: string): Buffer {
   return body;
 }
 
+/** D92: old call-page addresses keep working (permanent redirect to /support). */
+export const REDIRECTS: Record<string, string> = { "/index.html": "/support", "/support/": "/support", "/call": "/support" };
+
 export function isPublicRoute(method: string | undefined, pathname: string): boolean {
   if (method === "POST" && pathname === "/csp-report") return true;
-  return (method === "GET" || method === "HEAD") && (pathname in FILES || pathname === "/config" || pathname === "/health" || (pathname in STAFF_FILES && staffDashboardEnabled()));
+  return (method === "GET" || method === "HEAD") && (pathname in FILES || pathname in REDIRECTS || pathname === "/config" || pathname === "/health" || (pathname in STAFF_FILES && staffDashboardEnabled()));
 }
 
 /** Just the host of a URL-ish CSP field ("https://c.daily.co/x.js" -> "c.daily.co"; keywords pass through). */
@@ -124,6 +129,12 @@ export function handlePublic(req: IncomingMessage, res: ServerResponse, pathname
     res.writeHead(status, { "Content-Type": type, "Cache-Control": "no-cache", ...SECURITY_HEADERS, ...extra });
     res.end(head ? undefined : body);
   };
+  const target = REDIRECTS[pathname];
+  if (target) {
+    res.writeHead(301, { Location: target, "Cache-Control": "no-cache", ...SECURITY_HEADERS });
+    res.end();
+    return;
+  }
   if (pathname === "/health") return send(200, "application/json", JSON.stringify({ status: "ok" }), { "Cache-Control": "no-store" });
   if (pathname === "/config") {
     const vapiPublicKey = env["VAPI_PUBLIC_KEY"]?.trim();

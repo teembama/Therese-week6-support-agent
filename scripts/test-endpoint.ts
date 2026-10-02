@@ -189,8 +189,9 @@ async function main(): Promise<number> {
       STATUSES.push({ status: r.status, label: `${method} ${path}` });
       return { status: r.status, headers: r.headers, text: await r.text() };
     };
-    const page = await get("/");
-    check(page.status === 200 && /text\/html/.test(page.headers.get("content-type") ?? "") && page.text.includes("Start call") && page.text.includes("End call") && page.text.includes('role="status"') && page.text.includes('aria-live="polite"'), "GET / -> the voice page (Start/End call, aria-live status)");
+    const page = await get("/support");
+    check(page.status === 200 && /text\/html/.test(page.headers.get("content-type") ?? "") && page.text.includes("Start call") && page.text.includes("End call") && page.text.includes('role="status"') && page.text.includes('aria-live="polite"'), "GET /support -> the voice page (Start/End call, aria-live status) (D92)");
+    check((await get("/")).text.includes('href="/support"'), "GET / -> the landing page (D92)");
     const csp = page.headers.get("content-security-policy") ?? "";
     check(csp.includes("script-src 'self' 'unsafe-eval' blob: https://esm.sh https://*.daily.co;") && csp.includes("worker-src 'self' blob:") && !csp.includes("unsafe-inline") && csp.includes("frame-ancestors 'none'") && page.headers.get("x-content-type-options") === "nosniff", "page has the CSP (scripts: self, 'unsafe-eval' and blob: for Daily/Krisp, esm.sh, Daily; no 'unsafe-inline') and nosniff (D55)");
     const icon = await get("/favicon.svg");

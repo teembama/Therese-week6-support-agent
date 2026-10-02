@@ -6,6 +6,7 @@
 // Needs .env (the same VAPI_LLM_SECRET as the Railway service) and the Railway CLI linked to the project.
 
 import { spawnSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServiceClient, type Db } from "@relaypay/shared";
@@ -22,6 +23,28 @@ const THANKS_LINE = "You're welcome. Is there anything else I can help you with?
 
 type Row = Record<string, unknown>;
 let failures = 0;
+/**
+ * D88/D92: with call passes required, every conversation carries a real one-time GUEST pass (the
+ * call page's "Continue as a guest" path), inserted as its hash just before its first request.
+ */
+const passes = new Map<string, string>();
+const pendingPassHashes: string[] = [];
+let passDb: Db | null = null;
+function passOf(callId: string): string {
+  let p = passes.get(callId);
+  if (!p) {
+    p = randomBytes(32).toString("base64url");
+    passes.set(callId, p);
+    pendingPassHashes.push(createHash("sha256").update(p).digest("hex"));
+  }
+  return p;
+}
+async function flushPasses(): Promise<void> {
+  if (!passDb || pendingPassHashes.length === 0) return;
+  const rows = pendingPassHashes.splice(0).map((pass_hash) => ({ pass_hash, source: "guest" }));
+  const { error } = await passDb.from("call_passes").insert(rows);
+  if (error) throw new Error(`guest pass insert failed: ${error.message}`);
+}
 const check = (ok: boolean, label: string, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail && !ok ? `  -> ${detail}` : ""}`);
   if (!ok) failures++;
@@ -31,6 +54,7 @@ const statuses: number[] = [];
 interface Reply { status: number; source: string | null; text: string; raw: string; ms: number }
 
 async function post(path: string, body: unknown, opts: { raw?: string; abortAfterMs?: number; method?: string } = {}): Promise<Reply> {
+  await flushPasses();
   const t0 = performance.now();
   const ctl = new AbortController();
   if (opts.abortAfterMs) setTimeout(() => ctl.abort(), opts.abortAfterMs);
@@ -53,7 +77,7 @@ async function post(path: string, body: unknown, opts: { raw?: string; abortAfte
 const chat = () => `/v/${process.env["VAPI_LLM_SECRET"]}/chat/completions`;
 const events = () => `/v/${process.env["VAPI_LLM_SECRET"]}/vapi/events`;
 const body = (callId: string, users: string[], agents: string[] = []) => ({
-  model: "relaypay-agent", stream: true, call: { id: callId },
+  model: "relaypay-agent", stream: true, call: { id: callId, assistantOverrides: { variableValues: { callPass: passOf(callId) } } },
   messages: [{ role: "system", content: "placeholder" }, ...users.flatMap((u, i) => [{ role: "user", content: u }, ...(agents[i] ? [{ role: "assistant", content: agents[i] }] : [])])],
 });
 
@@ -96,6 +120,7 @@ async function main(): Promise<number> {
   if (!/^https:\/\//.test(BASE)) throw new Error("--base-url https://<domain> is required");
   process.loadEnvFile(resolve(REPO, ".env"));
   const db = createServiceClient();
+  passDb = db;
   const secret = process.env["VAPI_LLM_SECRET"]!;
   const id = (name: string) => `test-dep-${RUN}-${name}`;
   console.log(`deployed: ${BASE} (token path redacted)`);
@@ -110,13 +135,21 @@ async function main(): Promise<number> {
   check(badJson.status === 200 && badJson.text === FALLBACK, "invalid JSON -> 200 + fallback");
 
   console.log("\n== Public routes");
-  const page = await fetch(`${BASE}/`);
+  const landing = await fetch(`${BASE}/`);
+  statuses.push(landing.status);
+  const landingHtml = await landing.text();
+  check(landing.status === 200 && landingHtml.includes('href="/support"') && landingHtml.includes('href="/staff"'), "GET / -> the landing page (customer support, staff) (D92)");
+  const page = await fetch(`${BASE}/support`);
   statuses.push(page.status);
   const html = await page.text();
   const dcsp = page.headers.get("content-security-policy") ?? "";
-  check(page.status === 200 && html.includes("Start call") && dcsp.includes("script-src 'self' 'unsafe-eval' blob: https://esm.sh https://*.daily.co;") && !dcsp.includes("unsafe-inline"), "GET / -> page with CSP ('unsafe-eval' for Daily only, no 'unsafe-inline')");
+  check(page.status === 200 && html.includes("Start call") && dcsp.includes("script-src 'self' 'unsafe-eval' blob: https://esm.sh https://*.daily.co;") && !dcsp.includes("unsafe-inline"), "GET /support -> the call page with CSP ('unsafe-eval' for Daily only, no 'unsafe-inline')");
+  const old = await fetch(`${BASE}/index.html`, { redirect: "manual" });
+  check(old.status === 301 && old.headers.get("location") === "/support", "GET /index.html -> 301 /support (old URL kept working, D92)");
   const cfg = (await (await fetch(`${BASE}/config`)).json()) as Row;
-  check(cfg["vapiPublicKey"] === process.env["VAPI_PUBLIC_KEY"] && cfg["vapiAssistantId"] === process.env["VAPI_ASSISTANT_ID"] && Object.keys(cfg).length === 2, "GET /config -> exactly the two public values, equal to .env (not printed)");
+  const allowed = new Set(["vapiPublicKey", "vapiAssistantId", "loginRequired", "staffDashboard", "supabaseUrl", "supabasePublishableKey"]);
+  check(cfg["vapiPublicKey"] === process.env["VAPI_PUBLIC_KEY"] && cfg["vapiAssistantId"] === process.env["VAPI_ASSISTANT_ID"] && Object.keys(cfg).every((k) => allowed.has(k)) && !JSON.stringify(cfg).includes(process.env["SUPABASE_SERVICE_ROLE_KEY"]!),
+    "GET /config -> only public values (Vapi public key and assistant, flags, Supabase URL and publishable key), never the service key");
   check((await (await fetch(`${BASE}/health`)).text()) === '{"status":"ok"}', "GET /health -> ok only");
 
   console.log("\n== Fees question (KB-only)");

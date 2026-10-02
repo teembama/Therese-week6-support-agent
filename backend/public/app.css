@@ -205,3 +205,54 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
 .staff-item dl { margin: 8px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; font-size: 0.9rem; }
 .staff-item dt { color: var(--muted); font-weight: 650; }
 .staff-item dd { margin: 0; overflow-wrap: anywhere; }
+
+/* ---- Full-screen call page (D92): two columns on desktop, stacked on mobile. Colours unchanged:
+   the existing tokens only (deep blue primary, teal accent, off-white background). */
+.support-body { display: block; padding: 0; min-height: 100vh; }
+.support { min-height: 100vh; display: flex; flex-direction: column; }
+.topbar {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.brand-link { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--primary); }
+.brand-link:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 8px; }
+.brand-link .logo { width: 36px; height: 36px; border-radius: 10px; font-size: 1.05rem; }
+.brand-name { font-weight: 650; font-size: 1.1rem; }
+.support-grid {
+  flex: 1; display: grid; grid-template-columns: minmax(0, 30rem) minmax(0, 1fr); gap: 24px;
+  width: 100%; max-width: 80rem; margin: 0 auto; padding: 24px; align-items: start;
+}
+.col { display: grid; gap: 20px; align-content: start; min-width: 0; }
+.col-left { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; }
+.intro h1 { margin: 0; }
+.col-right {
+  position: sticky; top: 24px; display: flex; flex-direction: column; gap: 16px;
+  height: calc(100vh - 48px - 61px); min-height: 24rem;
+}
+.col-right .captions { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--surface); padding: 14px 16px; }
+.col-right .captions-lines { flex: 1 1 auto; height: auto; min-height: 10rem; }
+.col-right .records { flex: 0 1 auto; max-height: 45%; overflow-y: auto; background: var(--surface); }
+.right-empty { margin: 0; padding: 24px; border: 1px dashed var(--border); border-radius: 12px; color: var(--muted); background: var(--surface); }
+.skip-link { position: absolute; left: -9999px; top: 8px; }
+.skip-link:focus { left: 16px; z-index: 10; background: var(--surface); color: var(--primary); padding: 8px 12px; border-radius: 8px; outline: 3px solid var(--focus); }
+@media (max-width: 860px) {
+  .support-grid { grid-template-columns: 1fr; padding: 16px; gap: 16px; }
+  .col-left { padding: 18px; }
+  .col-right { position: static; height: auto; min-height: 0; }
+  .col-right .captions-lines { flex: none; height: 14rem; }
+  .col-right .records { max-height: none; }
+}
+
+/* ---- Landing page (D92): two clear options. */
+.landing-options { display: grid; gap: 14px; }
+.landing-option {
+  display: grid; gap: 4px; padding: 18px 20px; border-radius: 12px; text-decoration: none;
+  border: 2px solid var(--primary); background: var(--surface); color: var(--ink);
+}
+.landing-option strong { color: var(--primary); font-size: 1.1rem; }
+.landing-option span { color: var(--muted); }
+.landing-option:hover { border-color: var(--primary-hover); background: var(--bg); }
+.landing-option:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.landing-option.primary { background: var(--primary); border-color: var(--primary); }
+.landing-option.primary strong, .landing-option.primary span { color: #fff; }
+.landing-option.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
