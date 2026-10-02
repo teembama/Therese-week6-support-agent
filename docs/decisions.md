@@ -1961,7 +1961,7 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - **Backend:**
     - Vapi's idle line arrives in later requests as an assistant message. Turn indexing counts user messages only, so it is unaffected (tested).
     - The fast path's previous agent line now **skips** the idle line, like a fixed Vapi line (`previousAgentLine` moved to `social-fast-path.ts`). So "anything else?" → idle → "No thanks" is still a goodbye (D73); offer → idle → "No thanks" is still a declined offer; a read-back → idle → "No." still goes to the model (D90).
-- **Also fixed:** a literal backspace character (from an escaped `` in an earlier scripted edit) had made a D95 layout test's "no animation or gradients" regex unable to match, so that check always passed. The repo was scanned and that was the only one.
+- **Also fixed:** a literal backspace character (from an escaped `\b` in an earlier scripted edit) had made a D95 layout test's "no animation or gradients" regex unable to match, so that check always passed. The repo was scanned and that was the only one.
 - **Tests:** `test:gate` 349/349; MCP 29/29; shared 28/28. Live (deploy `7d7e54f6`): `test:callpass` 14/14; `check-staff` 16/16.
 
 ## Migration log
