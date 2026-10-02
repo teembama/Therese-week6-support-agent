@@ -490,7 +490,11 @@ async function replayToolEvidence(db: Db, r: RunData, suffix = ""): Promise<stri
     // Write tools: the rows they wrote (what the agent's tool result described).
     const last = r.turns.length - 1;
     for (const tk of r.tickets) perTurn[last]!.push(`[support_tickets row] ${JSON.stringify(tk)}`);
-    for (const e of r.escalations) perTurn[last]!.push(`[escalations row] ${JSON.stringify(e)}`);
+    for (const e of r.escalations) {
+      perTurn[last]!.push(`[escalations row] ${JSON.stringify(e)}`);
+      // D97: what create_escalation returned for a booked slot (computed from the stored row, as the tool does).
+      if (typeof e["callback_slot"] === "string") perTurn[last]!.push(`[create_escalation result] ${JSON.stringify({ callback_booked_for: `${spokenSlot(String(e["callback_slot"]))} Lagos time`, follow_up_summary: "A RelayPay support representative will follow up." })}`);
+    }
   } finally {
     await client.close();
   }
@@ -555,6 +559,15 @@ Quote from the block that supports the claim.`;
 // Approved procedure corpus (D66): the PRD's own rules for what the agent does, so the judge
 // doesn't flag procedure the PRD requires. Procedural claims only; code enforces that a fact's
 // quote comes from the turn's evidence, never from here.
+/** D97: "Monday 5 October at 11 AM" (Lagos), exactly as create_escalation speaks a booked slot. */
+function spokenSlot(iso: string): string {
+  const l = new Date(new Date(iso).getTime() + 3_600_000);
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const h = l.getUTCHours(), m = l.getUTCMinutes();
+  return `${days[l.getUTCDay()]} ${l.getUTCDate()} ${months[l.getUTCMonth()]} at ${h % 12 === 0 ? 12 : h % 12}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h < 12 ? "AM" : "PM"}`;
+}
+
 function procedureCorpus(): string {
   const prompt = readFileSync(resolve(REPO, "backend", "src", "prompt.ts"), "utf8");
   const refRule = /A reference is the prefix and exactly four digits\./.exec(prompt)?.[0] ?? "";
@@ -564,6 +577,8 @@ function procedureCorpus(): string {
     // The tool spec (assets/mcp-tool-requirements.md) gives no reference format; the agent's
     // tool-input rule is the system prompt's, quoted verbatim, with the seed's examples.
     `[reference formats: backend/src/prompt.ts tool-input rule]\nTransaction references look like TXN-9001 and payout references like PAY-7002. ${refRule}`,
+    // D97: callbacks are real bookings now (the escalation rules predate them).
+    "[callback booking, D97: create_escalation tool description]\nThe tool books a real callback slot (Monday to Friday, 9 AM to 5 PM Lagos time, 30-minute slots) from the caller's words. When it returns callback_booked_for, the agent confirms it as \"Your callback is booked for <callback_booked_for>.\" That confirmation is the procedure, not a promise beyond the record. If it refuses a time, the agent says why, says the business hours and offers only the returned slots.",
   ].join("\n\n");
 }
 let PROCEDURE = "";

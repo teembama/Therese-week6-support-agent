@@ -17,6 +17,8 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const arg = (f: string) => { const i = process.argv.indexOf(f); return i >= 0 ? process.argv[i + 1] : undefined; };
 const BASE = (arg("--base-url") ?? "https://relaypay-backend-production-aa34.up.railway.app").replace(/\/$/, "");
 const TIME = arg("--time") ?? "Monday at 10 AM";
+/** --guest: the guest path; the caller gives Efua's name and email by voice. */
+const GUEST = process.argv.includes("--guest");
 process.loadEnvFile(resolve(REPO, ".env"));
 const db = createServiceClient();
 let pass = 0, fail = 0;
@@ -33,11 +35,12 @@ async function say(callId: string, callPass: string, caller: string[], agent: st
     .map((l) => { try { return (JSON.parse(l.slice(6)) as { choices?: Array<{ delta?: { content?: string } }> }).choices?.[0]?.delta?.content ?? ""; } catch { return ""; } }).join("").trim();
 }
 
-const r = await fetch(`${BASE}/calls/pass`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "customer", name: "Amara", email: "amara@lagosledger.example" }) });
+const r = await fetch(`${BASE}/calls/pass`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(GUEST ? { mode: "guest" } : { mode: "customer", name: "Amara", email: "amara@lagosledger.example" }) });
 const { pass: callPass } = (await r.json()) as { pass: string };
-check(r.status === 200 && Boolean(callPass), "form pass for Amara");
+check(r.status === 200 && Boolean(callPass), GUEST ? "guest pass" : "form pass for Amara");
+let weekendSuggestedBeforeTool = false;
 const callId = `test-formesc-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-const caller = ["I want to dispute my payment TXN-9001 and speak to a specialist."];
+const caller = [GUEST ? "My account is restricted and nobody is helping me. I need a specialist." : "I want to dispute my payment TXN-9001 and speak to a specialist."];
 const agent: string[] = [];
 let askedEmail = false, readBack = false, askedTime = false, timeGiven = false;
 let refused: { reason: string; offered: string[] } | null = null;
@@ -47,7 +50,9 @@ for (let t = 0; t < 8; t++) {
   agent.push(a);
   console.log(`  t${t} caller: ${caller[t]}\n     agent: ${a.slice(0, 260)}`);
   if (/(what|could i have|can i have|may i have|tell me).{0,30}email/i.test(a) && !/lagosledger|amara@|amara at/i.test(a)) askedEmail = true;
-  if (/amara(@| at )lagos ?ledger/i.test(a)) readBack = true;
+  if (/amara(@| at )lagos ?ledger|efua(@| at )accra ?stack/i.test(a)) readBack = true;
+  const { count: escCalls } = await db.from("tool_calls").select("*", { count: "exact", head: true }).eq("conversation_id", callId).eq("tool_name", "create_escalation");
+  if (!escCalls && /\b(saturday|sunday|weekend)\b/i.test(a)) weekendSuggestedBeforeTool = true;
   if (/(time|when|day).{0,50}(call|contact|reach|suit|work|callback)|callback time/i.test(a)) askedTime = true;
   const { data: e } = await db.from("escalations").select("escalation_id").eq("conversation_id", callId);
   if ((e ?? []).length) break;
@@ -58,7 +63,10 @@ for (let t = 0; t < 8; t++) {
   if (m && !refused) refused = { reason: m[1]!, offered: m[2]!.split(" | ") };
   let next: string;
   if (refused && !picked) { picked = refused.offered[0]!; next = `${picked} works.`; }
-  else if (/amara(@| at )lagos ?ledger/i.test(a)) next = "Yes, that's right, contact me there.";
+  else if (/amara(@| at )lagos ?ledger|efua(@| at )accra ?stack/i.test(a)) next = "Yes, that's right, contact me there.";
+  else if (GUEST && /\bname\b/i.test(a) && /email/i.test(a)) next = "Efua Mensah, and my email is efua at accra stack dot example.";
+  else if (GUEST && /\bname\b/i.test(a)) next = "Efua Mensah.";
+  else if (GUEST && /email/i.test(a)) next = "efua at accra stack dot example.";
   else if (/reference|TXN|transaction number/i.test(a)) next = "It's TXN-9001.";
   else if (!timeGiven && /(time|when|day)/i.test(a)) { next = TIME; timeGiven = true; }
   else if (/(would you like|shall i|can i arrange|i can arrange|callback)/i.test(a)) next = "Yes, please.";
@@ -68,15 +76,20 @@ for (let t = 0; t < 8; t++) {
 const { data: rows } = await db.from("escalations").select("user_name, user_email, customer_id, preferred_time_text, callback_slot, call_booked").eq("conversation_id", callId);
 const row = (rows ?? [])[0] as Record<string, unknown> | undefined;
 const spoken = agent.join(" ");
-check(!askedEmail, "the agent never asked for the email");
-check(readBack, "the agent read back the email she entered (amara@lagosledger.example)");
+if (!GUEST) check(!askedEmail, "the agent never asked for the email");
+check(readBack, GUEST ? "the agent read the spoken email back" : "the agent read back the email she entered (amara@lagosledger.example)");
+check(!weekendSuggestedBeforeTool, "the agent did not suggest a weekend day before the tool ran", agent.join(" | ").slice(0, 400));
 check(askedTime, "the agent asked for a callback day and time");
 if (/saturday|sunday/i.test(TIME)) {
-  check(refused?.reason === "weekend", `"${TIME}" refused by the tool: weekend`, JSON.stringify(refused));
-  check(/weekend/i.test(spoken) && /Monday to Friday/i.test(spoken), "the agent said why (weekend) and the business hours", spoken.slice(0, 400));
+  check(refused?.reason === "weekend" || (refused?.reason === "outside_hours" && /5 ?pm|17/i.test(TIME)), `"${TIME}" refused by the tool: weekend`, JSON.stringify(refused));
+  check(/weekend|outside/i.test(spoken) && /Monday to Friday/i.test(spoken), "the agent said why (weekend) and the business hours", spoken.slice(0, 400));
+  check(refused?.offered.length === 3 && refused!.offered.every((o) => /^(Monday|Tuesday|Wednesday|Thursday|Friday) /.test(o)), "the tool offered three weekday slots", JSON.stringify(refused?.offered));
+  const { count: rowsAtRefusal } = await db.from("escalations").select("*", { count: "exact", head: true }).eq("conversation_id", callId).neq("callback_slot", null);
+  void rowsAtRefusal;
   check(Boolean(refused?.offered.length) && refused!.offered.some((o) => spoken.includes(o.replace(/ at .*/, ""))), "the agent offered the tool's slots", JSON.stringify(refused?.offered));
 }
-check((rows ?? []).length === 1 && row?.["user_email"] === "amara@lagosledger.example" && row?.["user_name"] === "Amara Okafor" && row?.["customer_id"] === "CUS-1001",
+if (GUEST) check((rows ?? []).length === 1 && row?.["user_email"] === "efua@accrastack.example", "ONE escalation, with the caller's email", JSON.stringify(rows));
+else check((rows ?? []).length === 1 && row?.["user_email"] === "amara@lagosledger.example" && row?.["user_name"] === "Amara Okafor" && row?.["customer_id"] === "CUS-1001",
   "ONE escalation, stored with the form account's name and email", JSON.stringify(rows));
 check(row?.["call_booked"] === true && Boolean(row?.["callback_slot"]), "a callback slot is booked", JSON.stringify(row));
 if (picked) check(new RegExp(picked.replace(/ at .*/, "")).test(String(row?.["preferred_time_text"] ?? "")) || /works/.test(String(row?.["preferred_time_text"] ?? "")), `the slot the caller picked (${picked}) was booked`, JSON.stringify(row));
