@@ -51,6 +51,8 @@ The AFTER judge cost more because every call now carries the approved-procedure 
 | after4 `…13-11-57-971Z-after4` | `6993cf50` / `e637f65` | **3/3** | **D72**: the flow is enforced by the input schema (`email_confirmed_by_caller`, plus a preferred time or `preferred_time_declined`), with an actionable `invalid_input` otherwise | The full flow 3/3, clean follow-up text, judge clean. |
 | after5 `…23-23-06-674Z-after5` | `e59b1556` / `abe9e03` | **3/3** | **D82** (migration 006: escalation enrichment, `escalation_updated`, notification outbox) | The full flow 3/3, judge clean. Each run queued exactly one `escalation_created` outbox row (pending, no amounts or notes) with call_booked true and time "Tomorrow morning". No enrichment happened (no speculative attempt created the escalation first). $0.103 against a $0.15 cap, run with `--stop-on-network-error`, no network errors. |
 
+**Smoke-test fixes (D90), 2026-10-02:** form-Amara dispute 5/5 (the typed email is confirmed without asking, the time is asked, one escalation with the account's name and email); guest S7 1/1 ($0.034). The pass field is confirmed live.
+
 **Call paths and fixes (L1b D88, D89), 2026-10-02:**
 - `test:callpass`: every behaviour check passes. Form-Amara is verified from turn 0 and a status question is answered without re-asking; "I'm Felicia" gets the fixed one-account line (`decline`/`identity_switch`); any mismatch gets the identical 422; guest works. The rate-limit check is flaky from the test laptop's rotating carrier-NAT IP (429 after 10 when the IP is stable).
 - Guest S1, S3, S4, S5: 4/4 ($0.037). Form-Amara S3: 1/1 ($0.008). After D89, S3 as form-Amara and as guest: 2/2 ($0.019).

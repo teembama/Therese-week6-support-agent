@@ -1795,6 +1795,37 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - The one failure is the rate-limit check from this rotating-IP network (see above). One earlier run got 429 after 10.
   - **S3 ×1 as form-Amara** (`d89-form`) and **S3 ×1 as guest** (`eval-2026-10-02T12-23-11-121Z-d89-guest`): **2/2**, $0.019 (cap $0.05).
 
+### D90. Smoke-test fixes: back to the path chooser, confirmations go to the model, typed details win on form calls (2026-10-02)
+
+- **Smoke test (user, live):**
+  - Call A (guest, weather → "no thanks" → "no") and check C passed.
+  - The pass reaches the backend at `call.assistantOverrides.variableValues.callPass` on both paths, so the D86 evidence is now confirmed live.
+  - Call B (form-Amara, `01a0fca1…`): verified from the form; the identity switch got the D89 line. But:
+    - the mic picked up the agent's own filler as the caller's turn 1 ("While I check that—"), an echo;
+    - "Amara" was heard as "Tamara", and the agent adopted it, along with a misheard email;
+    - "No." to "I have your email as tamara@… Is that correct?" was taken as a declined offer;
+    - no escalation was stored.
+  - Whether Vapi accepted the per-call greeting override can't be seen from server data (Vapi speaks the first message itself).
+- **1. Page:** after a call ends, the page returns to the path chooser without a reload: selection cleared, buttons unlocked, Start disabled until a path is chosen. The last captions and the references panel stay until the next call starts. After a failure, the chosen path stays selected for "Try again".
+- **2. Fast path:**
+  - `declined_offer` fires only when the previous line was an **offer** ("would you like", "if you'd like", "do you want", "want me to", "shall I", "I can connect you", "I can arrange", "I can create / open / set up").
+  - A **confirmation or read-back** ("Is that correct / right?", "Did I get that right?", "I have your …", "Let me read that back", "Just to confirm", "you said") goes to the **model**, so "No." is handled as a correction.
+  - A plain question that isn't an offer also goes to the model. After "anything else?", a decline is still a goodbye (D73).
+- **3. Form calls: typed details win over spoken ones:**
+  - **Context line** (turn input, form calls only) now also says: "Always address the caller by <first name>; never adopt a different name heard in speech. For escalations, confirm the email they entered (<email>) instead of asking for it: say it back and ask if a specialist should contact them there. Never ask for their email or name. After they confirm the email, ask for their preferred callback time before creating the escalation; set preferred_time_declined only if they say they don't want to give one."
+    - **The last two sentences are beyond the requested wording.** The first live run asked for the email anyway on turn 0, and created the escalation with the time marked declined without asking.
+    - The email is included so the agent can say it back. The typed name and email count as the caller's own words for the grounding gate (`callerTyped`), so the read-back isn't filtered as an unsupported specific.
+  - **`create_escalation`:** `user_name` and `user_email` are optional in the schema. On a conversation with a redeemed `form_customer` pass they are **always** taken from the matched account record (the email the caller typed), whatever the model passes. Otherwise they remain required (`invalid_input`). `email_confirmed_by_caller` and the time question are still required. Guest calls are unchanged.
+- **4. Echo:** README troubleshooting now says to use earphones (no code change).
+- **Also fixed:** a `test:tools` 006 check expected outbox rows to stay pending, but the deployed Discord sender (D83) now marks test-conversation rows "skipped (not posted)".
+- **Tests:**
+  - **Unit:** fast path (the live read-back + "No." → model, other confirmations → model, offers → `declined_offer`, plain question → model, "anything else?" → goodbye); the context line; back-to-paths after a call. `test:gate` 314/314, MCP 29/29.
+  - **`test:tools` (live DB):** a form call with misheard "Tamara" / "tamara at …" stores Amara Okafor / amara@lagosledger.example; `email_confirmed_by_caller` is still required.
+  - **Live (deploy `03a7a847`):**
+    - **form-Amara dispute** (`scripts/test-form-escalation.ts`, `test-formesc-2026-10-02T15-14-06-636Z`): **5/5**. "Can I confirm the email on your account is amara@lagosledger.example?" → "What's your preferred callback time…?" → one escalation, Amara Okafor / amara@lagosledger.example, "tomorrow morning". The run before the context tightening asked for the email on turn 0 and skipped the time (3/5).
+    - **guest S7** (`eval-2026-10-02T15-14-35-806Z-d90-guest`): **1/1**, unchanged flow ($0.034).
+    - Total spend for this round about $0.06 (cap $0.06).
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
