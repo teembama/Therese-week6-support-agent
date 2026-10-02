@@ -299,6 +299,32 @@ neg "update call_passes set conversation_id='conv-p1', used_at=now() where pass_
 eq "$(q "select has_table_privilege('anon','call_passes','select')")|$(q "select has_table_privilege('authenticated','call_passes','select')")|$(q "select has_table_privilege('service_role','call_passes','insert')")" "f|f|t" "only service_role reads or writes call_passes"
 eq "$(q "select has_function_privilege('anon','redeem_call_pass(text,text)','execute')")|$(q "select has_function_privilege('authenticated','redeem_call_pass(text,text)','execute')")|$(q "select has_function_privilege('service_role','redeem_call_pass(text,text)','execute')")" "f|f|t" "only service_role executes redeem_call_pass"
 
+echo "--- migration 008: call pass sources and identity from a form pass (D88)"
+SR "insert into call_passes(pass_hash,source,customer_id) values ('$(H 21)','form_customer','CUS-1001')" >/dev/null
+SR "insert into call_passes(pass_hash,source) values ('$(H 22)','guest')" >/dev/null
+eq "$(q "select source from call_passes where pass_hash='$(H 1)'")" "login" "existing (007) passes become source login"
+neg "insert into call_passes(pass_hash,source) values ('$(H 23)','form_customer')" "form_customer pass without a customer"
+neg "insert into call_passes(pass_hash,source,customer_id) values ('$(H 24)','guest','CUS-1001')" "guest pass with a customer"
+neg "insert into call_passes(pass_hash,source,user_id,role) values ('$(H 25)','guest','$UID1','customer')" "guest pass with a user"
+neg "insert into call_passes(pass_hash,source) values ('$(H 26)','login')" "login pass without a user"
+neg "insert into call_passes(pass_hash,source) values ('$(H 27)','sso')" "unknown source"
+AP() { SR "select coalesce(apply_call_pass_identity($1),'-')"; }
+eq "$(RP "'conv-f1','$(H 21)'")" "ok|-|-|CUS-1001" "form pass redeems ok with its customer"
+eq "$(AP "'conv-f1','voice',null")" "CUS-1001" "form pass: identity applied before the first turn (conversation created)"
+eq "$(q "select channel||'|'||verified_customer_id from conversations where conversation_id='conv-f1'")" "voice|CUS-1001" "conversation verified as the pass's customer"
+eq "$(q "select count(*)||'|'||max(event_type) from conversation_events where conversation_id='conv-f1'")" "1|identity_verified" "one identity_verified event"
+eq "$(AP "'conv-f1','voice',null")|$(q "select count(*) from conversation_events where conversation_id='conv-f1'")" "CUS-1001|1" "applying again: same customer, no second event"
+eq "$(RP "'conv-g1','$(H 22)'")" "ok|-|-|-" "guest pass redeems ok with no customer"
+eq "$(AP "'conv-g1','voice',null")" "-" "guest pass: no identity applied"
+eq "$(q "select count(*) from conversations where conversation_id='conv-g1'")" 0 "guest: no conversation row created by the pass"
+eq "$(AP "'conv-p1','voice',null")" "-" "login pass (007): no identity applied"
+eq "$(AP "'conv-none','voice',null")" "-" "no redeemed pass: nothing applied"
+SR "insert into call_passes(pass_hash,source,customer_id) values ('$(H 28)','form_customer','CUS-1002')" >/dev/null
+pg -c "insert into conversations(conversation_id,channel,verified_customer_id) values ('conv-f2','voice','CUS-1001')" >/dev/null
+SR "select status from redeem_call_pass('conv-f2','$(H 28)')" >/dev/null
+neg "set role service_role; select apply_call_pass_identity('conv-f2','voice',null)" "conversation already verified as another customer"
+eq "$(q "select has_function_privilege('anon','apply_call_pass_identity(text,text,text)','execute')")|$(q "select has_function_privilege('authenticated','apply_call_pass_identity(text,text,text)','execute')")|$(q "select has_function_privilege('service_role','apply_call_pass_identity(text,text,text)','execute')")" "f|f|t" "only service_role executes apply_call_pass_identity"
+
 # Privileges on every new or replaced function.
 for fn in "check_attempt_scope(text,text,integer)" "create_support_ticket_guarded(text,text,text,text,text,text,text,text)" "create_escalation_with_ticket(text,text,text,text,text,text,text,text,text,text,text,text,boolean,text)" "set_verified_customer(text,text,text)" "log_conversation_event_guarded(text,text,integer,text,text,jsonb)" "begin_turn_attempt(text,text,text,integer,text,text,text)" "abandon_stale_conversations(integer)"; do
   eq "$(q "select has_function_privilege('anon','$fn','execute')")|$(q "select has_function_privilege('authenticated','$fn','execute')")|$(q "select has_function_privilege('service_role','$fn','execute')")" "f|f|t" "only service_role executes ${fn%%(*}"
