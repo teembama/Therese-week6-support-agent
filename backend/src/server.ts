@@ -25,7 +25,6 @@ import { Admission } from "./admission.js";
 import { startStaleSweeper } from "./stale-sweep.js";
 import { createDiscordNotifier, type Notifier } from "./discord-notify.js";
 import { createRateLimiter, handleRecords, matchRecordsRoute, RECORDS_RATE_LIMIT_PER_MINUTE } from "./records.js";
-import { debugDetails, shapeOf } from "./debug-shape.js";
 import { sentences } from "./gate.js";
 import { SseStream } from "./sse.js";
 import { runTurn, type TurnHandle, type TurnResult } from "./turn.js";
@@ -40,9 +39,6 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 function log(event: Record<string, unknown>): void {
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...event }));
 }
-
-// TEMPORARY (live Vapi test): log request structure only (see debug-shape.ts).
-const DEBUG_REQUEST_SHAPE = process.env["RELAYPAY_DEBUG_REQUEST_SHAPE"] === "1";
 
 // ---- Never a 500 (D34) ------------------------------------------------------------------
 // Once the route and token have matched, every failure still answers 200 with an SSE stream that
@@ -131,9 +127,6 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
     json = JSON.parse(raw);
   } catch {
     return badRequest("invalid JSON");
-  }
-  if (DEBUG_REQUEST_SHAPE) {
-    log({ event: "debug_request_shape", method: req.method, path: loggedPath, token_ok: true, header_names: Object.keys(req.headers).sort(), ...debugDetails(json, req.headers), body_shape: shapeOf(json) });
   }
   const parsed = parseVapiBody(json);
   if (!parsed.ok) return badRequest(parsed.error);
@@ -328,9 +321,6 @@ function main(): void {
     if (route.kind === "not_found") {
       // Same 404 for unknown paths and for a wrong/missing token; the path is redacted.
       log({ event: "not_found", method: req.method, path: loggedPath });
-      if (DEBUG_REQUEST_SHAPE && route.tokenChecked) {
-        log({ event: "debug_request_shape", method: req.method, path: loggedPath, token_ok: false, header_names: Object.keys(req.headers).sort(), x_stainless_retry_count: req.headers["x-stainless-retry-count"] ?? null });
-      }
       req.resume();
       return sendJson(res, 404, { error: "not found" });
     }

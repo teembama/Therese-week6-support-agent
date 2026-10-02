@@ -418,17 +418,6 @@ async function main(): Promise<number> {
     check(!A.logs.some((l) => /TRANSCRIPT-MARKER|VAPI-OWN-SUMMARY-MARKER|\+2348000000000/.test(l)), "webhook logs carry no transcript, summary or customer details");
     check(A.logs.some((l) => l.includes('"event":"stale_sweep"') && /"abandoned":\d+/.test(l)), "stale sweep ran at startup and logged its count (D51)");
 
-    console.log("\n== Debug request-shape log (server E, RELAYPAY_DEBUG_REQUEST_SHAPE=1)");
-    const E = await startServer(8795, { RELAYPAY_DEBUG_REQUEST_SHAPE: "1" });
-    servers.push(E);
-    const marker = "UNIQUE-CONTENT-MARKER-7f3a";
-    await post(E.port, body(`test-ep-${RUN}-debug`, [`What fees does RelayPay charge? ${marker}`]));
-    await post(E.port, hiBody, { path: `/v/${wrongToken}/chat/completions` });
-    const debugLines = E.logs.filter((l) => l.includes('"event":"debug_request_shape"'));
-    for (const l of debugLines) console.log(`  ${l.slice(0, 400)}`);
-    check(debugLines.some((l) => l.includes('"token_ok":true') && l.includes('"body_shape"')) && debugLines.some((l) => l.includes('"token_ok":false')), "debug log: structure for token ok and token failed");
-    check(!debugLines.some((l) => l.includes(marker) || l.includes(secret) || l.includes(wrongToken)), "debug log: no message content, no token");
-
     console.log("\n== Model fallback (D49): unknown primary model -> one retry with AGENT_MODEL_FALLBACK");
     const F = await startServer(8789, { AGENT_MODEL: "claude-nonexistent-0-0", AGENT_MODEL_FALLBACK: "claude-haiku-4-5" });
     servers.push(F);
