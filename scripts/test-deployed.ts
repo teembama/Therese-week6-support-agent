@@ -210,7 +210,7 @@ async function main(): Promise<number> {
   for (let i = 0; i < Math.max(KB_RUNS, S4_RUNS); i++) {
     if ((await spendOf(db)) >= CAP) { console.log("  cost cap reached; stopping the latency runs"); break; }
     if (i < KB_RUNS) { const cid = id(`lat-kb-${i}`); const r = await post(chat(), body(cid, ["What fees does RelayPay charge for international payments?"])); runs.push({ kind: "kb", id: cid, clientMs: r.ms }); }
-    if (i < S4_RUNS) { const cid = id(`lat-s4-${i}`); const r = await post(chat(), body(cid, ["Can you check transaction TXN-9001?"])); runs.push({ kind: "s4", id: cid, clientMs: r.ms }); }
+    if (i < S4_RUNS) { const cid = id(`lat-s4-${i}`); const r = await post(chat(), body(cid, ["Can you check transaction TXN-9001? My customer ID is CUS-1001."])); runs.push({ kind: "s4", id: cid, clientMs: r.ms }); }
   }
   const logs = await railwayLogs(runs.map((r) => r.id));
   check(logs.length > 0 && runs.every((r) => logs.some((e) => e["event"] === "turn" && e["conversation_id"] === r.id)), `deployed turn log fetched for every run (${logs.length} lines)`);
