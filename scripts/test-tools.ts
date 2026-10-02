@@ -380,6 +380,11 @@ async function main(): Promise<number> {
     console.log(`  guest lookup_customer -> ${JSON.stringify(g).slice(0, 300)}`);
     check(JSON.stringify(g).includes('"verified":true'), "guest call: the two-identifier check still verifies Amara (rules unchanged)", JSON.stringify(g));
     check(JSON.stringify(g).includes("For a quicker check, you can also start a new call as an existing customer."), "guest call: the result carries the guest hint");
+    // D89: on a verified call, no identifiers (or the call's own customer_id) -> that customer's safe projection.
+    const none = ((await guestClient.callTool({ name: "lookup_customer", arguments: {} })).structuredContent ?? {}) as Structured;
+    check(none["status"] === "success" && none["customer_id"] === "CUS-1001" && none["verified"] === true && !("support_notes" in none) && !("contact_email" in none), "verified call, no identifiers -> the verified customer's safe projection (D89)", JSON.stringify(none).slice(0, 200));
+    const own = ((await guestClient.callTool({ name: "lookup_customer", arguments: { customer_id: "CUS-1001" } })).structuredContent ?? {}) as Structured;
+    check(own["status"] === "success" && own["customer_id"] === "CUS-1001", "verified call, its own customer_id -> the same projection (D89)", JSON.stringify(own).slice(0, 200));
   } finally {
     await guestClient.close();
   }

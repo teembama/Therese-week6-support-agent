@@ -215,8 +215,9 @@ railway domain                                # the public https origin
 | `npm run test:deployed -- --base-url …` | The deployed service: routes, webhook, logs, latency | Yes | ≤ $0.15 |
 | `npm run eval:grounding` | The deterministic grounding checks on fixed questions | Yes | a few cents |
 | `npm run test:callpass` | The call page's two paths on the deployed service: form-Amara verified from turn 0 and a spoken identity switch refused; wrong email / wrong name / unknown → the identical 422; guest; the rate limit | Yes (`test-callpass-` rows) | ~$0.02 |
-| `npm run test:login` | Login enforcement on the deployed service: `/calls/pass` 401/200, no / forged / expired / reused pass → login line with no agent run, a valid pass → a normal turn (test sessions from the Supabase admin API; no passwords) | Yes (`test-login-` rows) | ~$0.01 |
 | `npm run eval:scenarios -- --cap 0.50` | **PRD scenarios ×3 + security + robustness against the deployed service, with deterministic DB checks and an LLM judge with verified quotes; writes `evaluations`**. With call passes enforced, add `--path guest` (or `--path customer --form-name Amara --form-email amara@lagosledger.example`): every conversation gets a real one-time pass from the deployed `/calls/pass` | Yes | ~$0.45 |
+
+`npm run test:login` is **retired**: it tested the customer Supabase login (L1, D86), which was removed from the call page in L1b (D88), and its demo customer accounts were deleted on 2026-10-02.
 
 Results: [docs/testing-evidence.md](docs/testing-evidence.md) (BEFORE 15/34 → AFTER 31/34, plus a targeted after2 run).
 

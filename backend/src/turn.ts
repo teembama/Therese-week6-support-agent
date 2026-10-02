@@ -100,6 +100,8 @@ export interface TurnInput {
    * spoken and recorded (answer_type error) with no agent run, before the social fast path.
    */
   denied?: { line: string; statusReason: string; note: string };
+  /** D89: a backend-written context line for a form-identified call (L1b), added to the turn input. */
+  callContext?: string;
 }
 
 export interface TurnSink {
@@ -417,10 +419,12 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
     const toolStatuses = new Map<string, string[]>(); // short tool name -> statuses, in order
     const toolCallsSeen: string[] = []; // "lookup_transaction:success", for notes and the turn log
     const successRecords: string[] = [];
+    let identitySwitch = false; // D89: lookup_customer returned already_verified_other in this attempt
     const observedTools: ObservedTools = {
       succeeded: (name) => toolStatuses.get(name)?.includes("success") ?? false,
       called: (name) => toolStatuses.has(name),
       records: () => [...successRecords],
+      identitySwitch: () => identitySwitch,
     };
     let gate: StreamingGate | null = null;
     /** Logs sentences the runtime grounding filter dropped (D37); never spoken. */
@@ -463,6 +467,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       toolStatuses.set(name, [...(toolStatuses.get(name) ?? []), status]);
       toolCallsSeen.push(`${name}:${status}`);
       if (status === "success" && parsed) successRecords.push(JSON.stringify(parsed));
+      if (name === "lookup_customer" && status === "denied" && parsed?.["reason"] === "already_verified_other") identitySwitch = true;
     };
     let stopReason: string | null = null;
     const discarded: string[] = [];
@@ -696,7 +701,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         evidence = { chunks: new Map(chunks.map((c) => [c.chunk_id, `${c.heading}\n${c.content}`])), callerText: callerWords, tools: observedTools, goodbyeAllowed: goodbyeAllowed(input.userText, previousAgentLine(input.history)) };
         if (chunks.length === 0) notes.push("pre-turn retrieval: insufficient_knowledge");
         retrievalLogged = logRetrievalResult(db, ctx, rq.query.slice(0, 1000), chunks);
-        providePrompt(buildTurnPrompt(input.history, input.userText, chunks));
+        providePrompt(buildTurnPrompt(input.history, input.userText, chunks, input.callContext));
       }
       await consume;
       if (!(await retrievalLogged)) notes.push("pre-turn retrieval_logs write FAILED (see stderr)");
@@ -756,8 +761,12 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         : clientGone
           ? "client disconnected mid-reply"
           : outcome.spoken !== null
-            ? outcome.answerType
+            ? (gate as StreamingGate | null)?.identitySwitchSpoken ? "identity_switch" : outcome.answerType
             : "nothing spoken";
+    if ((gate as StreamingGate | null)?.identitySwitchSpoken) {
+      notes.push("identity_switch: lookup_customer refused a second identity (already_verified_other); fixed one-account line spoken, model text discarded");
+      console.log(JSON.stringify({ event: "identity_switch_line", conversation_id: ctx.conversationId, turn_index: ctx.turnIndex, attempt_id: ctx.attemptId }));
+    }
     const usage = usageFrom(finalResult);
     const metrics = {
       ms_retrieval: msRetrieval,

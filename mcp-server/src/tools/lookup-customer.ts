@@ -111,7 +111,9 @@ async function lookup(args: unknown, { db, ctx }: Parameters<Parameters<typeof w
 
   // D74: already verified -> the same customer again, or one account per call. Checked before the
   // one-identifier rule and before any matching, so a second identity is never "verified further".
-  const verified = given.length ? await verifiedCustomerId(db, ctx.conversationId) : null;
+  // D89: with NO identifiers on a verified call (e.g. identified by the call page form, D88), the
+  // verified customer's safe projection is returned: nothing to match, nothing to refuse.
+  const verified = await verifiedCustomerId(db, ctx.conversationId);
   if (verified) {
     const { data: row, error: readError } = await db.from("customers")
       .select("customer_id, company_name, contact_name, contact_email, plan, account_status, kyc_status")
@@ -129,7 +131,7 @@ async function lookup(args: unknown, { db, ctx }: Parameters<Parameters<typeof w
       // Same customer again: still a guarded (idempotent) write, so a replaced attempt is refused
       // here like everywhere else (D29); throws AttemptNotActiveError -> denied attempt_not_active.
       await guardedRpc(db, "set_verified_customer", { p_conversation_id: ctx.conversationId, p_customer_id: c.customer_id }, ctx.attemptId);
-      return { status: "success", result: { found: true, verified: true, ...safeProjection(c) }, resultSummary: `already verified ${c.customer_id} (given: ${given.join(",")})` };
+      return { status: "success", result: { found: true, verified: true, ...safeProjection(c) }, resultSummary: `already verified ${c.customer_id} (given: ${given.join(",") || "none"})` };
     }
     const note = await logEventBestEffort(db, ctx, "identity_failed", "A different identity was given on a call already verified for another customer (one account per call)", { identifiers: given });
     return { status: "denied", result: { ...ALREADY_VERIFIED_OTHER }, resultSummary: `denied: already_verified_other (verified ${verified}; given: ${given.join(",")})${note}` };

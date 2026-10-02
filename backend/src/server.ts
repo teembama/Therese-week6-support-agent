@@ -25,7 +25,8 @@ import { Admission } from "./admission.js";
 import { startStaleSweeper } from "./stale-sweep.js";
 import { createDiscordNotifier, type Notifier } from "./discord-notify.js";
 import { createRateLimiter, handleRecords, matchRecordsRoute, RECORDS_RATE_LIMIT_PER_MINUTE } from "./records.js";
-import { CALL_PASS_RATE_LIMIT_PER_MINUTE, createAccessChecker, extractCallPass, handleCallPass, LOGIN_LINE } from "./login.js";
+import { CALL_PASS_RATE_LIMIT_PER_MINUTE, createAccessChecker, extractCallPass, firstNameOf, handleCallPass, LOGIN_LINE } from "./login.js";
+import { formCallContext } from "./prompt.js";
 import { sentences } from "./gate.js";
 import { SseStream } from "./sse.js";
 import { runTurn, type TurnHandle, type TurnResult } from "./turn.js";
@@ -108,6 +109,8 @@ const admission = new Admission(MAX_CONCURRENT_TURNS);
 const unfinished = new Set<Promise<void>>();
 /** Per-conversation login check (L1, D86); created in main() when the database client exists. */
 let checkAccess: ReturnType<typeof createAccessChecker> | null = null;
+/** D89: the context line per form-identified conversation ("" = none). */
+const callContexts = new Map<string, string>();
 /** Discord sender (D83); off until the server is listening (and when no webhook URL is set). */
 let notifier: Pick<Notifier, "kick"> = { kick: () => undefined };
 
@@ -144,10 +147,23 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
   // Login enforcement (L1, D86): checked before the in-flight logic (which stays synchronous from
   // inflight.get to inflight.set). A conversation that was ok once is cached: later turns don't wait.
   let denied: { line: string; statusReason: string; note: string } | undefined;
+  let callContext: string | undefined;
   if (CUSTOMER_LOGIN_REQUIRED) {
     const { pass, source } = extractCallPass(json);
     const access = await checkAccess!(turn.callId, pass);
     if (!access.cached) log({ event: "call_access", conversation_id: turn.callId, turn_index: turn.turnIndex, status: access.status, pass_source: source, role: access.role, mapped: access.customerId !== null });
+    // D89: a form-identified call (customer_id on a pass with no login role) gets a context line on
+    // every turn so the agent doesn't re-ask identity. Computed once per conversation per process.
+    if (access.status === "ok" && access.customerId && access.role === null) {
+      callContext = callContexts.get(turn.callId);
+      if (callContext === undefined) {
+        const { data: c } = await db.from("customers").select("contact_name").eq("customer_id", access.customerId).maybeSingle();
+        const first = firstNameOf(String((c as { contact_name?: string } | null)?.contact_name ?? ""));
+        callContext = first ? formCallContext(first, access.customerId) : "";
+        if (callContexts.size >= 5000) callContexts.delete(callContexts.keys().next().value!);
+        callContexts.set(turn.callId, callContext);
+      }
+    }
     // L1b (D88): a form-matched pass verifies the call before its first turn runs, from the PASS's
     // customer (never the caller's words). Best-effort: on failure the call stays unverified and
     // the usual voice check applies.
@@ -218,6 +234,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
       ...(afterPrevious ? { afterPrevious } : {}),
       admit: () => admission.tryAcquire(key),
       ...(denied ? { denied } : {}),
+      ...(callContext ? { callContext } : {}),
     },
     {
       // Reuse a stream already opened by a join that fell through.

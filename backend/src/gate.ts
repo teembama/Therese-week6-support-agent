@@ -36,7 +36,7 @@
 
 import { performance } from "node:perf_hooks";
 import { SentenceFilter, type GroundingFlag, type SentenceFilterOptions } from "@relaypay/shared";
-import { DECLINE_REASONS, HEADER_WINDOW_CHARS, LOOKUP_TOOL_NAMES, MCP_TOOL_PREFIX, OFF_TOPIC_LINE, SAFE_DECLINE_LINE, SOCIAL_LINES, type DeclineReason } from "./config.js";
+import { DECLINE_REASONS, HEADER_WINDOW_CHARS, IDENTITY_SWITCH_LINE, LOOKUP_TOOL_NAMES, MCP_TOOL_PREFIX, OFF_TOPIC_LINE, SAFE_DECLINE_LINE, SOCIAL_LINES, type DeclineReason } from "./config.js";
 
 export type ReplyType = "answer" | "clarify" | "decline" | "escalate" | "social";
 
@@ -67,6 +67,8 @@ export interface ObservedTools {
   called(name: string): boolean;
   /** Successful results as JSON text, for the sentence filter's evidence. */
   records(): string[];
+  /** D89: lookup_customer refused a second identity in this attempt (already_verified_other). */
+  identitySwitch?(): boolean;
 }
 export type SocialIntent = keyof typeof SOCIAL_LINES;
 
@@ -265,6 +267,10 @@ export class StreamingGate {
   private fixedDecline = false;
   /** Evidence-free declines replaced by the fixed line in this turn (for logging). */
   fixedDeclines = 0;
+  /** D89: the identity-switch line was spoken in this turn; every later model word is discarded. */
+  identitySwitchSpoken = false;
+  /** D89: this message spoke the identity-switch line (its end() is a final decline). */
+  private identitySwitchInMessage = false;
   private filter: SentenceFilter | null = null;
   private filteredInMessage = 0;
   private filtered: FilteredSentence[] = [];
@@ -302,6 +308,7 @@ export class StreamingGate {
     this.verdict = null;
     this.socialIntent = null;
     this.fixedDecline = false;
+    this.identitySwitchInMessage = false;
     this.filter = null;
     this.filteredInMessage = 0;
   }
@@ -311,6 +318,17 @@ export class StreamingGate {
     this.raw += delta;
     if (this.stoppedByTool || this.headerState === "invalid") return [];
     if (this.socialIntent || this.fixedDecline) return []; // a fixed line was already spoken; model text is discarded
+    if (this.identitySwitchSpoken) return [];
+    // D89: lookup_customer refused a second identity (already_verified_other) earlier in this
+    // attempt. Whatever the model writes (and however it labels it), the caller hears the FIXED
+    // one-account line, checked before the header so a mislabelled reply can't be blocked into the
+    // generic decline (live test-callpass, D88).
+    if (this.evidence?.tools?.identitySwitch?.()) {
+      this.identitySwitchSpoken = true;
+      this.identitySwitchInMessage = true;
+      this.spokenInMessage.push(IDENTITY_SWITCH_LINE);
+      return [IDENTITY_SWITCH_LINE];
+    }
     if (this.headerState === "pending") {
       const lead = this.raw.trimStart();
       if (lead.length > 0 && !lead.startsWith("[")) return this.invalidate("text before header");
@@ -368,6 +386,9 @@ export class StreamingGate {
 
   end(stopReason: string | null): MessageOutcome {
     const terminal = stopReason === "end_turn" || stopReason === "max_tokens" || stopReason === "stop_sequence";
+    if (this.identitySwitchInMessage) {
+      return { kind: "final", type: "decline", validKbIds: [], unknownKbIds: [], tool: null, speak: [] };
+    }
     if (this.stoppedByTool || !terminal) {
       return { kind: "discarded", raw: this.raw.trim(), spokenBeforeToolUse: [...this.spokenInMessage] };
     }

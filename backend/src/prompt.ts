@@ -79,7 +79,15 @@ function escapeXml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function buildTurnPrompt(history: HistoryEntry[], callerMessage: string, chunks: KbChunk[]): string {
+/**
+ * D89: the context line for a call identified by the call page's form (L1b, D88). Written by the
+ * backend from the pass's customer (never the caller's words); not part of the system prompt.
+ */
+export function formCallContext(firstName: string, customerId: string): string {
+  return `The caller is already identified as ${firstName} (${customerId}) via the call page. Don't ask for their name, company or email to verify them.`;
+}
+
+export function buildTurnPrompt(history: HistoryEntry[], callerMessage: string, chunks: KbChunk[], callContext?: string): string {
   const transcript = history.length
     ? history.map((h) => `${h.role === "caller" ? "Caller" : "Agent"}: ${escapeXml(h.text)}`).join("\n")
     : "(this is the first message of the call)";
@@ -97,6 +105,7 @@ export function buildTurnPrompt(history: HistoryEntry[], callerMessage: string, 
     knowledge,
     "</knowledge_chunks>",
     "",
+    ...(callContext ? ["<call_context>", escapeXml(callContext), "</call_context>", ""] : []),
     '<caller_message untrusted="true">',
     escapeXml(callerMessage),
     "</caller_message>",

@@ -148,6 +148,13 @@ export const OFF_TOPIC_LINE =
   "That's outside what I can help with. I can only help with RelayPay payments and accounts. Is there anything RelayPay-related I can help you with?";
 
 /** Spoken when the gate blocks a reply. */
+/**
+ * D89: spoken when lookup_customer refused a second identity on an already verified call
+ * (already_verified_other, D74). A FIXED line: the model's own text is discarded.
+ */
+export const IDENTITY_SWITCH_LINE =
+  "I can only help with one account per call. If you need help with another account, please start a new call, or I can connect you with a specialist.";
+
 export const SAFE_DECLINE_LINE =
   "I'm sorry, I can't confirm that from our support information. I can connect you with a RelayPay support specialist if you'd like.";
 

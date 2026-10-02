@@ -54,7 +54,10 @@ async function main() {
   const call = `test-callpass-${RUN}-amara`;
   const t0q = "Hi, can you check my account status?";
   const a0 = await turn(call, [t0q], [], body.pass!);
-  console.log(`  t0: ${a0.slice(0, 160)}`);
+  console.log(`  t0: ${a0.slice(0, 200)}`);
+  const { data: t0calls } = await db.from("tool_calls").select("tool_name, status, result_summary").eq("conversation_id", call).eq("turn_index", 0);
+  check(((t0calls ?? []) as Array<{ tool_name: string; status: string }>).some((t) => t.tool_name === "lookup_customer" && t.status === "success"), "D89: \"check my account status\" -> lookup_customer succeeds without re-asking", JSON.stringify(t0calls));
+  check(!/your name|company name|email address|who am i speaking/i.test(a0) && /active|Growth/i.test(a0), "D89: the reply gives the safe summary and doesn't ask for identity", a0);
   const { data: conv } = await db.from("conversations").select("verified_customer_id").eq("conversation_id", call).maybeSingle();
   const { data: ev } = await db.from("conversation_events").select("event_type, metadata, turn_index").eq("conversation_id", call).order("id");
   check(conv?.verified_customer_id === "CUS-1001", "the call is verified as CUS-1001 from turn 0", JSON.stringify(conv));
@@ -65,7 +68,11 @@ async function main() {
   const { data: tc } = await db.from("tool_calls").select("tool_name, status, result_summary").eq("conversation_id", call).eq("tool_name", "lookup_customer").order("id");
   const denied = ((tc ?? []) as Array<{ status: string; result_summary: string }>).some((t) => t.status === "denied" && /already_verified_other/.test(t.result_summary));
   check(denied, "\"I'm Felicia\" -> lookup_customer denied: already_verified_other (D74)", JSON.stringify(tc));
-  check(/one account/i.test(a1), "the agent says it can only help with one account per call", a1);
+  check(a1.includes("I can only help with one account per call. If you need help with another account, please start a new call, or I can connect you with a specialist."), "D89: the FIXED one-account line is spoken", a1);
+  const { data: t1 } = await db.from("conversation_turns").select("answer_type, confidence_note").eq("conversation_id", call).eq("turn_index", 1).maybeSingle();
+  const { data: t1a } = await db.from("turn_attempts").select("status_reason").eq("conversation_id", call).eq("turn_index", 1).eq("status", "completed");
+  check(t1?.answer_type === "decline" && ((t1a ?? []) as Array<{ status_reason: string }>).some((x) => x.status_reason === "identity_switch"), "D89: recorded as answer_type decline, reason identity_switch", JSON.stringify({ t1, t1a }));
+  check(!/restricted|Scale|Starter|Growth|plan|status/i.test(a1), "nothing about any account is disclosed in the refusal", a1);
   const { data: still } = await db.from("conversations").select("verified_customer_id").eq("conversation_id", call).maybeSingle();
   check(still?.verified_customer_id === "CUS-1001", "still verified as CUS-1001 only");
 
