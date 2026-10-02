@@ -1930,6 +1930,40 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - Saved in `docs/screenshots/`.
   - `test:gate` 336/336 (the D92/D93/D94 layout tests updated to the new structure; new D95 tests for the partials, the header variants, aria-current, the container, the hero and the staff structure); live `check-staff` 16/16 (deploy `a8565b2a`).
 
+### D96. Final round: simpler navigation, ringback while connecting, idle check-in handling (2026-10-02)
+
+- **A. Navigation** (visual only):
+  - The header nav is just **Home** (teal underline on `/`); the right side is unchanged ("Start a call", or "Signed in as" and Log out).
+  - The footer is just "© 2026 RelayPay · Demo project".
+  - No "← Back to home" under the staff login card.
+  - Screenshots retaken at 1440px and 390px, inspected, and updated in `docs/screenshots/`. Measured again: the header is the full viewport width, no horizontal overflow, edges aligned, the 3/1-column grid.
+- **B. Ringback** (`backend/public/ringback.js`, pure and unit-tested; wired in `app.js`):
+  - **Sound:** the standard two-tone ringback (440 + 480 Hz), 2 s on / 4 s off, at low gain, generated with the Web Audio API. No audio file, no CSP change, output only (the microphone is untouched).
+  - **Start:** when the call is placed (right before `vapi.start`, after the microphone permission and the call pass), so it never rings over the browser's permission prompt or a "details don't match" message. "Ringing…" is the aria-live status text while it plays.
+  - **Stop:** on `call-start`, the first assistant speech (`speech-start` or an assistant transcript), any error, `call-end`, End call, any failure, and `pagehide`. Never during a connected call: after connect, `start()` does nothing until the next attempt.
+  - **Timeout:** after 15 s without connecting it stops and shows the existing network "Connection problem" message (`connect-timeout`).
+  - Unit tests (`ringback.test.ts`) cover the tones and cadence, stop on connect and never again, stop on error/End call, the 15 s timeout firing once, no audio available, and the `app.js` wiring.
+- **C. Idle check-in:**
+  - **Vapi side** (set by the user; docs: [Idle messages](https://docs.vapi.ai/assistants/idle-messages), [Call timeout settings](https://docs.vapi.ai/documentation/assistants/conversation-behavior/call-timeout-settings), and Vapi's OpenAPI schema `CustomerSpeechTimeoutOptions`):
+    - The idle message is an assistant hook `customer.speech.timeout`, with options `timeoutSeconds` (1–1000, default 7.5), `triggerMaxCount` (1–10, default 3) and `triggerResetMode` (`never` | `onUserSpeech`, default `never`), and the action `{"type": "say", "exact": [...]}`.
+    - Its clock "starts when the assistant finishes speaking and remains active until the user speaks".
+    - The dashboard (assistant editor: **Idle Messages**, **Max Idle Messages**, **Idle Timeout**) offers only preset messages, so the exact custom text needs the API.
+    - The silence timeout is **Advanced → Call Timeout Settings → Silence Timeout** (5–3,600 s), API `silenceTimeoutSeconds`; it ends the call with `silence-timed-out`.
+    - **The docs do not say whether the idle message resets the silence timer.**
+    - **Recommended:**
+      - hook `timeoutSeconds: 15`, `triggerMaxCount: 1`, `triggerResetMode: "onUserSpeech"` (once per silence), say exactly "Are you still there? I'm here if you need anything.";
+      - `silenceTimeoutSeconds: 28` (15 s to the check-in, about 3 s to speak it, then about 10 s).
+    - **This assumes the idle line does not restart the silence timer; one silent test call confirms it.** If the hang-up comes about 28 s after the check-in instead, the timer is restarted by the idle line. A single silence timeout then can't give both "check in at 15 s" and "end 10 s after it": keep the check-in and accept the longer end, or shorten the check-in.
+  - **Page:**
+    - A `silence-timed-out` ending after the caller had spoken shows "Call ended" with "The call ended because there was no response. Start a new call whenever you're ready."
+    - With no caller speech at all, the existing "We couldn't hear you…" microphone message is shown.
+    - Unit tests for both.
+  - **Backend:**
+    - Vapi's idle line arrives in later requests as an assistant message. Turn indexing counts user messages only, so it is unaffected (tested).
+    - The fast path's previous agent line now **skips** the idle line, like a fixed Vapi line (`previousAgentLine` moved to `social-fast-path.ts`). So "anything else?" → idle → "No thanks" is still a goodbye (D73); offer → idle → "No thanks" is still a declined offer; a read-back → idle → "No." still goes to the model (D90).
+- **Also fixed:** a literal backspace character (from an escaped `` in an earlier scripted edit) had made a D95 layout test's "no animation or gradients" regex unable to match, so that check always passed. The repo was scanned and that was the only one.
+- **Tests:** `test:gate` 349/349; MCP 29/29; shared 28/28. Live (deploy `7d7e54f6`): `test:callpass` 14/14; `check-staff` 16/16.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.
