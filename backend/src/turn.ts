@@ -33,7 +33,7 @@ import {
   DB_CALL_TIMEOUT_MS,
   FALLBACK_LINE,
   FILLER_LINE,
-  FILLER_TOOL_NAMES,
+
   FAULT_INJECT,
   PRETURN_DB_BUDGET_MS,
   FIRST_TOKEN_TIMEOUT_MS,
@@ -43,6 +43,7 @@ import {
 } from "./config.js";
 import { sentences, socialLine, StreamingGate, type GateEvidence, type ObservedTools, type SocialIntent } from "./gate.js";
 import { goodbyeAllowed, matchSocial } from "./social-fast-path.js";
+import { ANYTHING_ELSE_LINE, fillerFor, needsAnythingElse, wantsEarlyFiller } from "./filler.js";
 import { beginTurnAttempt, finishTurnAttempt, type AnswerType, type AttemptFinalStatus, type AttemptMetrics } from "./persistence.js";
 import { retryOnce, withTimeout } from "./bounded.js";
 import { isAlive, killTree, spawnCli } from "./process-tree.js";
@@ -540,10 +541,11 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
             // Filler: a lookup or write tool is starting and the caller has heard nothing yet this
             // turn. A fixed backend line, at most once per turn; never model text.
             const toolName = e.content_block.name.replace(MCP_TOOL_PREFIX, "");
-            if (!fillerSpoken && spokenParts.length === 0 && FILLER_TOOL_NAMES.includes(toolName)) {
+            const filler = fillerFor(toolName); // D91: lookups "check that", writes "set that up", log none
+            if (!fillerSpoken && spokenParts.length === 0 && filler) {
               fillerSpoken = true;
               mark("filler");
-              speak(FILLER_LINE);
+              speak(filler);
             }
             const t = gate.toolUse();
             if (t.violation) {
@@ -571,6 +573,13 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
             } else if (outcome.kind === "final") {
               mark("final_message_stop");
               for (const sentence of outcome.speak) speak(sentence);
+              // D91: after a successful ticket or escalation, end on the anything-else question (the
+              // D73 goodbye context) unless the reply already ends with a question.
+              const wrote = observedTools.succeeded("create_escalation") || observedTools.succeeded("create_support_ticket");
+              if (needsAnythingElse(wrote, spokenParts.join(" "))) {
+                speak(ANYTHING_ELSE_LINE);
+                notes.push("anything_else_appended: after a successful write");
+              }
               kbChunkIds = outcome.validKbIds;
               const style = styleViolations(spokenParts.join(" "));
               if (style.length) notes.push(`style_violation: ${style.join(",")}`);
@@ -643,6 +652,15 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
       if (again && !finished) release(FALLBACK_LINE, "error", `fallback model ${modelUsed} also unavailable`);
     })();
 
+    // D91: a reference or a status question will need a lookup: speak the filler NOW, before the
+    // model runs (and not again this turn). A replayed turn strips its own stored filler below.
+    if (wantsEarlyFiller(input.userText)) {
+      fillerSpoken = true;
+      mark("filler_early");
+      speak(FILLER_LINE);
+      notes.push("filler: early (reference or status question)");
+    }
+
     // --- Independent DB work, in parallel, while the CLI boots.
     let msRetrieval: number | null = null;
     let replayed = false;
@@ -690,7 +708,8 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         replayed = true;
         providePrompt(null);
         stop("replay", true);
-        release(started.assistantResponse, started.answerType, undefined, "replay");
+        const stored = started.assistantResponse;
+        release(fillerSpoken && stored.startsWith(FILLER_LINE) ? stored.slice(FILLER_LINE.length).trimStart() : stored, started.answerType, undefined, "replay");
       } else if (finished) {
         registered = true;
         // Timed out, disconnected or replaced during DB work: don't start the model.

@@ -167,8 +167,8 @@ export const SAFE_DECLINE_LINE =
  */
 export const FILLER_LINE = "One moment while I check that.";
 
-/** Tools whose start triggers the filler line (not log_conversation_event, which is instant). */
-export const FILLER_TOOL_NAMES: readonly string[] = ["lookup_customer", "lookup_transaction", "lookup_payout", "create_support_ticket", "create_escalation"];
+/** D91: the filler for write tools (create_support_ticket, create_escalation); lookups get FILLER_LINE. */
+export const WRITE_FILLER_LINE = "One moment while I set that up.";
 
 /**
  * At most this many agent turns (a Claude CLI + MCP server each) run at once in this process
