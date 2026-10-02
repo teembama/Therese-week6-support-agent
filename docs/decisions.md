@@ -1710,6 +1710,23 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - Server logs: every first check found the pass at `call.assistantOverrides.variableValues.callPass`. **Still to confirm from a real browser call:** these requests were built by our scripts in Vapi's shape; the first browser call's `call_access` log line confirms Vapi forwards the field (smoke test).
 - **Incident while enabling:** the flag was turned on before `SUPABASE_PUBLISHABLE_KEY` was on the service. For about a minute (deploy `973aff09`) `/config` returned 503 "login not configured", so the page couldn't start a call. It was rolled back at once and re-enabled after the key was applied. Lesson: check every dependent variable before setting a flag.
 
+### D87. L2: read-only staff dashboard (flag `STAFF_DASHBOARD_ENABLED`; 2026-10-02)
+
+- **Why now, and why staff auth first** (D85): the dashboard shows customer personal data (names, emails, callback details), so it exists only behind a verified staff login.
+- **API `GET /staff/records?type=tickets|callbacks[&include_test=1]`** (`backend/src/staff.ts`), read-only:
+  - **Auth:** `Authorization: Bearer <Supabase access token>`. The backend verifies it with Supabase and requires `app_metadata.role === "staff"`. No or invalid session → 401; any other role → 403; a bad `type` → 400.
+  - **Raised tickets:** support tickets not linked to an escalation. **Scheduled callbacks:** escalations with `call_booked = true` (a callback time was given). Newest first, at most 100.
+  - **Whitelisted fields only**, never support notes or amounts; amounts inside a summary or reason are masked as `[amount]` (as in Discord, D83).
+  - **Test conversations** (channel `test`) are hidden unless `include_test=1`.
+  - Rate-limited to 60 per minute per IP; `Cache-Control: no-store`; logs carry a short hash of the user ID only.
+  - With the flag off, `/staff`, its scripts and the API are 404. The flag is read per request.
+- **Page `/staff`:** Supabase Auth with the publishable key (session in `sessionStorage`), Log out, the session-expiry message, two filter buttons ("Raised tickets" / "Scheduled callbacks", `aria-pressed`), cards, Refresh, an empty state, and "This account isn't staff." for a customer. `?include_test=1` on the page URL shows test data. The browser never reads tables.
+- **Tests:**
+  - Unit (`staff.test.ts`, `staff-view.test.ts`): 401/403/400/429, the two filters' rows and fields, test-channel exclusion, no notes or amounts, page logic. `test:gate` 289/289.
+  - **Live (deploy `e076c10b`, flag on), `scripts/check-staff.ts` 16/16:** the page is served; no token → 401; a customer session → 403; a bad type → 400. A staff session: tickets 200 (1 real, 79 with test data), callbacks 200 (0 real, 36 with test data, every one with a time). No notes or amounts anywhere; no test conversations by default.
+- **Known gap:** the only real voice escalation predates migration 006 and has no callback time, so "Scheduled callbacks" is empty without `?include_test=1` until a live escalation with a time is made.
+- Built by a background agent (no commits or deploys) and reviewed before commit `7813565`.
+
 ## Migration log
 
 - 001 applied to Supabase from commit ab76cb5 (ab76cb506e025890454c3a8c61c06291e85f21b9) on 2026-09-29.

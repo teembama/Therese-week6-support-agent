@@ -23,6 +23,13 @@ Voice support requires a login (D86).
 - **The login doesn't verify you as a RelayPay customer on the call.** The agent still asks who you are and verifies you by voice, exactly as before, so the PRD scenarios (for example "I'm Amara from LagosLedger") behave the same when logged in as the demo account.
 - The browser uses Supabase's publishable key for login only. It never reads the database.
 
+### Staff dashboard (graders)
+
+- **URL:** `/staff` on the live service (https://relaypay-backend-production-aa34.up.railway.app/staff). **Staff account:** `care@relaypay.example`; the password is provided separately in the submission.
+- **Read-only.** Two filters: **Raised tickets** (tickets without an escalation) and **Scheduled callbacks** (escalations with a callback time). Press **Refresh** for new records.
+- **Real calls only by default.** Add `?include_test=1` to the URL to include test and eval data: `/staff?include_test=1`.
+- Only staff accounts can see it; a customer account gets "This account isn't staff." It shows no support notes and no amounts (D87).
+
 ---
 
 ## Architecture
