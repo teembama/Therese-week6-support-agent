@@ -80,6 +80,6 @@ export function emptyText(type) {
 
 /** The count line announced after a load. */
 export function countText(type, n) {
-  const label = FILTERS.find((f) => f.type === type)?.label.toLowerCase() ?? type;
-  return `${n} ${label}${n === 100 ? " (latest 100)" : ""}.`;
+  const [one, many] = type === "callbacks" ? ["scheduled callback", "scheduled callbacks"] : ["raised ticket", "raised tickets"];
+  return `${n} ${n === 1 ? one : many}${n === 100 ? " (latest 100)" : ""}.`;
 }

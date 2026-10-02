@@ -144,7 +144,9 @@ async function init() {
   ui.loginForm.addEventListener("submit", submitLogin);
   ui.logout.addEventListener("click", async () => {
     loggingOut = true;
-    try { await supabase.auth.signOut(); } catch { showLogin(STAFF_MESSAGES.loggedOut); }
+    // Log out signs out and goes to the landing page (kept from D93).
+    try { await supabase.auth.signOut(); } catch { /* signed out locally anyway */ }
+    location.assign("/");
   });
   ui.refresh.addEventListener("click", () => void load());
   for (const b of ui.filters) b.addEventListener("click", () => selectFilter(b.dataset.type));

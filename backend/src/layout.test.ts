@@ -70,3 +70,13 @@ describe("call page layout (D92)", () => {
     assert.ok(!/gradient/i.test(css), "no gradients (brand direction)");
   });
 });
+
+describe("kept from D93 after the revert", () => {
+  it("staff Log out is a button that signs out and goes to the landing page", () => {
+    assert.match(read("staff.html"), /<button id="logout" type="button" class="button secondary small">Log out<\/button>/);
+    const js = read("staff.js");
+    const logout = js.slice(js.indexOf('ui.logout.addEventListener("click"'), js.indexOf("ui.refresh.addEventListener"));
+    assert.match(logout, /signOut\(\)/);
+    assert.match(logout, /location\.assign\("\/"\)/);
+  });
+});
