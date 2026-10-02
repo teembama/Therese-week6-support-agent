@@ -51,6 +51,8 @@ The AFTER judge cost more because every call now carries the approved-procedure 
 | after4 `…13-11-57-971Z-after4` | `6993cf50` / `e637f65` | **3/3** | **D72**: the flow is enforced by the input schema (`email_confirmed_by_caller`, plus a preferred time or `preferred_time_declined`), with an actionable `invalid_input` otherwise | The full flow 3/3, clean follow-up text, judge clean. |
 | after5 `…23-23-06-674Z-after5` | `e59b1556` / `abe9e03` | **3/3** | **D82** (migration 006: escalation enrichment, `escalation_updated`, notification outbox) | The full flow 3/3, judge clean. Each run queued exactly one `escalation_created` outbox row (pending, no amounts or notes) with call_booked true and time "Tomorrow morning". No enrichment happened (no speculative attempt created the escalation first). $0.103 against a $0.15 cap, run with `--stop-on-network-error`, no network errors. |
 
+**Login (L1, D86), 2026-10-02:** `test:login` 18/18 against the deployed service with `CUSTOMER_LOGIN_REQUIRED=1`; S1, S3, S7 ×1 with real one-time passes (`eval-2026-10-02T11-20-20-912Z-login`) **3/3**, $0.050.
+
 **Web page round and D78 (2026-10-01, evening):** unit-tested and deployed; **live check pending.**
 
 | Change | Commit / deploy | Evidence so far | Live check |

@@ -7,7 +7,21 @@ A voice customer-support agent for RelayPay, a (fictional) cross-border payments
 
 Everything it says passes a grounding gate in code before it is spoken.
 
-**Live:** https://relaypay-backend-production-aa34.up.railway.app (click **Start call** and allow the microphone)
+**Live:** https://relaypay-backend-production-aa34.up.railway.app (log in, click **Start call** and allow the microphone)
+
+### Logging in (graders)
+
+Voice support requires a login (D86).
+- **Demo customer account:** `customer@relaypay.example`. The password is provided separately in the submission.
+- Open the live page, enter the email and password, and press **Log in**. Then **Start call**. **Log out** is next to "Signed in as …".
+- The login lasts for this browser tab only. When it expires, the page returns to the login form with "Your session has expired. Please log in again."
+
+**What the login enforces:**
+- Every call needs a **one-time call pass**. The page gets it from the backend just before the call starts, and the backend issues one only after verifying your Supabase session and your account's role (customer or staff, set by RelayPay, not editable by users).
+- A pass expires after 5 minutes and works for **one call only**.
+- A call without a valid pass (missing, forged, expired, or already used) hears "Please log in on the RelayPay page to use voice support." and nothing else: the agent doesn't run.
+- **The login doesn't verify you as a RelayPay customer on the call.** The agent still asks who you are and verifies you by voice, exactly as before, so the PRD scenarios (for example "I'm Amara from LagosLedger") behave the same when logged in as the demo account.
+- The browser uses Supabase's publishable key for login only. It never reads the database.
 
 ---
 
@@ -71,6 +85,8 @@ The full design is in [docs/system-overview.md](docs/system-overview.md), and ev
    - `AGENT_MODEL=claude-haiku-4-5`, `AGENT_MODEL_FALLBACK=claude-sonnet-5-5`;
    - `VAPI_PUBLIC_KEY`, `VAPI_ASSISTANT_ID`.
 
+   Login (D86): `SUPABASE_PUBLISHABLE_KEY` (the project's publishable key) and `CUSTOMER_LOGIN_REQUIRED=1` to enforce it. Accounts are Supabase Auth users with `app_metadata.role` = `customer` or `staff`, set through the admin API. With the flag off, calls need no login.
+
    Optional: `DISCORD_WEBHOOK_URL` turns on team notifications in Discord for new tickets and escalations (D83). Without it, the sender stays off and rows stay pending.
 
    The `RELAYPAY_*` variables are test knobs: leave them at their defaults.
@@ -81,6 +97,7 @@ The full design is in [docs/system-overview.md](docs/system-overview.md), and ev
    4. `db/migrations/004_social_answer_type.sql`
    5. `db/migrations/005_guarded_writes_and_events.sql`
    6. `db/migrations/006_escalation_enrichment_and_outbox.sql`
+   7. `db/migrations/007_call_passes.sql`
 
    Migrations are append-only: never edit one that has been applied.
 4. **Seed the business data** (customers, transactions and payouts from `assets/seed-data/*.csv`; upserts, so it's safe to rerun):
@@ -192,7 +209,8 @@ railway domain                                # the public https origin
 | `npm run test:endpoint` | End-to-end endpoint behaviour, fault injection, latency (local servers) | Yes | a few cents |
 | `npm run test:deployed -- --base-url …` | The deployed service: routes, webhook, logs, latency | Yes | ≤ $0.15 |
 | `npm run eval:grounding` | The deterministic grounding checks on fixed questions | Yes | a few cents |
-| `npm run eval:scenarios -- --cap 0.50` | **PRD scenarios ×3 + security + robustness against the deployed service, with deterministic DB checks and an LLM judge with verified quotes; writes `evaluations`** | Yes | ~$0.45 |
+| `npm run test:login` | Login enforcement on the deployed service: `/calls/pass` 401/200, no / forged / expired / reused pass → login line with no agent run, a valid pass → a normal turn (test sessions from the Supabase admin API; no passwords) | Yes (`test-login-` rows) | ~$0.01 |
+| `npm run eval:scenarios -- --cap 0.50` | **PRD scenarios ×3 + security + robustness against the deployed service, with deterministic DB checks and an LLM judge with verified quotes; writes `evaluations`**. With login enforced, add `--login-email customer@relaypay.example`: every conversation carries a real one-time pass | Yes | ~$0.45 |
 
 Results: [docs/testing-evidence.md](docs/testing-evidence.md) (BEFORE 15/34 → AFTER 31/34, plus a targeted after2 run).
 
@@ -201,7 +219,8 @@ Results: [docs/testing-evidence.md](docs/testing-evidence.md) (BEFORE 15/34 → 
 - **Secrets stay server-side.**
   - The Supabase service role key and the Anthropic key are only in the backend's environment.
   - The agent's CLI process gets only the Anthropic key. The MCP process gets only Supabase credentials and the conversation, turn and attempt IDs; it refuses to start if the Anthropic key is present.
-  - `/config` serves only the Vapi **public** key and assistant ID.
+  - `/config` serves only the Vapi **public** key and assistant ID, plus the Supabase URL and **publishable** key when login is on.
+- **Login (D86):** call passes are 32 random bytes, stored only as SHA-256, valid 5 minutes, redeemed once (row lock), and never logged. Roles come only from Supabase `app_metadata`, verified by the backend. `/calls/pass` is rate-limited.
 - **The endpoint token is in the URL path**, compared in constant time. Request paths are redacted in logs. Rotate it after demos.
 - **The agent has no built-in tools** (no shell, files or web), only the 6 MCP tools. A tool-list guard fails the turn if the set differs (D21).
 - **Sensitive data:**

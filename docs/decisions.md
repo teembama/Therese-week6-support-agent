@@ -1704,7 +1704,11 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
     - `/calls/pass` 200 (hash stored, nothing sensitive logged), 401, 403, 429;
     - the denied turn (login line, `error`/`login_required`, no model, the admission slot never requested);
     - page messages and markup.
-  - Live: `npm run test:login` (deployed, flag on) and S1, S3, S7 ×1 with `eval-scenarios --login-email` (real passes). Pending: 007 to be applied.
+  - **Live (2026-10-02, deploy `d1c1037d`, flag on):**
+    - `npm run test:login` **18/18**: `/config`, `/calls/pass` 401 (none or garbage) and 200 (customer and staff sessions from the admin API), the pass stored as its hash with a 5-minute expiry; no, forged, expired and reused passes → the login line, recorded `error`/`login_required`, no model, no tool calls; a valid pass → a normal turn, the pass marked used and linked, and a later turn without it served.
+    - S1, S3, S7 ×1 with real passes (`--login-email customer@relaypay.example`, run `eval-2026-10-02T11-20-20-912Z-login`): **3/3**, $0.050. Voice identity is unchanged (S3 verified Amara by voice while logged in as the demo customer).
+    - Server logs: every first check found the pass at `call.assistantOverrides.variableValues.callPass`. **Still to confirm from a real browser call:** these requests were built by our scripts in Vapi's shape; the first browser call's `call_access` log line confirms Vapi forwards the field (smoke test).
+- **Incident while enabling:** the flag was turned on before `SUPABASE_PUBLISHABLE_KEY` was on the service. For about a minute (deploy `973aff09`) `/config` returned 503 "login not configured", so the page couldn't start a call. It was rolled back at once and re-enabled after the key was applied. Lesson: check every dependent variable before setting a flag.
 
 ## Migration log
 

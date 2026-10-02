@@ -5,6 +5,7 @@ Things that must be done or undone before the project is submitted.
 ## Submission day (2026-10-02), before the presentation
 
 - [ ] **FIRST: live smoke test** (unit-tested and deployed; live check pending; D78–D81, D83, D84). Do it before recording.
+  0. **Log in** as `customer@relaypay.example` (D86). Check that the first call's `call_access` log line shows `status="ok"` with `pass_source="call.assistantOverrides.variableValues.callPass"` (`railway logs | grep call_access`): this confirms Vapi forwards the pass. Then try **Log out**: the login form returns.
   1. Start a call with the weather as the **first** question ("What's the weather in Lagos like?") → "That's outside what I can help with. I can only help with RelayPay payments and accounts. Is there anything RelayPay-related I can help you with?"
   2. Say "No thanks" → "Thanks for calling RelayPay. Goodbye."
   3. During the call, press **Hide captions** and then **Show captions**: the panel must disappear and come back, with the label changing.
