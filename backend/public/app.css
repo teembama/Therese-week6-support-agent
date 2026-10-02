@@ -69,8 +69,7 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
 .state-icon[data-state="loading"], .state-icon[data-state="connecting"], .state-icon[data-state="mic"] { border-radius: 50%; border-top-color: transparent; animation: spin 1s linear infinite; }
 .state-icon[data-state="ready"] { border-radius: 50%; }
 .state-icon[data-state="listening"] { border-radius: 50%; background: var(--teal); border-color: var(--teal); }
-/* D93: listening (circle) and speaking (square) are both teal; the SHAPE still tells them apart. */
-.state-icon[data-state="speaking"] { border-radius: 4px; background: var(--teal); border-color: var(--teal); }
+.state-icon[data-state="speaking"] { border-radius: 4px; background: var(--primary); border-color: var(--primary); }
 .state-icon[data-state="ended"] { border-radius: 2px; }
 .state-icon[data-state="error"] { width: 0; height: 0; border: 9px solid transparent; border-bottom: 16px solid var(--danger); border-top: 0; }
 @media (prefers-reduced-motion: reduce) { .state-icon { animation: none !important; } }
@@ -121,7 +120,7 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
 .captions-lines .who.agent { color: var(--primary); }
 .jump-button {
   justify-self: end; margin-top: 6px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
-  border: 2px solid var(--teal); background: var(--surface); color: var(--teal); font: inherit; font-size: 0.85rem; font-weight: 650;
+  border: 1px solid var(--teal); background: var(--surface); color: var(--teal); font: inherit; font-size: 0.85rem;
 }
 .jump-button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .captions { display: grid; }
@@ -184,16 +183,17 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
 /* "Reference: <code>" under an error, for support only (D81). */
 .error-ref { margin: 8px 0 0; font-size: 0.8rem; color: var(--muted); }
 
-/* Staff dashboard (L2, D87; full page D93): filter toggles, record cards. */
+/* Staff dashboard (L2, D87): a wider card, filter toggles, record cards. */
+.staff-body { place-items: start center; }
+.staff-card { max-width: 56rem; }
 .dashboard { display: grid; gap: 14px; }
 .staff-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .filter-button {
-  font: inherit; font-weight: 650; font-size: 0.95rem; min-height: 40px; padding: 0 16px; border-radius: 10px; cursor: pointer;
-  border: 2px solid var(--border); background: var(--surface); color: var(--primary);
+  font: inherit; font-weight: 650; font-size: 0.95rem; min-height: 40px; padding: 0 16px; border-radius: 999px; cursor: pointer;
+  border: 2px solid var(--primary); background: var(--surface); color: var(--primary);
 }
-/* D93: the ACTIVE filter is teal-outlined with a teal underline (and aria-pressed for assistive tech). */
-.filter-button[aria-pressed="true"] { border-color: var(--teal); box-shadow: inset 0 -4px 0 var(--teal); }
+.filter-button[aria-pressed="true"] { background: var(--primary); color: #fff; }
 .filter-button:focus-visible, .button.small:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .button.small { min-height: 40px; font-size: 0.9rem; padding: 0 16px; }
 .records-status { margin: 0; color: var(--muted); }
@@ -243,47 +243,16 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
   .col-right .records { max-height: none; }
 }
 
-/* ---- Shared full-page layout and nav bar (D93): landing, staff and support pages.
-   Deep blue stays primary (nav text, headings, buttons); teal is the accent, used sparingly:
-   the nav bar's bottom line, the active filter, focus rings and links, card accents, the
-   high-priority badge outline, the call status indicator, "Jump to latest", and the landing
-   choices' hover/focus. Contrast: teal #0f766e on white 5.4:1 and on #f7f7f4 5.1:1 (AA). */
-.page-body { display: block; padding: 0; min-height: 100vh; }
-.topbar { border-bottom: 3px solid var(--teal); }
-.topbar-brand { display: flex; align-items: center; gap: 10px; }
-.topbar-brand .logo { width: 36px; height: 36px; border-radius: 10px; font-size: 1.05rem; }
-.topbar-title { margin: 0; font-size: 1.1rem; font-weight: 650; color: var(--primary); }
-.topbar-account { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 0.9rem; color: var(--muted); }
-.topbar-account p { margin: 0; }
-.topbar-account strong { color: var(--ink); }
-.topbar-link { color: var(--teal); font-weight: 650; text-decoration: underline; }
-.topbar-link:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 4px; }
-.page { width: 100%; max-width: 90rem; margin: 0 auto; padding: 24px; display: grid; gap: 18px; align-content: start; }
-.page:focus { outline: none; }
-.page .lede { margin: 0; }
-.staff-login { max-width: 28rem; background: var(--surface); }
-.dashboard { display: grid; gap: 16px; }
-.staff-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr)); gap: 16px; }
-.badge-high { border-color: var(--teal); color: var(--teal); border-width: 2px; }
-@media (max-width: 640px) {
-  .page { padding: 16px; }
-  .topbar { padding: 12px 16px; flex-wrap: wrap; }
-  .staff-list { grid-template-columns: 1fr; }
-}
-
-/* ---- Landing page (D92; full page D93): two large choices filling the page. */
-.landing { min-height: calc(100vh - 64px); grid-template-rows: auto 1fr auto; }
-.landing-intro h1 { margin: 0; font-size: 1.6rem; color: var(--primary); }
-.landing-options { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); align-content: stretch; }
+/* ---- Landing page (D92): two clear options. */
+.landing-options { display: grid; gap: 14px; }
 .landing-option {
-  display: grid; align-content: center; gap: 8px; min-height: 14rem; padding: 32px; border-radius: 16px; text-decoration: none;
-  border: 2px solid var(--border); border-left: 6px solid var(--primary); background: var(--surface); color: var(--ink);
+  display: grid; gap: 4px; padding: 18px 20px; border-radius: 12px; text-decoration: none;
+  border: 2px solid var(--primary); background: var(--surface); color: var(--ink);
 }
-.landing-option strong { color: var(--primary); font-size: 1.5rem; }
-.landing-option span { color: var(--muted); font-size: 1.05rem; }
-.landing-option:hover, .landing-option:focus-visible { border-color: var(--teal); border-left-color: var(--teal); box-shadow: 0 0 0 1px var(--teal); }
+.landing-option strong { color: var(--primary); font-size: 1.1rem; }
+.landing-option span { color: var(--muted); }
+.landing-option:hover { border-color: var(--primary-hover); background: var(--bg); }
 .landing-option:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .landing-option.primary { background: var(--primary); border-color: var(--primary); }
 .landing-option.primary strong, .landing-option.primary span { color: #fff; }
-.landing-option.primary:hover, .landing-option.primary:focus-visible { background: var(--primary-hover); border-color: var(--teal); border-left-color: var(--teal); }
-@media (max-width: 640px) { .landing-option { min-height: 9rem; padding: 22px; } .landing-option strong { font-size: 1.25rem; } }
+.landing-option.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }

@@ -3,13 +3,13 @@
 // verifies the staff token and role on the server. The browser never reads tables.
 
 import { loginErrorMessage, MESSAGES, SUPABASE_JS_URL, validLoginForm } from "/auth.js";
-import { badgeClass, cardFor, countText, emptyText, recordsOutcome, recordsPath, STAFF_MESSAGES } from "/staff-view.js";
+import { cardFor, countText, emptyText, recordsOutcome, recordsPath, STAFF_MESSAGES } from "/staff-view.js";
 
 const el = (id) => document.getElementById(id);
 const ui = {
   pageError: el("page-error"), login: el("login"), loginForm: el("login-form"), loginEmail: el("login-email"),
   loginPassword: el("login-password"), loginError: el("login-error"), loginMessage: el("login-message"), loginSubmit: el("login-submit"),
-  dashboard: el("dashboard"), account: el("account"), accountEmail: el("account-email"), logout: el("logout"), refresh: el("refresh"),
+  dashboard: el("dashboard"), accountEmail: el("account-email"), logout: el("logout"), refresh: el("refresh"),
   status: el("records-status"), list: el("records-list"), filters: [...document.querySelectorAll(".filter-button")],
 };
 
@@ -21,7 +21,6 @@ const includeTest = new URLSearchParams(location.search).get("include_test") ===
 
 function showLogin(message) {
   ui.dashboard.hidden = true;
-  ui.account.hidden = true;
   ui.login.hidden = false;
   ui.loginMessage.textContent = message ?? "";
   ui.loginError.hidden = true;
@@ -32,7 +31,6 @@ function showLogin(message) {
 function showDashboard(email) {
   ui.login.hidden = true;
   ui.dashboard.hidden = false;
-  ui.account.hidden = false;
   ui.accountEmail.textContent = email;
   // Outside the auth callback: supabase-js can deadlock if its methods are awaited inside it.
   setTimeout(() => void load(), 0);
@@ -52,7 +50,7 @@ function cardItem(type, record) {
   const h = Object.assign(document.createElement("h3"), { textContent: card.title });
   const badges = document.createElement("p");
   badges.className = "badges";
-  for (const b of card.badges) badges.append(Object.assign(document.createElement("span"), { className: badgeClass(b), textContent: b }));
+  for (const b of card.badges) badges.append(Object.assign(document.createElement("span"), { className: "badge", textContent: b }));
   const dl = document.createElement("dl");
   for (const [label, value] of card.fields) {
     dl.append(Object.assign(document.createElement("dt"), { textContent: label }), Object.assign(document.createElement("dd"), { textContent: value }));
@@ -146,9 +144,7 @@ async function init() {
   ui.loginForm.addEventListener("submit", submitLogin);
   ui.logout.addEventListener("click", async () => {
     loggingOut = true;
-    // UI round (D93): Log out signs out and goes to the landing page.
-    try { await supabase.auth.signOut(); } catch { /* signed out locally anyway */ }
-    location.assign("/");
+    try { await supabase.auth.signOut(); } catch { showLogin(STAFF_MESSAGES.loggedOut); }
   });
   ui.refresh.addEventListener("click", () => void load());
   for (const b of ui.filters) b.addEventListener("click", () => selectFilter(b.dataset.type));

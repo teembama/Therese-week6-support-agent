@@ -70,38 +70,3 @@ describe("call page layout (D92)", () => {
     assert.ok(!/gradient/i.test(css), "no gradients (brand direction)");
   });
 });
-
-describe("full-page staff, landing and support with one nav bar style; teal accents (D93)", () => {
-  const css = read("app.css");
-  const staff = read("staff.html");
-  const landing = read("landing.html");
-  const support = read("index.html");
-  it("staff: a full-width nav bar (logo + title left; 'Signed in as' + a Log out BUTTON right, shown only when signed in)", () => {
-    assert.match(staff, /<header class="topbar">[\s\S]*<span class="logo"[\s\S]*RelayPay staff dashboard[\s\S]*<div id="account" class="topbar-account" hidden>[\s\S]*Signed in as <strong id="account-email"><\/strong>[\s\S]*<button id="logout" type="button" class="button secondary small">Log out<\/button>/);
-    assert.ok(!staff.includes("staff-card") && !staff.includes('class="card'), "no centred narrow box");
-    assert.match(staff, /class="page staff-page"/);
-  });
-  it("staff: Log out signs out and goes to the landing page", () => {
-    const js = read("staff.js");
-    const logout = js.slice(js.indexOf('ui.logout.addEventListener("click"'), js.indexOf('ui.refresh.addEventListener'));
-    assert.match(logout, /signOut\(\)/);
-    assert.match(logout, /location\.assign\("\/"\)/);
-  });
-  it("landing and support use the same nav bar; landing is full page with two large choices", () => {
-    for (const html of [landing, support]) assert.match(html, /<header class="topbar">[\s\S]*class="brand topbar-brand brand-link"[\s\S]*<span class="topbar-title">RelayPay support<\/span>/);
-    assert.ok(!landing.includes('class="card'), "no centred box");
-    assert.match(landing, /class="page landing"/);
-    assert.match(css, /\.landing-option \{[\s\S]*min-height: 14rem;/);
-    assert.match(support, /class="support-grid"/);
-  });
-  it("teal accents: nav line, active filter, high-priority badge, speaking indicator, landing hover/focus; deep blue stays primary", () => {
-    assert.match(css, /\.topbar \{ border-bottom: 3px solid var\(--teal\); \}/);
-    assert.match(css, /\.filter-button\[aria-pressed="true"\] \{ border-color: var\(--teal\); box-shadow: inset 0 -4px 0 var\(--teal\); \}/);
-    assert.match(css, /\.badge-high \{ border-color: var\(--teal\); color: var\(--teal\);/);
-    assert.match(css, /\.state-icon\[data-state="speaking"\] \{[^}]*background: var\(--teal\)/);
-    assert.match(css, /\.state-icon\[data-state="listening"\] \{[^}]*background: var\(--teal\)/);
-    assert.match(css, /\.landing-option:hover, \.landing-option:focus-visible \{ border-color: var\(--teal\);/);
-    assert.match(css, /--focus: #0f766e;/);
-    assert.match(css, /\.button\.primary \{ background: var\(--primary\);/);
-  });
-});

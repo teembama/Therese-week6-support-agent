@@ -9,25 +9,19 @@
   <link rel="stylesheet" href="/app.css">
   <script type="module" src="/staff.js"></script>
 </head>
-<body class="page-body staff-body">
-  <a class="skip-link" href="#main">Skip to content</a>
-  <header class="topbar">
-    <div class="brand topbar-brand">
+<body class="staff-body">
+  <main class="card staff-card" aria-labelledby="title">
+    <header class="brand">
       <span class="logo" aria-hidden="true">R</span>
-      <h1 id="title" class="topbar-title">RelayPay staff dashboard</h1>
-    </div>
-    <div id="account" class="topbar-account" hidden>
-      <p>Signed in as <strong id="account-email"></strong></p>
-      <button id="logout" type="button" class="button secondary small">Log out</button>
-    </div>
-  </header>
-
-  <main id="main" class="page staff-page" aria-labelledby="title" tabindex="-1">
-    <p class="lede">Raised tickets and scheduled callbacks. Read-only.</p>
+      <div>
+        <h1 id="title">RelayPay staff dashboard</h1>
+        <p class="lede">Raised tickets and scheduled callbacks. Read-only.</p>
+      </div>
+    </header>
 
     <p id="page-error" class="error" role="alert" hidden></p>
 
-    <section id="login" class="login staff-login" aria-labelledby="login-title" hidden>
+    <section id="login" class="login" aria-labelledby="login-title" hidden>
       <h2 id="login-title">Staff log in</h2>
       <p id="login-message" class="login-message" role="status" aria-live="polite"></p>
       <form id="login-form" class="login-form" novalidate>
@@ -41,6 +35,10 @@
     </section>
 
     <section id="dashboard" class="dashboard" aria-labelledby="records-title" hidden>
+      <div class="account">
+        <p>Signed in as <strong id="account-email"></strong></p>
+        <button id="logout" type="button" class="link-button">Log out</button>
+      </div>
       <div class="staff-toolbar">
         <div class="filters" role="group" aria-label="Show">
           <button type="button" class="filter-button" data-type="tickets" aria-pressed="true">Raised tickets</button>
