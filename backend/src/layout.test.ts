@@ -104,17 +104,21 @@ describe("site redesign: shared header and footer, one container (D95)", () => {
     const home = siteHeader("home"), support = siteHeader("support"), staff = siteHeader("staff");
     assert.match(home, /<a class="wordmark" href="\/"[^>]*><span class="logo" aria-hidden="true">R<\/span><span class="wordmark-text">RelayPay<\/span><\/a>/);
     assert.match(home, /<a href="\/" aria-current="page">Home<\/a>/);
-    assert.match(support, /<a href="\/support" aria-current="page">Customer support<\/a>/);
-    assert.match(staff, /<a href="\/staff" aria-current="page">Staff<\/a>/);
+    // D96: the nav is only Home; it is the current page only on /.
+    for (const h of [home, support, staff]) {
+      assert.equal((h.match(/<li><a /g) ?? []).length, 1);
+      assert.ok(!h.includes(">Customer support</a>") && !h.includes(">Staff</a>"));
+    }
+    assert.ok(!support.includes("aria-current") && !staff.includes("aria-current"));
     for (const h of [home, support]) assert.match(h, /<a class="button primary small header-cta" href="\/support">Start a call<\/a>/);
     assert.ok(!staff.includes("Start a call"));
     assert.match(staff, /<div id="account" class="header-account" hidden><span>Signed in as <strong id="account-email"><\/strong><\/span>/);
     assert.equal((home.match(/aria-current/g) ?? []).length, 1);
   });
-  it("footer: the demo line and the nav links", () => {
+  it("footer: only the demo line (D96)", () => {
     const f = siteFooter();
     assert.match(f, /© 2026 RelayPay · Demo project/);
-    for (const href of ['href="/"', 'href="/support"', 'href="/staff"']) assert.ok(f.includes(href), href);
+    assert.ok(!f.includes("<a ") && !f.includes("<nav"));
   });
   it("served pages are rendered (the header is in the response, not a placeholder)", async () => {
     const { server, base } = await serve();
@@ -162,9 +166,10 @@ describe("support and staff page structure (D95)", () => {
     assert.match(html, /<div class="page-head">\s*<p class="eyebrow">Customer support<\/p>\s*<h1 id="title">RelayPay voice support<\/h1>/);
     assert.ok(html.indexOf('class="page-head"') < html.indexOf('class="support-grid"'));
   });
-  it("/staff: a centred login card with a back link; the dashboard title area; the 3/2/1 grid", () => {
+  it("/staff: a centred login card (no back link: Home is in the header, D96); the dashboard title area; the 3/2/1 grid", () => {
     const html = read("staff.html");
-    assert.match(html, /<section id="login" class="login-wrap"[\s\S]*<div class="login-card">\s*<h1 id="login-title">Staff sign in<\/h1>[\s\S]*<\/div>\s*<p class="back-link"><a href="\/">← Back to home<\/a><\/p>/);
+    assert.match(html, /<section id="login" class="login-wrap"[\s\S]*<div class="login-card">\s*<h1 id="login-title">Staff sign in<\/h1>/);
+    assert.ok(!html.includes("Back to home"));
     assert.match(html, /<p class="eyebrow">Staff<\/p>\s*<h1 id="title">Raised tickets and scheduled callbacks<\/h1>\s*<p class="lede">Read-only.<\/p>/);
     const css = read("app.css");
     assert.match(css, /\.login-card \{ width: 100%; max-width: 420px;/);

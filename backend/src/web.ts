@@ -81,10 +81,9 @@ export const SECURITY_HEADERS: Record<string, string> = {
  * first served (then cached). Full-width bar; contents in the same centred container as the page.
  */
 export type SitePage = "home" | "support" | "staff";
+// D96: the header nav is just Home (Customer support and Staff are reached from the landing page).
 const NAV: Array<{ page: SitePage; href: string; label: string }> = [
   { page: "home", href: "/", label: "Home" },
-  { page: "support", href: "/support", label: "Customer support" },
-  { page: "staff", href: "/staff", label: "Staff" },
 ];
 const navLinks = (current: SitePage | null) =>
   NAV.map((n) => `<li><a href="${n.href}"${n.page === current ? ' aria-current="page"' : ""}>${n.label}</a></li>`).join("");
@@ -105,11 +104,11 @@ export function siteHeader(page: SitePage): string {
 </header>`;
 }
 
+/** D96: the footer is only the demo line. */
 export function siteFooter(): string {
   return `<footer class="site-footer">
   <div class="container footer-inner">
     <p>© 2026 RelayPay · Demo project</p>
-    <nav aria-label="Footer"><ul>${navLinks(null)}</ul></nav>
   </div>
 </footer>`;
 }
