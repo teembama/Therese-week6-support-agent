@@ -148,3 +148,16 @@ describe("call page paths (D88)", () => {
     assert.match(html, /id="guest-nudge"[^>]*role="status"/);
   });
 });
+
+describe("after a call (D90, smoke test)", () => {
+  it("the page returns to the path chooser without a reload; captions are cleared only when the next call starts", () => {
+    const js = readFileSync(resolve(publicDir, "app.js"), "utf8");
+    const showEnded = js.slice(js.indexOf("function showEnded("), js.indexOf("function backToPaths("));
+    assert.match(showEnded, /if \(passRequired\) return backToPaths\(/);
+    const back = js.slice(js.indexOf("function backToPaths("), js.indexOf("function backToPaths(") + 700);
+    assert.match(back, /lockPath\(false\)/);
+    assert.ok(!/clearCaptions|recordsList\.replaceChildren|records\.hidden = true/.test(back), "captions and references stay until the next call");
+    const start = js.slice(js.indexOf("async function startCall("), js.indexOf("async function startCall(") + 600);
+    assert.match(start, /clearCaptions\(\)/);
+  });
+});

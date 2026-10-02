@@ -18,8 +18,9 @@ export const description =
 export const ESCALATION_CATEGORIES = ["compliance", "account", "dispute", "payment", "other"] as const;
 
 export const inputSchema = z.object({
-  user_name: z.string().trim().min(1).max(100).describe("The caller's name."),
-  user_email: z.string().trim().min(3).max(254).describe("The caller's email, as spoken or written."),
+  // D90: optional so a call identified by the call page form can omit them (filled from the account).
+  user_name: z.string().trim().min(1).max(100).optional().describe("The caller's name. Omit on a call identified via the call page: it is filled from the account."),
+  user_email: z.string().trim().min(3).max(254).optional().describe("The caller's email, as spoken or written. Omit on a call identified via the call page: it is filled from the account."),
   category: z.enum(ESCALATION_CATEGORIES).describe("What the escalation is about."),
   reason: z.string().trim().min(5).max(500).describe("Why a specialist is needed, in a short factual sentence."),
   preferred_time_text: z.string().trim().min(1).max(200).optional().describe("The caller's preferred callback time, in their own words."),
@@ -73,10 +74,27 @@ export function followUpSummary(): string {
   return "A RelayPay support representative will follow up.";
 }
 
+/**
+ * D90: on a conversation identified by the call page form (a redeemed form_customer pass), the
+ * escalation's name and email come from the ACCOUNT RECORD the form matched (the caller typed that
+ * email), never from speech: live call 01a0fca1… misheard "Amara" as "Tamara" and her email with
+ * it. Returns null for any other conversation (guest, voice-verified, login).
+ */
+export async function formIdentity(db: Parameters<typeof verifiedCustomerId>[0], conversationId: string): Promise<{ name: string; email: string } | null> {
+  const { data: pass, error } = await db.from("call_passes").select("source, customer_id").eq("conversation_id", conversationId).maybeSingle();
+  const p = pass as { source?: string; customer_id?: string | null } | null;
+  if (error || p?.source !== "form_customer" || !p.customer_id) return null;
+  const { data: c } = await db.from("customers").select("contact_name, contact_email").eq("customer_id", p.customer_id).maybeSingle();
+  const row = c as { contact_name?: string; contact_email?: string } | null;
+  return row?.contact_name && row.contact_email ? { name: row.contact_name, email: row.contact_email } : null;
+}
+
 export const handler = withWriteToolLogging(name, "Create (or return the existing) escalation with its ticket", (args, { db, ctx }) => serialised(async (): Promise<ToolOutcome> => {
-  const parsed = parseArgs(inputSchema, args, `user_name, user_email, reason are required; category must be one of ${ESCALATION_CATEGORIES.join(", ")}.`);
+  const parsed = parseArgs(inputSchema, args, `reason is required; category must be one of ${ESCALATION_CATEGORIES.join(", ")}.`);
   if (!parsed.ok) return parsed.outcome;
-  const input = parsed.data;
+  const form = await formIdentity(db, ctx.conversationId);
+  const input = form ? { ...parsed.data, user_name: form.name, user_email: form.email } : parsed.data;
+  if (!input.user_name || !input.user_email) return invalid("user_name and user_email are required: ask the caller for them. Nothing was written.");
   const email = normaliseEmail(input.user_email);
   if (!email) return invalid("user_email is not a valid email address. Ask the caller to spell it again. Nothing was written.");
   const precondition = escalationPreconditions(input);

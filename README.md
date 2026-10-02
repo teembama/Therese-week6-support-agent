@@ -239,6 +239,8 @@ Results: [docs/testing-evidence.md](docs/testing-evidence.md) (BEFORE 15/34 → 
 
 ## Troubleshooting
 
+- **The agent hears itself (echo).** Use earphones: laptop speakers can feed the agent's voice back into the microphone, and it is then transcribed as the caller (smoke test: the agent's own "While I check that—" came back as a caller turn).
+
 | Symptom | Cause we hit | Fix |
 | --- | --- | --- |
 | The call starts, then "Meeting ended due to ejection"; Vapi records `silence-timed-out` or `…did-not-receive-customer-audio` | The browser sent no audio: the CSP blocked Daily's noise-filter worklet (`blob:`) or bundle (`eval`) (D55), or the wrong mic or output device was selected | Check Chrome's console for CSP errors. Use the built-in mic and speakers, disconnect Bluetooth headsets, and close other apps using the mic (Zoom, Teams, WhatsApp, other tabs). The page's error box gives the same steps. |

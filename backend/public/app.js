@@ -84,7 +84,24 @@ function explainEnd() {
 function showEnded(text) {
   setState("ended", "Call ended", text);
   setButtons({ start: true, end: false, startText: "Start a new call" });
+  if (passRequired) return backToPaths(`${text} Choose how you'd like to continue for your next call.`);
   ui.start.focus();
+}
+
+/**
+ * D90 (smoke test): after a call, back to the path chooser without a reload. The last captions and
+ * the references panel stay visible until the next call starts (startCall clears the captions).
+ */
+function backToPaths(message) {
+  path = null;
+  ui.pathCustomer.setAttribute("aria-pressed", "false");
+  ui.pathGuest.setAttribute("aria-pressed", "false");
+  ui.customerForm.hidden = true;
+  ui.guestNote.hidden = true;
+  lockPath(false);
+  setButtons({ start: false, end: false, startText: "Start call" });
+  if (message) ui.status.textContent = message;
+  ui.pathCustomer.focus();
 }
 
 // ---- Live captions (D77, D80): every FINAL line of the current call (caller speech as recognised,
@@ -277,6 +294,7 @@ function fail(failure, phase = callStartedAt ? "in-call" : "starting") {
   setState("error", headline, lines[0]);
   showError(headline, lines, failure.code);
   setButtons({ start: Boolean(vapi && assistantId), end: false, startText: "Try again" });
+  if (passRequired) lockPath(false); // the chosen path stays selected for "Try again"
 }
 
 /** Log an SDK or browser error for diagnosis (secrets redacted), then classify it. */

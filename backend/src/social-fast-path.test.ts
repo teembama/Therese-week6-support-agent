@@ -100,7 +100,8 @@ describe("the LAST question decides goodbye vs declined_offer (D73, live call 01
     assert.equal(matchSocial("No, thank you.", "Your payout is processing. Would you like me to log a ticket so the team can look into it?"), "declined_offer");
   });
   it("'anything else' that isn't an offer to help (a detail question) -> not goodbye", () => {
-    assert.equal(matchSocial("No.", "Is there anything else about this transaction you remember, like the date?"), "declined_offer");
+    // D90: a detail question isn't an offer either: the model handles the "No." (never goodbye).
+    assert.equal(matchSocial("No.", "Is there anything else about this transaction you remember, like the date?"), null);
   });
   it("goodbyeAllowed follows the same rule", () => {
     assert.equal(goodbyeAllowed("No. Thank you.", WEATHER), true);
@@ -112,5 +113,30 @@ describe("after the off-topic decline line (D78)", () => {
   it("'No thanks' after the off-topic line -> goodbye (it ends with an anything-else question)", () => {
     assert.equal(matchSocial("No thanks.", OFF_TOPIC), "goodbye");
     assert.equal(matchSocial("No, thank you.", OFF_TOPIC), "goodbye");
+  });
+});
+
+describe("confirmations go to the model; declined_offer only after an offer (D90, live call 01a0fca1…)", () => {
+  const READ_BACK = "I have your email as tamara@lagosledger.example. Is that correct?";
+  it("the live line: read-back + 'No.' -> the model (null), never declined_offer", () => {
+    assert.equal(matchSocial("No.", READ_BACK), null);
+    assert.equal(matchSocial("No, it's not.", READ_BACK), null);
+    assert.equal(matchSocial("No thanks.", READ_BACK), null);
+  });
+  it("other confirmation questions -> the model", () => {
+    for (const q of ["Thanks, Tamara. I have your email as tamara at lagossledger dot example. Is that correct?", "So that's PAY-7002. Is that right?", "Your name is Efua Mensah. Did I get that right?", "Let me read that back: efua at accra stack dot example. Is that correct?", "Just to confirm, you said tomorrow morning?"]) {
+      assert.equal(matchSocial("No.", q), null, q);
+    }
+  });
+  it("offers -> declined_offer", () => {
+    for (const q of ["Would you like me to create a support ticket?", "I can connect you with a RelayPay specialist if you'd like.", "I can arrange a callback for you. Would that help?", "Do you want me to raise a ticket for this?"]) {
+      assert.equal(matchSocial("No thanks.", q), "declined_offer", q);
+    }
+  });
+  it("a plain question that isn't an offer -> the model", () => {
+    assert.equal(matchSocial("No.", "Could I have your name?"), null);
+  });
+  it("after 'anything else?' a decline is still goodbye", () => {
+    assert.equal(matchSocial("No thanks.", "No problem. Is there anything else I can help you with?"), "goodbye");
   });
 });

@@ -110,7 +110,7 @@ const unfinished = new Set<Promise<void>>();
 /** Per-conversation login check (L1, D86); created in main() when the database client exists. */
 let checkAccess: ReturnType<typeof createAccessChecker> | null = null;
 /** D89: the context line per form-identified conversation ("" = none). */
-const callContexts = new Map<string, string>();
+const callContexts = new Map<string, { context: string; typed: string }>();
 /** Discord sender (D83); off until the server is listening (and when no webhook URL is set). */
 let notifier: Pick<Notifier, "kick"> = { kick: () => undefined };
 
@@ -148,6 +148,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
   // inflight.get to inflight.set). A conversation that was ok once is cached: later turns don't wait.
   let denied: { line: string; statusReason: string; note: string } | undefined;
   let callContext: string | undefined;
+  let callerTyped: string | undefined;
   if (CUSTOMER_LOGIN_REQUIRED) {
     const { pass, source } = extractCallPass(json);
     const access = await checkAccess!(turn.callId, pass);
@@ -155,14 +156,17 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
     // D89: a form-identified call (customer_id on a pass with no login role) gets a context line on
     // every turn so the agent doesn't re-ask identity. Computed once per conversation per process.
     if (access.status === "ok" && access.customerId && access.role === null) {
-      callContext = callContexts.get(turn.callId);
-      if (callContext === undefined) {
-        const { data: c } = await db.from("customers").select("contact_name").eq("customer_id", access.customerId).maybeSingle();
-        const first = firstNameOf(String((c as { contact_name?: string } | null)?.contact_name ?? ""));
-        callContext = first ? formCallContext(first, access.customerId) : "";
+      let cached = callContexts.get(turn.callId);
+      if (cached === undefined) {
+        const { data: c } = await db.from("customers").select("contact_name, contact_email").eq("customer_id", access.customerId).maybeSingle();
+        const row = c as { contact_name?: string; contact_email?: string } | null;
+        const first = firstNameOf(String(row?.contact_name ?? ""));
+        cached = first && row?.contact_email ? { context: formCallContext(first, access.customerId, row.contact_email), typed: `${row.contact_name} ${row.contact_email}` } : { context: "", typed: "" };
         if (callContexts.size >= 5000) callContexts.delete(callContexts.keys().next().value!);
-        callContexts.set(turn.callId, callContext);
+        callContexts.set(turn.callId, cached);
       }
+      callContext = cached.context;
+      callerTyped = cached.typed;
     }
     // L1b (D88): a form-matched pass verifies the call before its first turn runs, from the PASS's
     // customer (never the caller's words). Best-effort: on failure the call stays unverified and
@@ -235,6 +239,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
       admit: () => admission.tryAcquire(key),
       ...(denied ? { denied } : {}),
       ...(callContext ? { callContext } : {}),
+      ...(callerTyped ? { callerTyped } : {}),
     },
     {
       // Reuse a stream already opened by a join that fell through.

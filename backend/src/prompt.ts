@@ -83,8 +83,10 @@ function escapeXml(text: string): string {
  * D89: the context line for a call identified by the call page's form (L1b, D88). Written by the
  * backend from the pass's customer (never the caller's words); not part of the system prompt.
  */
-export function formCallContext(firstName: string, customerId: string): string {
-  return `The caller is already identified as ${firstName} (${customerId}) via the call page. Don't ask for their name, company or email to verify them. If they say they are someone else, call lookup_customer with the details they give.`;
+export function formCallContext(firstName: string, customerId: string, email: string): string {
+  return `The caller is already identified as ${firstName} (${customerId}) via the call page. Don't ask for their name, company or email to verify them. If they say they are someone else, call lookup_customer with the details they give. ` +
+    `Always address the caller by ${firstName}; never adopt a different name heard in speech. ` +
+    `For escalations, confirm the email they entered (${email}) instead of asking for it: say it back and ask if a specialist should contact them there.`;
 }
 
 export function buildTurnPrompt(history: HistoryEntry[], callerMessage: string, chunks: KbChunk[], callContext?: string): string {

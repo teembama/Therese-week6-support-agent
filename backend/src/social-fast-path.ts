@@ -70,10 +70,22 @@ function askedAnythingElse(previousAgentLine: string | null): boolean {
   return last !== undefined && /\banything else\b/i.test(last) && /\b(help|assist|do for you)\b/i.test(last);
 }
 
-/** The agent's line asked a question or made an offer (a ticket, a callback, a specialist). */
-function askedOrOffered(previousAgentLine: string | null): boolean {
+/**
+ * D90: a confirmation or read-back ("I have your email as tamara@… Is that correct?"). A "no" to
+ * it is a CORRECTION the model must handle, never a declined offer (live call 01a0fca1…, turn 7:
+ * "No." got "No problem. Is there anything else I can help you with?").
+ */
+const CONFIRMATION = /\b(?:is (?:that|this|it) (?:correct|right)|did i get (?:that|this|it) right|have i got (?:that|this|it) right|does that sound right|is that the right)\b/;
+const READ_BACK = /\b(?:i have your|let me read (?:that|it) back|read that back|just to confirm|to confirm|you said|i've got your|i have you down as)\b/;
+/** An offer: a ticket, a callback, a specialist ("Would you like me to…", "I can connect you…", "…if you'd like"). */
+const OFFER = /\b(?:would you like|if you'd like|if you would like|do you want|want me to|shall i|i can connect you|i can arrange|can i arrange|i can create|i can open|i can set up)\b/;
+
+/** D90: the agent's line made an OFFER and isn't a confirmation or read-back. Only then is "no" a declined offer. */
+export function offered(previousAgentLine: string | null): boolean {
   if (previousAgentLine === null) return false;
-  return /\?\s*$/.test(previousAgentLine) || /\b(?:would you like|if you'd like|if you would like|do you want)\b/.test(normalise(previousAgentLine));
+  const n = normalise(previousAgentLine);
+  if (CONFIRMATION.test(n) || READ_BACK.test(n)) return false;
+  return OFFER.test(n);
 }
 
 /**
@@ -86,7 +98,7 @@ export function matchSocial(callerText: string, previousAgentLine: string | null
   if (CLEAR_GOODBYE.test(s) || THANKS_THEN_BYE.test(s)) return "goodbye";
   if (DECLINE_IN_CONTEXT.test(s)) {
     if (askedAnythingElse(previousAgentLine)) return "goodbye";
-    if (askedOrOffered(previousAgentLine)) return "declined_offer";
+    if (offered(previousAgentLine)) return "declined_offer";
   }
   if (PURE_THANKS.test(s)) return "thanks";
   return null;

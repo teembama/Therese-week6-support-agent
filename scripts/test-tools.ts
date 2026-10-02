@@ -294,7 +294,8 @@ async function main(): Promise<number> {
     `one ticket_created row per plain ticket (${plainTicketIds.length}), none for the duplicate or denied calls`, JSON.stringify(mainOutbox.map((r) => `${r.kind}:${r.ref_id}`)));
   check(mainOutbox.filter((r) => r.kind === "escalation_created").length === mainEscalations.length && mainEscalations.length === 1,
     "one escalation_created row for the one escalation (the repeat queued nothing)", JSON.stringify(mainOutbox.map((r) => r.kind)));
-  check(mainOutbox.every((r) => r.status === "pending") && noAmountsOrNotes(mainOutbox), "all pending (no sender yet), no amounts or notes in any payload");
+  // D83: the deployed Discord sender marks test-conversation rows "sent" with the skip note (never posted).
+  check(mainOutbox.every((r) => r.status === "pending" || r.status === "sent") && noAmountsOrNotes(mainOutbox), "rows pending or skipped by the sender (test conversation), no amounts or notes in any payload");
 
   console.log("\n== Escalation enrichment (migration 006, D82): created without a time, then the time arrives");
   const enrConversation = `${conversationId}-enr`;
@@ -392,6 +393,40 @@ async function main(): Promise<number> {
   check(mainLookups.length > 0 && !mainLookups.some((r) => String(r["result_summary"]).includes("guest_hint")), "non-guest call: no guest hint on any lookup_customer", JSON.stringify(mainLookups.slice(0, 2)));
   await db.rpc("finish_turn_attempt", { p_attempt_id: guestAttempt, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });
   await db.from("conversations").update({ ended_at: new Date().toISOString(), final_status: "completed", summary: "Guest nudge test run (L1b)" }).eq("conversation_id", guestConversation);
+
+  // ---- D90: on a FORM-identified call, create_escalation takes name and email from the account the
+  // form matched, never from speech (live call 01a0fca1…: "Amara" misheard as "Tamara").
+  console.log("\n== Form call: escalation identity from the account (D90)");
+  const formConversation = `${conversationId}-form`;
+  const formAttempt = newAttemptId();
+  await db.rpc("begin_turn_attempt", {
+    p_conversation_id: formConversation, p_channel: "test", p_caller: "scripts/test-tools.ts", p_turn_index: 0,
+    p_attempt_id: formAttempt, p_transcript_hash: transcriptHash("form"), p_user_transcript: "form",
+  });
+  await db.from("call_passes").insert({ pass_hash: createHash("sha256").update(`form-${formConversation}`).digest("hex"), source: "form_customer", customer_id: "CUS-1001", used_at: new Date().toISOString(), conversation_id: formConversation });
+  const { data: applied } = await db.rpc("apply_call_pass_identity", { p_conversation_id: formConversation, p_channel: "test", p_caller: null });
+  check(applied === "CUS-1001", "form pass applied: the conversation is verified as CUS-1001", JSON.stringify(applied));
+  const formClient = new Client({ name: "relaypay-test-tools-form", version: "0.1.0" });
+  await formClient.connect(new StdioClientTransport({
+    command: process.execPath, args: [SERVER],
+    env: { ...getDefaultEnvironment(), SUPABASE_URL: process.env["SUPABASE_URL"]!, SUPABASE_SERVICE_ROLE_KEY: process.env["SUPABASE_SERVICE_ROLE_KEY"]!, CONVERSATION_ID: formConversation, TURN_INDEX: "0", ATTEMPT_ID: formAttempt },
+    stderr: "pipe",
+  }));
+  try {
+    const noConfirm = ((await formClient.callTool({ name: "create_escalation", arguments: { category: "dispute", reason: "Caller wants to dispute a payment", preferred_time_text: "tomorrow morning" } })).structuredContent ?? {}) as Structured;
+    check(noConfirm["status"] === "invalid_input", "form call: email_confirmed_by_caller is still required", JSON.stringify(noConfirm).slice(0, 160));
+    const esc = ((await formClient.callTool({ name: "create_escalation", arguments: { user_name: "Tamara", user_email: "tamara at lagos ledger dot example", category: "dispute", reason: "Caller wants to dispute a payment", email_confirmed_by_caller: true, preferred_time_text: "tomorrow morning" } })).structuredContent ?? {}) as Structured;
+    check(esc["status"] === "success", "form call: escalation created", JSON.stringify(esc).slice(0, 200));
+    const { data: rows } = await db.from("escalations").select("user_name, user_email, customer_id, preferred_time_text").eq("conversation_id", formConversation);
+    check((rows ?? []).length === 1 && rows![0]!.user_name === "Amara Okafor" && rows![0]!.user_email === "amara@lagosledger.example" && rows![0]!.customer_id === "CUS-1001",
+      "form call: stored with the ACCOUNT's name and email, not the misheard ones", JSON.stringify(rows));
+  } finally {
+    await formClient.close();
+  }
+  const { data: guestNoName } = await db.from("escalations").select("id").eq("conversation_id", guestConversation);
+  check((guestNoName ?? []).length === 0, "guest call: no escalation was created by these checks");
+  await db.rpc("finish_turn_attempt", { p_attempt_id: formAttempt, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });
+  await db.from("conversations").update({ ended_at: new Date().toISOString(), final_status: "completed", summary: "Form escalation test run (D90)" }).eq("conversation_id", formConversation);
 
   // Close whichever attempt is still active (the replacing one, if the guard test ran).
   await db.rpc("finish_turn_attempt", { p_attempt_id: newer ?? attemptId, p_status: "failed", p_status_reason: "tools test harness (no agent)", p_metrics: {}, p_turn: null });

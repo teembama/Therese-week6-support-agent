@@ -102,6 +102,8 @@ export interface TurnInput {
   denied?: { line: string; statusReason: string; note: string };
   /** D89: a backend-written context line for a form-identified call (L1b), added to the turn input. */
   callContext?: string;
+  /** D90: what the caller TYPED on the call page (name, email), counted as the caller's own words for the gate. */
+  callerTyped?: string;
 }
 
 export interface TurnSink {
@@ -697,7 +699,7 @@ export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
         registered = true;
         if (started.replacedAttemptIds.length) notes.push(`replaced attempt(s): ${started.replacedAttemptIds.join(",")}`);
         retrievedIds = new Set(chunks.map((c) => c.chunk_id));
-        const callerWords = [...input.history.filter((h) => h.role === "caller").map((h) => h.text), input.userText].join("\n");
+        const callerWords = [...input.history.filter((h) => h.role === "caller").map((h) => h.text), input.userText, ...(input.callerTyped ? [input.callerTyped] : [])].join("\n");
         evidence = { chunks: new Map(chunks.map((c) => [c.chunk_id, `${c.heading}\n${c.content}`])), callerText: callerWords, tools: observedTools, goodbyeAllowed: goodbyeAllowed(input.userText, previousAgentLine(input.history)) };
         if (chunks.length === 0) notes.push("pre-turn retrieval: insufficient_knowledge");
         retrievalLogged = logRetrievalResult(db, ctx, rq.query.slice(0, 1000), chunks);
