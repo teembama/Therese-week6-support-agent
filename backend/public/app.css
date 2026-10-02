@@ -124,6 +124,23 @@ h1 { margin: 0; font-size: 1.35rem; color: var(--primary); }
 }
 .jump-button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .captions { display: grid; }
+/* Login (L1, D86). */
+.call-ui { display: grid; gap: 20px; }
+.login { border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: grid; gap: 10px; }
+.login h2 { margin: 0; font-size: 1.05rem; color: var(--primary); }
+.login-message { margin: 0; color: var(--muted); }
+.login-message:empty { display: none; }
+.login-form { display: grid; gap: 6px; }
+.login-form label { font-weight: 650; font-size: 0.9rem; margin-top: 6px; }
+.login-form input {
+  font: inherit; min-height: 44px; padding: 0 12px; border: 1px solid var(--muted); border-radius: 10px; background: var(--surface); color: var(--ink);
+}
+.login-form input:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+.login-form .button { margin-top: 10px; justify-self: start; }
+.login-error { margin: 6px 0 0; color: var(--danger); background: var(--danger-bg); border-radius: 8px; padding: 8px 10px; }
+.account { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; font-size: 0.9rem; color: var(--muted); }
+.account p { margin: 0; }
+
 /* Screen-reader-only text (the references panel's announcements and button context). */
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;

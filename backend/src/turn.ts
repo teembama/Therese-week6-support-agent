@@ -95,6 +95,11 @@ export interface TurnInput {
    * social fast path). A refusal speaks BUSY_LINE with no CLI or MCP spawned. Absent = admitted.
    */
   admit?: () => Slot | Refusal;
+  /**
+   * Login enforcement (L1, D86): set when this call has no valid redeemed pass. The fixed line is
+   * spoken and recorded (answer_type error) with no agent run, before the social fast path.
+   */
+  denied?: { line: string; statusReason: string; note: string };
 }
 
 export interface TurnSink {
@@ -262,6 +267,12 @@ function runFixedLine(input: TurnInput, sink: TurnSink, spec: FixedLine): TurnHa
 }
 
 export function runTurn(input: TurnInput, sink: TurnSink): TurnHandle {
+  if (input.denied) {
+    return runFixedLine(input, sink, {
+      line: input.denied.line, answerType: "error", statusReason: input.denied.statusReason,
+      note: input.denied.note, logFields: { login_required: true },
+    });
+  }
   const socialIntent = matchSocial(input.userText, previousAgentLine(input.history));
   if (socialIntent) {
     return runFixedLine(input, sink, {

@@ -19,6 +19,25 @@
       </div>
     </header>
 
+    <section id="login" class="login" aria-labelledby="login-title" hidden>
+      <h2 id="login-title">Log in to talk to RelayPay support</h2>
+      <p id="login-message" class="login-message" role="status" aria-live="polite"></p>
+      <form id="login-form" class="login-form" novalidate>
+        <label for="login-email">Email</label>
+        <input id="login-email" name="email" type="email" autocomplete="username" required>
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        <p id="login-error" class="login-error" role="alert" hidden></p>
+        <button id="login-submit" type="submit" class="button primary">Log in</button>
+      </form>
+    </section>
+
+    <div id="account" class="account" hidden>
+      <p>Signed in as <strong id="account-email"></strong></p>
+      <button id="logout" type="button" class="link-button">Log out</button>
+    </div>
+
+    <div id="call-ui" class="call-ui">
     <section class="status" aria-label="Call status">
       <span id="state-icon" class="state-icon" data-state="loading" aria-hidden="true"></span>
       <div>
@@ -63,6 +82,8 @@
         <li>“How long do international payouts take?”</li>
       </ul>
     </section>
+
+    </div>
 
     <p class="note">Calls are logged for quality and last at most 4 minutes. Your browser will ask to use your microphone.</p>
   </main>

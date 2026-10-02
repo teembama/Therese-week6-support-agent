@@ -7,6 +7,7 @@
 import { classifyFailure, describeEnd, failureMessage, isCallOverError, sanitizeForLog } from "/call-end.js";
 import { appendFinal, isNearBottom, speakerLabel, toggleState } from "/captions.js";
 import { announcement, copyText, describeEntry, mergeRecords, POLL_MS, recordsUrl } from "/records.js";
+import { authView, callOverrides, loginErrorMessage, MESSAGES, passOutcome, SUPABASE_JS_URL, validLoginForm } from "/auth.js";
 
 const SDK_URL = "https://esm.sh/@vapi-ai/web@2.7.1?deps=@daily-co/daily-js@0.87.0";
 const MAX_CALL_MS = 4 * 60_000; // matches the note on the page; the assistant's own limit should be 240 s too
@@ -18,6 +19,9 @@ const ui = {
   start: el("start"), end: el("end"),
   captions: el("captions"), captionsLines: el("captions-lines"), captionsToggle: el("captions-toggle"), captionsJump: el("captions-jump"),
   records: el("records"), recordsList: el("records-list"), recordsLive: el("records-live"),
+  login: el("login"), loginForm: el("login-form"), loginEmail: el("login-email"), loginPassword: el("login-password"),
+  loginError: el("login-error"), loginMessage: el("login-message"), loginSubmit: el("login-submit"),
+  account: el("account"), accountEmail: el("account-email"), logout: el("logout"), callUi: el("call-ui"),
 };
 
 let vapi = null;
@@ -189,6 +193,100 @@ function stopRecordsPolling() {
   if (id) setTimeout(() => void fetchRecords(id), 2000);
 }
 
+// ---- Login (L1, D86): when the server enforces it, the call UI is shown only with a Supabase
+// session. Each call gets a ONE-TIME pass from POST /calls/pass (the backend verifies the token
+// and the account's role), carried to the backend in the call's variableValues. The browser
+// never reads tables; the session lives in sessionStorage (this tab only).
+let loginRequired = false;
+let supabase = null;
+let loggingOut = false;
+function applyAuth(event, session) {
+  const v = authView(event, session, { userInitiated: loggingOut });
+  loggingOut = false;
+  if (v.view === "call") {
+    ui.login.hidden = true;
+    ui.account.hidden = false;
+    ui.accountEmail.textContent = v.email;
+    ui.callUi.hidden = false;
+    return;
+  }
+  if (inCall && vapi) {
+    endedByUser = true;
+    try { vapi.stop(); } catch { /* already stopped */ }
+  }
+  ui.callUi.hidden = true;
+  ui.account.hidden = true;
+  ui.login.hidden = false;
+  ui.loginMessage.textContent = v.message;
+  ui.loginError.hidden = true;
+  ui.loginSubmit.disabled = false;
+}
+async function submitLogin(e) {
+  e.preventDefault();
+  const email = ui.loginEmail.value.trim();
+  const password = ui.loginPassword.value;
+  if (!validLoginForm(email, password)) return showLoginError(MESSAGES.missing);
+  ui.loginSubmit.disabled = true;
+  ui.loginError.hidden = true;
+  try {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return showLoginError(loginErrorMessage(error));
+    ui.loginPassword.value = "";
+    ui.loginMessage.textContent = "";
+  } catch (err) {
+    showLoginError(loginErrorMessage(err));
+  } finally {
+    ui.loginSubmit.disabled = false;
+  }
+}
+function showLoginError(message) {
+  ui.loginError.textContent = message;
+  ui.loginError.hidden = false;
+  ui.loginSubmit.disabled = false;
+  ui.loginEmail.focus();
+}
+async function logout() {
+  loggingOut = true;
+  try { await supabase.auth.signOut(); } catch { applyAuth("SIGNED_OUT", null); }
+}
+/** A one-time pass for this call, or null (the page then shows why, or the login form). */
+async function getCallPass() {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) {
+    applyAuth("SIGNED_OUT", null);
+    return null;
+  }
+  let res;
+  try {
+    res = await fetch("/calls/pass", { method: "POST", headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+  } catch {
+    failWithMessage(MESSAGES.network);
+    return null;
+  }
+  const outcome = passOutcome(res.status);
+  if (outcome.kind === "relogin") {
+    await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+    applyAuth("SIGNED_OUT", null);
+    return null;
+  }
+  if (outcome.kind === "error") {
+    failWithMessage(outcome.message);
+    return null;
+  }
+  const body = await res.json().catch(() => null);
+  if (typeof body?.pass !== "string") {
+    failWithMessage(MESSAGES.unavailable);
+    return null;
+  }
+  return body.pass;
+}
+function failWithMessage(message) {
+  setState("error", "Couldn't start the call", message);
+  showError("Couldn't start the call", [message]);
+  setButtons({ start: true, end: false, startText: "Try again" });
+}
+
 /** Show a classified failure: its group's headline and next step, plus a small reference line. */
 function fail(failure, phase = callStartedAt ? "in-call" : "starting") {
   const { headline, lines } = failureMessage(failure, phase);
@@ -302,11 +400,18 @@ async function startCall() {
   } catch (err) {
     return failFromError(err);
   }
+  let overrides;
+  if (loginRequired) {
+    setState("connecting", "Connecting", "Checking your login…");
+    const pass = await getCallPass();
+    if (!pass) return;
+    overrides = callOverrides(pass);
+  }
   setState("connecting", "Connecting", "Connecting you to RelayPay support…");
   setButtons({ start: false, end: true });
   try {
     // The call's ID (an unguessable UUID; also our conversation ID) scopes the references panel.
-    const call = await vapi.start(assistantId);
+    const call = await (overrides ? vapi.start(assistantId, overrides) : vapi.start(assistantId));
     callId = typeof call?.id === "string" ? call.id : null;
     if (inCall) startRecordsPolling();
   } catch (err) {
@@ -346,6 +451,24 @@ async function init() {
   } catch (err) {
     console.error("[relaypay] voice component failed to load", sanitizeForLog(err));
     return fail({ group: "ourSide", kind: "component", code: "sdk-load-failed" }, "starting");
+  }
+  if (config.loginRequired) {
+    loginRequired = true;
+    ui.callUi.hidden = true;
+    let createClient;
+    try {
+      ({ createClient } = await import(SUPABASE_JS_URL));
+    } catch (err) {
+      console.error("[relaypay] login component failed to load", sanitizeForLog(err));
+      ui.callUi.hidden = false;
+      return fail({ group: "ourSide", kind: "component", code: "login-load-failed" }, "starting");
+    }
+    supabase = createClient(config.supabaseUrl, config.supabasePublishableKey, {
+      auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+    });
+    ui.loginForm.addEventListener("submit", submitLogin);
+    ui.logout.addEventListener("click", logout);
+    supabase.auth.onAuthStateChange((event, session) => applyAuth(event, session));
   }
   assistantId = config.vapiAssistantId;
   vapi = new Vapi(config.vapiPublicKey);

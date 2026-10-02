@@ -20,11 +20,12 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServiceClient, newAttemptId, summarize, transcriptHash, type Db, type LogContext } from "@relaypay/shared";
-import { channelFor, EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, MAX_CONCURRENT_TURNS, SHUTDOWN_GRACE_MS, STALE_SWEEP_INTERVAL_MS, DISCORD_SWEEP_INTERVAL_MS } from "./config.js";
+import { channelFor, EVENTS_MAX_BODY_BYTES, FALLBACK_LINE, FAULT_INJECT, MAX_BODY_BYTES, MAX_CONCURRENT_TURNS, SHUTDOWN_GRACE_MS, STALE_SWEEP_INTERVAL_MS, DISCORD_SWEEP_INTERVAL_MS, CUSTOMER_LOGIN_REQUIRED } from "./config.js";
 import { Admission } from "./admission.js";
 import { startStaleSweeper } from "./stale-sweep.js";
 import { createDiscordNotifier, type Notifier } from "./discord-notify.js";
 import { createRateLimiter, handleRecords, matchRecordsRoute, RECORDS_RATE_LIMIT_PER_MINUTE } from "./records.js";
+import { CALL_PASS_RATE_LIMIT_PER_MINUTE, createAccessChecker, extractCallPass, handleCallPass, LOGIN_LINE } from "./login.js";
 import { sentences } from "./gate.js";
 import { SseStream } from "./sse.js";
 import { runTurn, type TurnHandle, type TurnResult } from "./turn.js";
@@ -104,6 +105,8 @@ const admission = new Admission(MAX_CONCURRENT_TURNS);
 
 /** Every turn started in this process that hasn't fully finished (row, totals): what a shutdown waits for. */
 const unfinished = new Set<Promise<void>>();
+/** Per-conversation login check (L1, D86); created in main() when the database client exists. */
+let checkAccess: ReturnType<typeof createAccessChecker> | null = null;
 /** Discord sender (D83); off until the server is listening (and when no webhook URL is set). */
 let notifier: Pick<Notifier, "kick"> = { kick: () => undefined };
 
@@ -137,6 +140,16 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
   if (FAULT_INJECT === "uncaught_exception") setImmediate(() => {
     throw new Error("injected fault: uncaught_exception");
   });
+  // Login enforcement (L1, D86): checked before the in-flight logic (which stays synchronous from
+  // inflight.get to inflight.set). A conversation that was ok once is cached: later turns don't wait.
+  let denied: { line: string; statusReason: string; note: string } | undefined;
+  if (CUSTOMER_LOGIN_REQUIRED) {
+    const { pass, source } = extractCallPass(json);
+    const access = await checkAccess!(turn.callId, pass);
+    if (!access.cached) log({ event: "call_access", conversation_id: turn.callId, turn_index: turn.turnIndex, status: access.status, pass_source: source, role: access.role, mapped: access.customerId !== null });
+    if (access.status === "error") denied = { line: FALLBACK_LINE, statusReason: "login_check_failed", note: "login check failed (database)" };
+    else if (access.status !== "ok") denied = { line: LOGIN_LINE, statusReason: "login_required", note: `login_required: pass ${access.status}` };
+  }
   const key = `${turn.callId}#${turn.turnIndex}`;
   const hash = transcriptHash(turn.userText);
   let sse: SseStream | null = null;
@@ -195,6 +208,7 @@ async function handleChat(req: IncomingMessage, res: ServerResponse, db: Db, tRe
       transcriptHash: hash,
       ...(afterPrevious ? { afterPrevious } : {}),
       admit: () => admission.tryAcquire(key),
+      ...(denied ? { denied } : {}),
     },
     {
       // Reuse a stream already opened by a join that fell through.
@@ -283,6 +297,8 @@ function main(): void {
   });
   const db = createServiceClient();
   const recordsAllow = createRateLimiter(RECORDS_RATE_LIMIT_PER_MINUTE);
+  const callPassAllow = createRateLimiter(CALL_PASS_RATE_LIMIT_PER_MINUTE);
+  checkAccess = createAccessChecker(db);
   const port = Number(process.env["PORT"] || 8787);
 
   const server = createServer((req, res) => {
@@ -292,6 +308,14 @@ function main(): void {
       pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     } catch {
       /* malformed request target: treat as unknown path */
+    }
+    // One-time call pass for a logged-in user (L1, D86). Only while login is enforced.
+    if (CUSTOMER_LOGIN_REQUIRED && req.method === "POST" && pathname === "/calls/pass") {
+      handleCallPass(req, res, db, { allow: callPassAllow, log, headers: SECURITY_HEADERS }).catch((err: unknown) => {
+        log({ event: "request_error", stage: "call_pass", ...errorDetails(err) });
+        if (!res.headersSent) sendJson(res, 503, { error: "voice support unavailable" });
+      });
+      return;
     }
     // The page's "Your references" panel (D84): read-only, scoped to one call, rate-limited.
     const recordsCallId = matchRecordsRoute(req.method, pathname);
@@ -363,7 +387,7 @@ function main(): void {
   });
 
   server.listen(port, () => {
-    log({ event: "listening", port, node: process.version, max_concurrent_turns: MAX_CONCURRENT_TURNS });
+    log({ event: "listening", port, node: process.version, max_concurrent_turns: MAX_CONCURRENT_TURNS, customer_login_required: CUSTOMER_LOGIN_REQUIRED });
     startStaleSweeper(db, STALE_SWEEP_INTERVAL_MS, log);
     notifier = createDiscordNotifier({ db, webhookUrl: process.env["DISCORD_WEBHOOK_URL"], log, intervalMs: DISCORD_SWEEP_INTERVAL_MS, timer: true });
   });

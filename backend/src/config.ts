@@ -177,4 +177,11 @@ export const BUSY_LINE = "We're getting a lot of calls right now. Please try aga
 /** SIGTERM: how long in-flight turns may take to finish before the process exits (D60). */
 export const SHUTDOWN_GRACE_MS = envMs("RELAYPAY_SHUTDOWN_GRACE_MS", 10_000);
 
+/** Feature flags (D86, D87): on only when set to "1" or "true". Off by default, and at the freeze. */
+const flag = (name: string) => /^(1|true)$/i.test(process.env[name]?.trim() ?? "");
+/** L1: every call must carry a valid one-time call pass from a logged-in user. */
+export const CUSTOMER_LOGIN_REQUIRED = flag("CUSTOMER_LOGIN_REQUIRED");
+/** L2: the read-only staff dashboard and its API. */
+export const STAFF_DASHBOARD_ENABLED = flag("STAFF_DASHBOARD_ENABLED");
+
 export const FALLBACK_LINE = "Sorry, I'm having trouble checking that right now. Could you try again in a moment?";

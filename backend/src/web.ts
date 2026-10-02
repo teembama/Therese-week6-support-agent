@@ -18,9 +18,20 @@ const FILES: Record<string, { file: string; type: string }> = {
   "/call-end.js": { file: "call-end.js", type: "text/javascript; charset=utf-8" },
   "/captions.js": { file: "captions.js", type: "text/javascript; charset=utf-8" },
   "/records.js": { file: "records.js", type: "text/javascript; charset=utf-8" },
+  "/auth.js": { file: "auth.js", type: "text/javascript; charset=utf-8" },
   "/app.css": { file: "app.css", type: "text/css; charset=utf-8" },
   "/favicon.svg": { file: "favicon.svg", type: "image/svg+xml" },
 };
+
+/** The Supabase project origin for connect-src, or "" when unset or not https. */
+export function supabaseOrigin(url: string | undefined): string {
+  try {
+    const u = new URL(url ?? "");
+    return u.protocol === "https:" ? u.origin : "";
+  } catch {
+    return "";
+  }
+}
 
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
@@ -30,7 +41,8 @@ export const CONTENT_SECURITY_POLICY = [
   "script-src 'self' 'unsafe-eval' blob: https://esm.sh https://*.daily.co",
   "style-src 'self'",
   "img-src 'self' data:",
-  "connect-src 'self' https: wss:",
+  // Supabase Auth (login, L1/D86) is listed explicitly; https: already covered it (Vapi, Daily).
+  `connect-src 'self' ${supabaseOrigin(process.env["SUPABASE_URL"])} https: wss:`.replace("  ", " "),
   "media-src 'self' blob: mediastream:",
   "worker-src 'self' blob:",
   "frame-ancestors 'none'",
@@ -104,7 +116,14 @@ export function handlePublic(req: IncomingMessage, res: ServerResponse, pathname
     const vapiPublicKey = env["VAPI_PUBLIC_KEY"]?.trim();
     const vapiAssistantId = env["VAPI_ASSISTANT_ID"]?.trim();
     if (!vapiPublicKey || !vapiAssistantId) return send(503, "application/json", JSON.stringify({ error: "voice not configured" }), { "Cache-Control": "no-store" });
-    return send(200, "application/json", JSON.stringify({ vapiPublicKey, vapiAssistantId }), { "Cache-Control": "no-store" });
+    // Login (L1, D86): the Supabase URL and PUBLISHABLE key only (public by design; the browser
+    // uses them for Auth, never for tables: RLS has no policies).
+    const loginRequired = /^(1|true)$/i.test(env["CUSTOMER_LOGIN_REQUIRED"]?.trim() ?? "");
+    const supabaseUrl = supabaseOrigin(env["SUPABASE_URL"]);
+    const supabasePublishableKey = env["SUPABASE_PUBLISHABLE_KEY"]?.trim();
+    if (loginRequired && (!supabaseUrl || !supabasePublishableKey)) return send(503, "application/json", JSON.stringify({ error: "login not configured" }), { "Cache-Control": "no-store" });
+    const login = loginRequired ? { loginRequired, supabaseUrl, supabasePublishableKey } : { loginRequired };
+    return send(200, "application/json", JSON.stringify({ vapiPublicKey, vapiAssistantId, ...login }), { "Cache-Control": "no-store" });
   }
   const entry = FILES[pathname]!;
   send(200, entry.type, load(entry.file));

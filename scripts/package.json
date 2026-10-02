@@ -15,7 +15,8 @@
     "test-endpoint": "tsx test-endpoint.ts",
     "eval-grounding": "tsx eval-grounding.ts",
     "test-capacity": "tsx test-capacity.ts",
-    "eval-scenarios": "tsx eval-scenarios.ts"
+    "eval-scenarios": "tsx eval-scenarios.ts",
+    "test-login": "tsx test-login.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",

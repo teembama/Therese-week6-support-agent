@@ -19,7 +19,7 @@ eq "$(q "select count(*) from customers")" 5 "customers loaded"
 eq "$(q "select count(*) from transactions")" 5 "transactions loaded"
 eq "$(q "select count(*) from payouts")" 3 "payouts loaded"
 eq "$(q "select estimated_arrival is null from transactions where transaction_id='TXN-9003'")" t "empty CSV cell -> NULL"
-eq "$(q "select count(*) filter (where relrowsecurity) || '/' || count(*) from pg_class where relnamespace='public'::regnamespace and relkind='r'")" 14/14 "RLS enabled on every table (incl. turn_attempts, conversation_events, notification_outbox)"
+eq "$(q "select count(*) filter (where relrowsecurity) || '/' || count(*) from pg_class where relnamespace='public'::regnamespace and relkind='r'")" 15/15 "RLS enabled on every table (incl. turn_attempts, conversation_events, notification_outbox, call_passes)"
 eq "$(q "select count(*) from pg_policies where schemaname='public'")" 0 "no RLS policies"
 
 echo "--- constraint rejections"
@@ -265,6 +265,39 @@ eq "$(q "select relrowsecurity from pg_class where relname='notification_outbox'
 eq "$(q "select has_table_privilege('anon','notification_outbox','select')")|$(q "select has_table_privilege('authenticated','notification_outbox','select')")" "f|f" "anon/authenticated have no SELECT on the outbox"
 eq "$(q "select has_function_privilege('anon','queue_notification(text,text,text,text,jsonb)','execute')")|$(q "select has_function_privilege('service_role','queue_notification(text,text,text,text,jsonb)','execute')")" "f|t" "only service_role executes queue_notification"
 eq "$(SR "select log_conversation_event_guarded('ATT-TK6','call-enr',5,'escalation_updated','Escalation enriched',jsonb_build_object('field','preferred_time_text')) is not null")" t "event type escalation_updated accepted"
+
+echo "--- migration 007: one-time call passes (D86)"
+H() { printf '%064d' "$1"; }   # a well-formed 64-hex hash
+UID1="11111111-1111-4111-8111-111111111111"
+RP() { SR "select status||'|'||coalesce(user_id::text,'-')||'|'||coalesce(role,'-')||'|'||coalesce(customer_id,'-') from redeem_call_pass($1)"; }
+SR "insert into call_passes(pass_hash,user_id,role) values ('$(H 1)','$UID1','customer')" >/dev/null
+SR "insert into call_passes(pass_hash,user_id,role,customer_id) values ('$(H 2)','$UID1','customer','CUS-1001')" >/dev/null
+SR "insert into call_passes(pass_hash,user_id,role,created_at,expires_at) values ('$(H 3)','$UID1','staff',now()-interval '6 minutes',now()-interval '1 minute')" >/dev/null
+eq "$(q "select (expires_at - created_at)::text from call_passes where pass_hash='$(H 1)'")" "00:05:00" "a pass expires 5 minutes after issue by default"
+eq "$(RP "'conv-p1','$(H 1)'")" "ok|$UID1|customer|-" "valid pass: ok, linked to the conversation"
+eq "$(q "select (used_at is not null)||'|'||conversation_id from call_passes where pass_hash='$(H 1)'")" "true|conv-p1" "marked used and linked"
+eq "$(RP "'conv-p1',null")" "ok|$UID1|customer|-" "later turn of the linked conversation: ok without a pass"
+eq "$(RP "'conv-p1','$(H 1)'")" "ok|$UID1|customer|-" "speculative retry of turn 0 with the same pass: ok"
+eq "$(RP "'conv-p2','$(H 1)'")" "reused|-|-|-" "the same pass on another conversation: reused"
+eq "$(RP "'conv-p3',null")" "missing|-|-|-" "no pass: missing"
+eq "$(RP "'conv-p3','$(H 9)'")" "invalid|-|-|-" "unknown (forged) pass: invalid"
+eq "$(RP "'conv-p3','not-hex'")" "invalid|-|-|-" "malformed pass hash: invalid"
+eq "$(RP "'conv-p3','$(H 3)'")" "expired|-|-|-" "expired pass: expired"
+eq "$(q "select used_at is null from call_passes where pass_hash='$(H 3)'")" t "an expired pass is not marked used"
+eq "$(RP "'conv-p4','$(H 2)'")" "ok|$UID1|customer|CUS-1001" "mapped pass returns its customer_id (L3)"
+SR "insert into call_passes(pass_hash,user_id,role) values ('$(H 4)','$UID1','customer')" >/dev/null
+eq "$(RP "'conv-p4','$(H 4)'")" "ok|$UID1|customer|CUS-1001" "a second pass on an already-linked conversation: ok, the conversation keeps its first pass"
+eq "$(q "select used_at is null from call_passes where pass_hash='$(H 4)'")" t "the second pass stays unused"
+eq "$(RP "'','$(H 4)'")" "missing|-|-|-" "empty conversation id: missing"
+neg "insert into call_passes(pass_hash,user_id,role) values ('$(H 5)','$UID1','admin')" "unknown role"
+neg "insert into call_passes(pass_hash,user_id,role) values ('abc','$UID1','customer')" "pass_hash not 64 hex"
+neg "insert into call_passes(pass_hash,user_id,role,expires_at) values ('$(H 6)','$UID1','customer',now()+interval '1 hour')" "expiry longer than 10 minutes"
+neg "insert into call_passes(pass_hash,user_id,role,customer_id) values ('$(H 7)','$UID1','customer','CUS-9999')" "unknown customer_id"
+neg "insert into call_passes(pass_hash,user_id,role,used_at) values ('$(H 8)','$UID1','customer',now())" "used without a conversation"
+neg "insert into call_passes(pass_hash,user_id,role) values ('$(H 1)','$UID1','customer')" "duplicate pass_hash"
+neg "update call_passes set conversation_id='conv-p1', used_at=now() where pass_hash='$(H 4)'" "two passes on one conversation"
+eq "$(q "select has_table_privilege('anon','call_passes','select')")|$(q "select has_table_privilege('authenticated','call_passes','select')")|$(q "select has_table_privilege('service_role','call_passes','insert')")" "f|f|t" "only service_role reads or writes call_passes"
+eq "$(q "select has_function_privilege('anon','redeem_call_pass(text,text)','execute')")|$(q "select has_function_privilege('authenticated','redeem_call_pass(text,text)','execute')")|$(q "select has_function_privilege('service_role','redeem_call_pass(text,text)','execute')")" "f|f|t" "only service_role executes redeem_call_pass"
 
 # Privileges on every new or replaced function.
 for fn in "check_attempt_scope(text,text,integer)" "create_support_ticket_guarded(text,text,text,text,text,text,text,text)" "create_escalation_with_ticket(text,text,text,text,text,text,text,text,text,text,text,text,boolean,text)" "set_verified_customer(text,text,text)" "log_conversation_event_guarded(text,text,integer,text,text,jsonb)" "begin_turn_attempt(text,text,text,integer,text,text,text)" "abandon_stale_conversations(integer)"; do

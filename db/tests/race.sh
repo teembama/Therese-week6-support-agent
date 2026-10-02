@@ -75,5 +75,29 @@ check '[[ "$A_RES" == *"created=true" ]]' "A created=true"
 check '[[ "$B_RES" == *"created=false" ]]' "B created=false"
 check '[[ "${A_RES% created=*}" == "${B_RES% created=*}" && -n "$A_RES" ]]' "B returned A's ticket_id and escalation_id"
 check '[[ "$TICKETS" == 1 && "$ESCS" == 1 ]]' "exactly one ticket and one escalation"
+
+# ---- Migration 007 (D86): one pass redeemed concurrently by two conversations. A holds the pass
+# row locked (redeemed, uncommitted); B must block, then see it used by another conversation.
+PH=$(printf '%064d' 7)
+pg -c "insert into call_passes(pass_hash,user_id,role) values ('$PH','11111111-1111-4111-8111-111111111111','customer')" >/dev/null
+pg -At > "$TEST_TMP/PA.out" 2>&1 <<SQL &
+set role service_role;
+begin;
+select 'pass: ' || status from redeem_call_pass('conv-A', '$PH');
+select '' from pg_sleep(3);
+commit;
+SQL
+PID_PA=$!
+sleep 1
+pg -At > "$TEST_TMP/PB.out" 2>&1 <<SQL &
+set role service_role;
+select 'pass: ' || status from redeem_call_pass('conv-B', '$PH');
+SQL
+PID_PB=$!
+wait $PID_PA $PID_PB
+PA=$(grep '^pass:' "$TEST_TMP/PA.out"); PB=$(grep '^pass:' "$TEST_TMP/PB.out")
+LINKED=$(pg -At -c "select conversation_id from call_passes where pass_hash='$PH'")
+echo "=== Call pass race: A=$PA B=$PB linked=$LINKED"
+check '[[ "$PA" == "pass: ok" && "$PB" == "pass: reused" && "$LINKED" == "conv-A" ]]' "one pass, two concurrent conversations: exactly one redeems it (007)"
 echo "--- failures: $FAILS"
 exit $FAILS

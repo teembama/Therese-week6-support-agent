@@ -21,6 +21,7 @@
 // Usage: npm run eval:scenarios -- [--base-url https://<domain>] [--cap 1.00] [--prd-reps 3]
 //          [--only S1,S7,SEC-NOTES] [--label after2] [--estimate-only] [--no-write] [--stop-on-network-error] [--out <results.json>]
 
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +44,14 @@ const ESTIMATE_ONLY = process.argv.includes("--estimate-only");
 const NO_WRITE = process.argv.includes("--no-write");
 /** Abort the whole run on a network failure (DNS, connect), instead of recording it and moving on. */
 const STOP_ON_NETWORK = process.argv.includes("--stop-on-network-error");
+/**
+ * Login enforcement (L1, D86): with --login-email, every conversation carries a real one-time call
+ * pass for that Supabase Auth account (minted here exactly as POST /calls/pass does: 32 random
+ * bytes, only the SHA-256 stored), sent where Vapi sends it: call.assistantOverrides.variableValues.
+ */
+const LOGIN_EMAIL = argValue("--login-email");
+let mintPass: (() => Promise<string>) | null = null;
+const callPasses = new Map<string, string>();
 const isNetworkError = (err: unknown) => /fetch failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|UND_ERR_CONNECT_TIMEOUT|ConnectTimeout/i.test(`${(err as Error)?.message ?? ""} ${String((err as { cause?: { code?: string } })?.cause?.code ?? "")}`);
 /** --label after2 -> run_id eval-<timestamp>-after2 (a named run in the evidence doc). */
 const LABEL = argValue("--label")?.replace(/[^a-z0-9-]/gi, "");
@@ -341,6 +350,9 @@ async function postTurn(callId: string, callerTurns: string[], agentTurns: strin
     messages.push({ role: "user", content: c });
     if (agentTurns[i] !== undefined) messages.push({ role: "assistant", content: agentTurns[i] });
   });
+  let pass = callPasses.get(callId);
+  if (!pass && mintPass) callPasses.set(callId, (pass = await mintPass()));
+  const call = { id: callId, ...(pass ? { assistantOverrides: { variableValues: { callPass: pass } } } : {}) };
   // This laptop's DNS fails intermittently (ENOTFOUND). Retry ONLY connect-level failures: the
   // request never reached the server, so a retry can't run the turn twice.
   let res: Response | null = null;
@@ -351,7 +363,7 @@ async function postTurn(callId: string, callerTurns: string[], agentTurns: strin
       res = await fetch(`${BASE_URL}/v/${process.env["VAPI_LLM_SECRET"]}/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "relaypay-agent", stream: true, call: { id: callId }, messages }),
+        body: JSON.stringify({ model: "relaypay-agent", stream: true, call, messages }),
       });
     } catch (err) {
       const code = String((err as { cause?: { code?: string } }).cause?.code ?? "");
@@ -621,6 +633,20 @@ async function main(): Promise<number> {
   process.loadEnvFile(resolve(REPO, ".env"));
   const db = createServiceClient();
   PROCEDURE = procedureCorpus();
+  if (LOGIN_EMAIL) {
+    const { data, error } = await db.auth.admin.listUsers({ perPage: 200 });
+    if (error) throw new Error(`auth users read failed: ${error.message}`);
+    const user = data.users.find((u) => u.email?.toLowerCase() === LOGIN_EMAIL.toLowerCase());
+    const role = user?.app_metadata?.["role"];
+    if (!user || (role !== "customer" && role !== "staff")) throw new Error(`--login-email: no customer/staff account ${LOGIN_EMAIL}`);
+    mintPass = async () => {
+      const p = randomBytes(32).toString("base64url");
+      const { error: e } = await db.from("call_passes").insert({ pass_hash: createHash("sha256").update(p).digest("hex"), user_id: user.id, role });
+      if (e) throw new Error(`call pass insert failed: ${e.message}`);
+      return p;
+    };
+    console.log(`login: every conversation carries a one-time call pass for ${LOGIN_EMAIL} (role ${role})`);
+  }
   const plan: Array<[Scenario, number]> = [];
   for (const sc of PRD) for (let i = 1; i <= PRD_REPS; i++) plan.push([sc, i]);
   for (const sc of [...SECURITY, ...ROBUSTNESS]) plan.push([sc, 1]);
