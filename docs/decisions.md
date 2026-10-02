@@ -1662,6 +1662,7 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - **L2**: the staff dashboard (`STAFF_DASHBOARD_ENABLED`), if time allows.
   - **L3**: a login mapped to a customer sets the verified customer at the start of the call (D74 then refuses a spoken switch), only if L1 and L2 are done.
   - Still future work regardless: confirmations to the account's verified email through a second outbox channel.
+- **Update (2026-10-02, midday): customer access changed from L1 to L1b (D88).** The call page no longer has a customer login. It offers "I'm an existing customer" (name + email) or "Continue as a guest". This is **identification, not authentication**: name and email aren't secrets. **Still future work:** real customer authentication (a login, or a one-time code emailed to the account address), confirmations to the verified email, and reusing the form's details in escalations.
 
 ### D86. L1: enforced customer login for calls (flag `CUSTOMER_LOGIN_REQUIRED`, migration 007; 2026-10-02)
 
@@ -1726,6 +1727,46 @@ Live call `01a0ef14-d79b-7000-9a36-90b444cbecd9` (2026-09-29). Both answers pass
   - **Live (deploy `e076c10b`, flag on), `scripts/check-staff.ts` 16/16:** the page is served; no token → 401; a customer session → 403; a bad type → 400. A staff session: tickets 200 (1 real, 79 with test data), callbacks 200 (0 real, 36 with test data, every one with a time). No notes or amounts anywhere; no test conversations by default.
 - **Known gap:** the only real voice escalation predates migration 006 and has no callback time, so "Scheduled callbacks" is empty without `?include_test=1` until a live escalation with a time is made.
 - Built by a background agent (no commits or deploys) and reviewed before commit `7813565`.
+
+### D88. L1b: two call paths, existing customer (name + email) or guest (migration 008; 2026-10-02)
+
+- **Replaces the customer login on the call page (D86).** The staff login (D87) is unchanged. The backend's Bearer path for `/calls/pass` is kept for `test:login` and staff, but the call page no longer uses it.
+- **Identification, not authentication.** A name and an email aren't secrets: anyone who knows a customer's contact name and email can start a call as them. It is a convenience that also stops a mid-call identity switch. It is **not** proof of identity. A login or an emailed one-time code is future work (D85).
+- **Scope:** no change to the agent prompt, gate or filter. Escalations still collect name and email by voice; reusing the form's details in escalations is future work.
+- **`POST /calls/pass`** (no Authorization header), rate-limited to 10 per minute per IP across all modes:
+  - `{mode: "customer", name, email}`: both are normalised (case, spacing; email exact after trimming and lowercasing) and must match the **same** customer, the name being the full contact name or its first name. A surname alone doesn't match. On a match it returns a pass carrying the customer (`source form_customer`) and the first name for the greeting.
+  - No match (wrong email, wrong name, or an unknown customer) → the **identical** 422 `{"error":"no_match","message":"We couldn't find an account matching those details."}`. It never says which field was wrong, and no pass is issued, so no call starts. Logs carry neither the name nor the email.
+  - `{mode: "guest"}` → a pass with no customer (`source guest`); the call is exactly as before login existed.
+- **Verified from the start:** when the first turn redeems a form pass, the backend calls `apply_call_pass_identity` (migration 008). It sets `conversations.verified_customer_id` from the **pass row** (never the caller's words) and logs `identity_verified` (source `form_customer`) before any tool runs. The tools then treat the call as verified, and a spoken claim to be someone else hits the D74 refusal (`already_verified_other`).
+- **Greeting:** a matched call starts with "Hi <first name>, this is RelayPay support. How can I help you today?", sent as a per-call `firstMessage` override in the call's assistant overrides. If Vapi refuses that override, the page starts once more without it (the pass is redeemed only on the first turn, so it is still valid). Guests keep the assistant's own greeting.
+- **Guest nudge:**
+  - On a guest call, every `lookup_customer` result carries `guest_hint`: "For a quicker check, you can also start a new call as an existing customer.", with a note that the agent **may** say it once. The two-identifier rule is unchanged.
+  - After a guest call ends, if `lookup_customer` ran on it (`identity_checked` in `/calls/:id/records`, a boolean only), the page shows "Existing customer? Choose 'I'm an existing customer' next time for a faster, more secure check."
+- **Migration 008:**
+  - `call_passes.user_id` and `role` become nullable.
+  - A `source` column (`form_customer` / `guest` / `login`) with a per-source shape check.
+  - `apply_call_pass_identity`.
+  - `redeem_call_pass` (007) is unchanged.
+- **Tests:**
+  - **Local Postgres:** schema 198/198 (18 new for 008) and race 6/6.
+  - **Unit:** `call-path.test.ts` covers matching (full and first name, case and spacing; the surname alone, wrong email, wrong name, another customer's name and unknown all rejected), `/calls/pass` (form 200 with the stored customer, the identical 422 three ways with nothing stored, guest 200, 400, 429), and the page (request bodies, responses, the greeting override, the nudge rule, markup). Records `identity_checked`. `test:gate` 301/301.
+  - **`test:tools` (live DB):** the guest hint appears on a guest call's `lookup_customer`, which still verifies Amara; it never appears on non-guest calls.
+- **Live** (deploy `dc0d1c9b`, flag on):
+  - **`npm run test:callpass` 9/10:**
+    - form-Amara → a pass with the first name; the call is verified as CUS-1001 before its first turn (the first event is the form's `identity_verified`);
+    - "Actually, I'm Felicia from AccraStack" → `lookup_customer` denied `already_verified_other`, and the call is still CUS-1001 only;
+    - wrong email, wrong name and unknown customer → the identical 422;
+    - a guest gets a pass and a normal answer, not verified;
+    - the rate limit → 429 after 10.
+  - **The failure is a wording gap that was already there in the D74 refusal, not in L1b:**
+    - The model's reply was "I can only help with one account per call. I'd be happy to connect you with a RelayPay specialist…", but its header claimed `tool=lookup_customer` with `type=answer`, and the tool had returned *denied*.
+    - The gate blocked it (`gate_blocked`) and the caller heard the generic decline: "I can't confirm that from our support information. I can connect you with a RelayPay support specialist…".
+    - The refusal is enforced (no data about the other identity, a specialist offered), but the wording isn't the one-account line.
+    - Fixing it needs a gate change (accept a *denied* tool result whose message the reply follows, for the D74 case), which is out of scope today. Recorded in `docs/limitations.md`.
+  - **Eval with passes from the deployed `/calls/pass`:**
+    - guest S1, S3, S4, S5 (`eval-2026-10-02T11-55-45-130Z-guest`): **4/4**, $0.037; guest S3's `lookup_customer` carried `+guest_hint` (the agent didn't say it; it's optional);
+    - form-Amara S3 (`eval-2026-10-02T11-56-46-404Z-form-amara`): **1/1**, $0.008; the call was already verified by the form, so `lookup_customer` returned "already verified CUS-1001".
+- **Known gap:** the agent doesn't know a form call is verified until it calls `lookup_customer`, so on a vague first question ("can you check my account status?") it still asks for a name or company. Giving it that context means a prompt change, which is out of scope today. The greeting already uses the first name.
 
 ## Migration log
 
