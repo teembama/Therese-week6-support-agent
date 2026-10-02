@@ -86,8 +86,9 @@ describe("create_escalation", () => {
     assert.doesNotMatch(s, /\bby (e-?mail|phone|call|text)\b|\be-?mail\b|\bphone\b/i, "no channel");
     assert.doesNotMatch(s, /\b(within|hours?|days?|minutes?|today|tonight|tomorrow|morning|afternoon|evening|soon|shortly|asap|am|pm|guarantee)\b/i, "no time words");
   });
-  it("requires name, email, category and reason", () => {
-    assert.equal(escalationInput.safeParse({ user_email: "a@b.co", category: "account", reason: "Account restricted" }).success, false);
+  it("requires category and reason; name and email are optional in the schema (D90: filled from the account on form calls, required by the handler otherwise)", () => {
+    assert.equal(escalationInput.safeParse({ user_email: "a@b.co", category: "account", reason: "Account restricted" }).success, true);
+    assert.equal(escalationInput.safeParse({ category: "account" }).success, false);
     assert.equal(escalationInput.safeParse({ user_name: "Efua", user_email: "a@b.co", category: "refund", reason: "Account restricted" }).success, false);
   });
 });
