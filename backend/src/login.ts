@@ -140,6 +140,12 @@ export async function handleCallPass(
     res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store", ...opts.headers });
     res.end(JSON.stringify(body));
   };
+  // TEMPORARY (D89 diagnosis): which proxy headers vary between requests. Hashes only, no addresses.
+  {
+    const h = (v: unknown) => (typeof v === "string" ? sha256Hex(v).slice(0, 8) : "-");
+    const xff = typeof req.headers["x-forwarded-for"] === "string" ? (req.headers["x-forwarded-for"] as string).split(",").map((x) => x.trim()) : [];
+    opts.log({ event: "ip_diag", key: h(clientIp(req)), real: h(req.headers["x-real-ip"]), xff_hops: xff.length, xff_first: h(xff[0]), xff_last: h(xff[xff.length - 1]), envoy: h(req.headers["x-envoy-external-address"]) });
+  }
   if (!opts.allow(clientIp(req))) {
     req.resume();
     opts.log({ event: "call_pass_rate_limited" });
