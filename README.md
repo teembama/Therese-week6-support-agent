@@ -1,43 +1,42 @@
-# RelayPay Voice Support Agent
+# RelayPay Voice Support
 
-A voice customer-support agent for RelayPay, a (fictional) cross-border payments company. You talk to it in the browser:
-- it answers from an approved knowledge base;
-- it looks up customers, transactions and payouts through a custom MCP server;
-- it creates support tickets and human escalations in Supabase.
+A browser voice agent for a fintech help desk: it answers from approved policy, checks account records and books a human callback when a case needs one. RelayPay is a fictional cross-border payments company.
 
-Everything it says passes a grounding gate in code before it is spoken.
+<!-- SCREENSHOT + DEMO VIDEO: added in the second pass -->
 
-**Live:** https://relaypay-backend-production-aa34.up.railway.app: a landing page with two buttons, **Customer support** (the call page, `/support`: choose a path, click **Start call** and allow the microphone) and **Staff sign in** (`/staff`). The header on every page has **Home** and a **Start a call** button (on the landing and call pages).
+**Stack:** Claude Agent SDK · MCP · Vapi · Supabase · TypeScript · Docker · **Live demo:** available on request
 
-### Starting a call (graders)
+## The problem
 
-From the landing page, choose **Customer support**. The call page offers two paths (D88). Choose one, then press **Start call**. While the call connects you hear a ringback tone and see "Ringing…".
-- **I'm an existing customer:** enter the account's contact name and email. Demo customer: **Amara** (or **Amara Okafor**), **amara@lagosledger.example**. The call is identified as that customer (LagosLedger, CUS-1001) from its first turn and greets you by first name. Claiming to be someone else during the call is refused: one account per call.
-  - Details that don't match one customer get "We couldn't find an account matching those details." (it never says which detail was wrong), and no call starts.
-- **Continue as a guest:** the call behaves exactly as the PRD describes. The agent asks who you are and checks two details by voice (for example "I'm Amara from LagosLedger"). **A guest needs the owner's customer ID to look up a transaction or payout (D98):** for TXN-9001 say "My customer ID is CUS-1001" (PAY-7002 → CUS-1003, TXN-9004 → CUS-1004). Without it the agent asks for it; a wrong ID gets the same answer as an unknown reference, and lookups stop after 2 failures in a call. After a guest call that checked an identity, the page suggests the existing-customer path next time.
+A fintech help desk answers the same policy and account questions all day. A voice agent could take that load, but a voice agent that guesses can tell a caller something the policy doesn't say, about their money, out loud, with no chance to edit it first. In a regulated business that's worse than no answer at all.
 
-**Callback booking (D97, D98):** when a specialist is needed, the agent books a real callback slot. No slot, no callback: if the caller won't give a time, the agent logs a ticket and says a specialist will review it. Slots: Monday to Friday, 9 AM to 5 PM Lagos time, every 30 minutes, and never a slot that is already taken. Say a day and time ("Monday at 11 AM"). A weekend, an out-of-hours time or a vague "tomorrow morning" is refused with the reason and three free slots to choose from. The booking shows on the staff dashboard under Scheduled callbacks and in Discord.
+## Results
 
-**What this enforces (and what it doesn't):**
-- Every call needs a **one-time call pass** from the backend, issued just before the call starts. It expires after 5 minutes and works for **one call only**. A call without a valid pass hears "Please log in on the RelayPay page to use voice support." and nothing else: the agent doesn't run.
-- The existing-customer path is **identification, not authentication**: a name and an email aren't secrets. Real customer authentication (a login or an emailed code) is future work (docs/limitations.md).
-- The form's details are sent once, to get the pass. Nothing is stored in the browser, and the browser never reads the database.
+- **Evaluations went from 15/34 to 31/34 passing** (the 8 product scenarios ×3, plus 5 security and 5 robustness cases) against the deployed service, with database checks and an LLM judge whose quotes are verified in code. The 8 scenarios alone went from 11/24 to 21/24.
+- **About 1.4 s to the first spoken sentence** (median, deployed, measured server-side). Across 4 live calls, Vapi measured 3.0–5.4 s on average from the caller's end of speech to the agent's audio, including transcription and speech synthesis.
+- **About $0.003 of model spend per turn.** Each turn is capped at $0.05 and 4 model turns, with at most 3 turns running at once.
+- **31 test files** hold 355 backend unit tests, 42 MCP server tests and 28 shared-helper tests, all passing. A separate database suite runs 219 checks on a throwaway local Postgres, all passing, plus a concurrent-write race test. Eval results and run IDs are in [docs/testing-evidence.md](docs/testing-evidence.md).
 
-### Staff dashboard (graders)
+## What it does
 
-- **URL:** `/staff` on the live service (https://relaypay-backend-production-aa34.up.railway.app/staff). **Staff account:** `care@relaypay.example`; the password is provided separately in the submission.
-- From the landing page, choose **Staff sign in**.
-- Two filters: **Raised tickets** (tickets without an escalation) and **Scheduled callbacks** (escalations with a booked callback slot, sorted by slot time, D97). Press **Refresh** for new records.
-- **Close (D98):** open and in-progress cards have a **Close** button, with a confirmation ("Close ESC-…? Its callback slot will be freed."). The server allows staff only (401/403 otherwise) and records who closed it and when. Closed items stay listed, marked closed.
-- **Real calls only by default.** Add `?include_test=1` to the URL to include test and eval data: `/staff?include_test=1`.
-- Only staff accounts can see it; a customer account gets "This account isn't staff." It shows no support notes and no amounts (D87).
+From the landing page, a caller chooses **Customer support**, picks how to identify themselves, and presses **Start call** (allowing the microphone). They hear a ringback tone while the call connects.
 
----
+- **Existing customer:** the caller enters the account's contact name and email. The call is identified as that customer from its first turn, and greets them by first name. Claiming to be someone else mid-call is refused. Details that don't match exactly one customer get the same answer whichever detail was wrong, and no call starts.
+- **Guest:** the agent asks who the caller is and checks two details by voice. To look up a transaction or payout, a guest also needs the owner's customer ID. A wrong ID gets the same answer as an unknown reference, and lookups stop after 2 failures in a call.
 
-## Architecture
+During the call the agent:
+
+- **answers policy questions** from an approved knowledge base;
+- **looks up customers, transactions and payouts**, returning only customer-safe details (never amounts, stored emails or support notes);
+- **creates support tickets and escalations**;
+- **books a real callback slot** when a specialist is needed. Slots run Monday to Friday, every 30 minutes from 9:00 to 16:30 Lagos time, and a taken slot is never offered. A weekend, out-of-hours or vague time ("tomorrow morning") is refused with the reason and three free slots to choose from.
+
+Staff sign in at `/staff` to see raised tickets and scheduled callbacks (sorted by slot time) and to close them, which frees the callback slot. New tickets and escalations can also post to a Discord channel.
+
+## How it works
 
 ```
- Browser page (/)          Vapi (speech-to-text, text-to-speech, turn-taking)
+ Browser page              Vapi (speech-to-text, text-to-speech, turn-taking)
  @vapi-ai/web  ─────────►  Custom LLM: POST /v/<token>/chat/completions  ──┐
                            Webhook:    POST /v/<token>/vapi/events      ──┤
                                                                          ▼
@@ -48,25 +47,46 @@ From the landing page, choose **Customer support**. The call page offers two pat
                           ├─ Claude Agent SDK (Haiku 4.5) ── stdio ──► MCP server (6 tools) ──► Supabase
                           └─ grounding gate: header check + per-sentence filter ──► SSE back to Vapi
                                                                          │
-                          Supabase (Postgres, eu-central-1): seed data, KB, every turn, attempt,
-                          retrieval, tool call, ticket, escalation, event and evaluation
+                          Supabase (Postgres, eu-central-1): seed data, knowledge base, and every turn,
+                          attempt, retrieval, tool call, ticket, escalation, event and evaluation
 ```
 
 | Component | Where | What it does |
 | --- | --- | --- |
-| Web pages | `backend/public/` | Static pages with a shared header and footer: the landing page at `/`, the call page at `/support` (starts a Vapi web call with the public key and assistant ID from `/config`, after getting a one-time call pass), and the staff dashboard at `/staff`. |
-| Vapi assistant | Vapi dashboard | Speech-to-text (Soniox), text-to-speech and endpointing. Its "Custom LLM" is our backend. **Vapi runs no tools.** |
-| Backend | `backend/` | The OpenAI-compatible `/chat/completions` endpoint for Vapi. It runs one agent turn per request (Claude Agent SDK), gates what is spoken, records everything, and handles the end-of-call webhook. |
-| MCP server | `mcp-server/` | A stdio MCP server, spawned per turn, with 6 tools: `lookup_customer`, `lookup_transaction`, `lookup_payout`, `create_support_ticket`, `create_escalation`, `log_conversation_event`. Identity, ownership, write caps and idempotency are enforced here and in the database, not by the model. |
-| Shared | `shared/` | Supabase client, retrieval, grounding checks, logging helpers. |
-| Database | `db/migrations/001–009` | Tables, row-level security, guarded write functions (atomic escalation with its ticket, attempt-scoped writes), escalation enrichment and the notification outbox (006), one-time call passes (007, 008), and callback slots with no double booking (009). |
-| Scripts | `scripts/` | Seed verification, tests, evals, and the MCP Inspector launcher. |
+| Web pages | `backend/public/` | The landing page (`/`), the call page (`/support`, which gets a one-time call pass and then starts a Vapi web call) and the staff dashboard (`/staff`). |
+| Vapi assistant | Vapi dashboard | Speech-to-text, text-to-speech and turn-taking. Its "Custom LLM" is this backend. **Vapi runs no tools.** |
+| Backend | `backend/` | The OpenAI-compatible `/chat/completions` endpoint Vapi calls. It runs one agent turn per request, gates what is spoken, records everything and handles the end-of-call webhook. |
+| MCP server | `mcp-server/` | A stdio MCP server, started per turn, with 6 tools: `lookup_customer`, `lookup_transaction`, `lookup_payout`, `create_support_ticket`, `create_escalation`, `log_conversation_event`. Identity, ownership, write caps and idempotency are enforced here and in the database, not by the model. |
+| Shared | `shared/` | Supabase client, retrieval, grounding checks and logging helpers. |
+| Database | `db/migrations/001–009` | Tables, row-level security, guarded write functions, escalation details and the notification outbox, one-time call passes, and callback slots with no double booking. |
+| Scripts | `scripts/` | Seed verification, tests, evals and the MCP Inspector launcher. |
 
 The full design is in [docs/system-overview.md](docs/system-overview.md), and every decision with its reason is in [docs/decisions.md](docs/decisions.md).
 
----
+## Design decisions
 
-## Prerequisites
+- **Nothing is spoken until code checks it.** Every non-social reply must cite knowledge-base passages the agent actually retrieved this turn, and each sentence is filtered again before it's spoken. A dropped sentence is safer than a spoken unsupported claim.
+- **The rules live in the tools and the database, not the prompt.** The MCP tools enforce identity, record ownership, write caps and idempotency. Once a caller is verified, another customer's reference gets the same "not available" answer as a missing one.
+- **Every call needs a one-time pass.** The backend issues it just before the call starts. It expires after 5 minutes, works for one call only, and is stored only as a hash. Without one, the agent doesn't run.
+- **Caller words are data, never instructions.** Caller text is escaped and marked untrusted. The agent has no built-in tools (no shell, files or web), only the 6 MCP tools, and a guard fails the turn if that set ever differs.
+- **Bounded cost and load.** Each turn is capped at $0.05 and 4 model turns, with at most 3 turns at once and a polite busy line beyond that. Thanks, goodbyes and declined offers get fixed lines without calling the model at all.
+- **Secrets stay server-side.** The browser gets only the Vapi public key and assistant ID (plus the Supabase publishable key for staff sign-in), never the database.
+
+## Limitations
+
+- **The existing-customer path is identification, not authentication.** A name and an email aren't secrets. The path unlocks no sensitive data, but real customer authentication (a login or an emailed code) is still to do.
+- **Grounding has one known gap.** In an answer citing a valid passage, a plausible claim with no number in it can slip past the pattern checks. The offline LLM judge catches it, but there's no runtime judge, because it would add about 0.6–1.2 s before the first word.
+- **Short customer IDs:** a guest needs the owner's customer ID to look something up, but those IDs are short, so they aren't secrets either.
+- **One replica only.** Duplicate-request handling is in-process, so the service mustn't be scaled out as it stands.
+- **The callback calendar is simple:** one shared team calendar and fixed 30-minute slots, with no public holidays excluded.
+- **Calls end when the caller hangs up.** Vapi's end-call phrase doesn't fire on the goodbye line, so a backend-driven hang-up is future work.
+- **The model needs replacing soon.** Claude Haiku 4.5 has a retirement floor of 2026-10-15. The model is set by environment variable, with an automatic fallback to `claude-sonnet-5-5`.
+
+Everything else, with the reasoning, is in [docs/limitations.md](docs/limitations.md).
+
+## Run it locally
+
+### Prerequisites
 
 - **Node.js 22** (`node --version` should print v22.x).
 - A **Supabase** project. You need its URL and the **service role (secret) key**, which is server-side only.
@@ -75,9 +95,9 @@ The full design is in [docs/system-overview.md](docs/system-overview.md), and ev
 - For deploying: a **Railway** account and the Railway CLI.
 - For `npm run db:test` only: local PostgreSQL binaries (`initdb`, `pg_ctl`, `psql`).
 
-## Setup (local)
+### Setup
 
-1. **Clone and install**
+1. **Clone and install.**
    ```bash
    git clone https://github.com/teembama/Therese-week6-support-agent.git
    cd Therese-week6-support-agent
@@ -94,11 +114,10 @@ The full design is in [docs/system-overview.md](docs/system-overview.md), and ev
    - `AGENT_MODEL=claude-haiku-4-5`, `AGENT_MODEL_FALLBACK=claude-sonnet-5-5`;
    - `VAPI_PUBLIC_KEY`, `VAPI_ASSISTANT_ID`.
 
-   Login (D86): `SUPABASE_PUBLISHABLE_KEY` (the project's publishable key) and `CUSTOMER_LOGIN_REQUIRED=1` to enforce it. Accounts are Supabase Auth users with `app_metadata.role` = `customer` or `staff`, set through the admin API. With the flag off, calls need no login.
-
-   Optional: `DISCORD_WEBHOOK_URL` turns on team notifications in Discord for new tickets and escalations (D83). Without it, the sender stays off and rows stay pending.
-
-   The `RELAYPAY_*` variables are test knobs: leave them at their defaults.
+   Optional:
+   - `STAFF_DASHBOARD_ENABLED=1` and `SUPABASE_PUBLISHABLE_KEY` (the project's publishable key) turn on `/staff`.
+   - `DISCORD_WEBHOOK_URL` turns on Discord notices for new tickets and escalations. Without it, the sender stays off and notices stay pending.
+   - Leave `CUSTOMER_LOGIN_REQUIRED=0` (a customer login flow the call page no longer uses) and the `RELAYPAY_*` test settings at their defaults.
 3. **Apply the migrations in order.** In the Supabase dashboard, open **SQL Editor** and run each file's full contents, one at a time, **in this order**:
    1. `db/migrations/001_schema.sql`
    2. `db/migrations/002_search_kb.sql`
@@ -111,26 +130,35 @@ The full design is in [docs/system-overview.md](docs/system-overview.md), and ev
    9. `db/migrations/009_callback_slots.sql`
 
    Migrations are append-only: never edit one that has been applied.
-4. **Seed the business data** (customers, transactions and payouts from `assets/seed-data/*.csv`; upserts, so it's safe to rerun):
+4. **Seed the business data:** customers, transactions and payouts from `assets/seed-data/*.csv`. It upserts, so it's safe to rerun.
    ```bash
    npm run db:seed
    ```
-5. **Verify the seed** (read-only: row counts, no orphans, the scenario fixtures):
+5. **Verify the seed.** This is read-only: row counts, no orphans and the scenario fixtures.
    ```bash
    npm run db:verify      # ends with "VERIFY OK"
    ```
-6. **Load the knowledge base** (`assets/relaypay-knowledge-base.md` → `kb_chunks`, about 37 chunks; it syncs, so reruns don't duplicate):
+6. **Load the knowledge base:** `assets/relaypay-knowledge-base.md` becomes `kb_chunks` (about 37 chunks). It syncs, so reruns don't duplicate.
    ```bash
    npm run db:load-kb
    ```
-7. **Run the backend**
+7. **Run the backend.**
    ```bash
    npm run build
    npm start -w @relaypay/backend      # http://localhost:8787 (PORT to change)
    ```
    Check it: `curl http://localhost:8787/health` → `{"status":"ok"}`.
 
-   The voice page at `http://localhost:8787/` only works if Vapi can reach your backend over the internet, and a laptop on a home or office network usually isn't reachable from outside. Either expose it through a tunnel and point Vapi's URLs at the tunnel (see Troubleshooting), or use the deployed service.
+   The voice page only works if Vapi can reach your backend over the internet, and a laptop on a home or office network usually isn't reachable. Expose it through a tunnel and point Vapi's URLs at the tunnel (see Troubleshooting), or deploy it.
+8. **Staff accounts** (optional) are Supabase Auth users with `app_metadata.role` = `staff`, set through the Supabase admin API.
+
+### Try a call
+
+The seed data includes a demo customer, **Amara Okafor** of LagosLedger (`CUS-1001`):
+
+- **Existing customer path:** name **Amara** (or **Amara Okafor**), email **amara@lagosledger.example**.
+- **Guest path:** say "I'm Amara from LagosLedger". To look up `TXN-9001`, also say "My customer ID is CUS-1001". Other seeded pairs: `PAY-7002` → `CUS-1003`, `TXN-9004` → `CUS-1004`.
+- **Callback:** ask for a specialist and give a weekday time, such as "Monday at 11 AM".
 
 ## Run the MCP server standalone (MCP Inspector)
 
@@ -151,7 +179,7 @@ npx @modelcontextprotocol/inspector --cli node scripts/inspector-server.mjs --me
 npx @modelcontextprotocol/inspector --cli node scripts/inspector-server.mjs --method tools/call --tool-name lookup_customer --tool-arg contact_name=Amara --tool-arg company_name=LagosLedger
 ```
 
-- **Environment it uses** (from `.env`): `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. `CONVERSATION_ID`, `TURN_INDEX` and `ATTEMPT_ID` are set by the launcher.
+- **Environment it uses** (from `.env`): `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The launcher sets `CONVERSATION_ID`, `TURN_INDEX` and `ATTEMPT_ID`.
 - **Where the calls are recorded:** every call is a row in `tool_calls` under the printed `test-inspector-…` conversation.
 - **Things to try:**
   - `lookup_customer` with a single identifier → `needs_second_identifier`;
@@ -167,14 +195,13 @@ In the Vapi dashboard, on the assistant:
 | Model provider | **Custom LLM** |
 | Custom LLM URL (a *base* URL; Vapi appends `/chat/completions`) | `https://<your-host>/v/<VAPI_LLM_SECRET>` |
 | Server URL (webhook) | `https://<your-host>/v/<VAPI_LLM_SECRET>/vapi/events` |
-| Server messages | `end-of-call-report` is the one we use. If the dashboard shows no selector, Vapi's default list is fine: other types are acknowledged and ignored. |
+| Server messages | `end-of-call-report` is the one used. If the dashboard shows no selector, Vapi's default list is fine: other types are acknowledged and ignored. |
 | Metadata send mode | **Variable** (so `call.id` arrives in the body) |
-| End call phrases | `Thanks for calling RelayPay. Goodbye.` (our fixed goodbye line) |
+| End call phrases | `Thanks for calling RelayPay. Goodbye.` (the fixed goodbye line) |
 | Tools / knowledge base | **None.** Vapi must not run tools; the backend does. |
 | Public key | Restricted to this assistant, transient assistants **off**, allowed origin = your deployed `https://` origin |
 
-- **The token is in the path.** A wrong token gets the same 404 as an unknown path. Rotate `VAPI_LLM_SECRET` after demos, then update the Vapi URLs to match.
-- **The end-call phrase has never been seen to fire.** Calls so far ended `customer-ended-call`. See docs/next-session.md for backend-side alternatives.
+The token is in the path, and a wrong token gets the same 404 as an unknown path. Rotate `VAPI_LLM_SECRET` after demos, then update the Vapi URLs to match.
 
 ## Deploy to Railway
 
@@ -182,7 +209,7 @@ In the Vapi dashboard, on the assistant:
 - Node 22 slim image, non-root user, `/health` healthcheck;
 - restart on failure;
 - 1 replica in `europe-west4-drams3a` (EU West, next to Supabase Frankfurt);
-- `drainingSeconds: 15`, so the SIGTERM drain can finish. Railway's default is 0.
+- `drainingSeconds: 15`, so the shutdown drain can finish. Railway's default is 0.
 
 ```bash
 railway login
@@ -201,75 +228,63 @@ railway domain                                # the public https origin
 ```
 
 - **Check the region.** The first deploy once ignored the file's region. Confirm with `railway status --json` (`multiRegionConfig` should show `europe-west4-drams3a: 1`). If it's wrong: `railway scale eu-west=1 us-west=0`.
-- **Keep one replica.** Duplicate-request joining is in-process (docs/limitations.md).
+- **Keep one replica** (see Limitations).
 - **Smoke test:** `npm run test:deployed -- --base-url https://<domain> --kb-runs 3 --s4-runs 3`.
 
 ## Tests and evals
 
 | Command | What it checks | Writes to Supabase? | Spends money? |
 | --- | --- | --- | --- |
-| `npm run test:gate -w @relaypay/backend` | Backend unit tests: gate, sentence filter, social fast path, admission, webhook mapping (193) | No | No |
-| `npm test -w @relaypay/mcp-server`, `npm test -w @relaypay/shared` | MCP tool and shared-helper unit tests | No | No |
-| `npm run db:test` | 131 schema checks + a concurrent-escalation race test, on a **throwaway local Postgres** (refuses non-localhost) | No | No |
+| `npm run test:gate -w @relaypay/backend` | Backend unit tests (355): gate, sentence filter, social fast path, admission, webhook mapping, call path, staff view | No | No |
+| `npm test -w @relaypay/mcp-server`, `npm test -w @relaypay/shared` | MCP tool (42) and shared-helper (28) unit tests | No | No |
+| `npm run db:test` | 219 schema checks plus a concurrent-escalation race test, on a **throwaway local Postgres** (refuses non-localhost) | No | No |
 | `npm run db:verify` | Seed integrity | Read-only | No |
 | `npm run test:tools` | The 6 tools through the real MCP server: identity, ownership, caps, idempotency, guard | Yes (`test-` rows) | No |
-| `npm run test:mcp` | MCP server start-up and env rules through the real MCP client | Yes (`test-` rows) | No |
+| `npm run test:mcp` | MCP server start-up and environment rules through the real MCP client | Yes (`test-` rows) | No |
 | `npm run eval:retrieval` | Retrieval ranks for the scenario questions | Yes (retrieval logs) | No |
 | `npm run test:capacity` | Concurrency cap and graceful shutdown on a local backend | Yes | ~$0.03 (model) |
 | `npm run test:agent` | Scenario conversations through a local backend, with assertions (cap $0.15) | Yes | ≤ $0.15 |
-| `npm run test:endpoint` | End-to-end endpoint behaviour, fault injection, latency (local servers) | Yes | a few cents |
-| `npm run test:deployed -- --base-url …` | The deployed service: routes, webhook, logs, latency | Yes | ≤ $0.15 |
+| `npm run test:endpoint` | End-to-end endpoint behaviour, fault injection and latency (local servers) | Yes | a few cents |
+| `npm run test:deployed -- --base-url …` | The deployed service: routes, webhook, logs and latency | Yes | ≤ $0.15 |
 | `npm run eval:grounding` | The deterministic grounding checks on fixed questions | Yes | a few cents |
-| `npm run test:callpass` | The call page's two paths on the deployed service: form-Amara verified from turn 0 and a spoken identity switch refused; wrong email / wrong name / unknown → the identical 422; guest; the rate limit | Yes (`test-callpass-` rows) | ~$0.02 |
-| `npm run eval:scenarios -- --cap 0.50` | **PRD scenarios ×3 + security + robustness against the deployed service, with deterministic DB checks and an LLM judge with verified quotes; writes `evaluations`**. With call passes enforced, add `--path guest` (or `--path customer --form-name Amara --form-email amara@lagosledger.example`): every conversation gets a real one-time pass from the deployed `/calls/pass` | Yes | ~$0.45 |
-
-`npm run test:login` is **retired**: it tested the customer Supabase login (L1, D86), which was removed from the call page in L1b (D88), and its demo customer accounts were deleted on 2026-10-02.
-
-Results: [docs/testing-evidence.md](docs/testing-evidence.md) (BEFORE 15/34 → AFTER 31/34, plus a targeted after2 run).
+| `npm run test:callpass` | The call page's two paths on the deployed service: a form-identified customer verified from the first turn and a spoken identity switch refused; wrong email, wrong name or unknown → the identical response; guest; the rate limit | Yes (`test-callpass-` rows) | ~$0.02 |
+| `npm run eval:scenarios -- --cap 0.50` | **The product scenarios ×3, plus security and robustness cases, against the deployed service, with deterministic database checks and an LLM judge with verified quotes; writes `evaluations`.** With call passes enforced, add `--path guest` (or `--path customer --form-name Amara --form-email amara@lagosledger.example`): every conversation then gets a real one-time pass from `/calls/pass`. | Yes | ~$0.45 |
 
 ## Security notes
 
 - **Secrets stay server-side.**
   - The Supabase service role key and the Anthropic key are only in the backend's environment.
-  - The agent's CLI process gets only the Anthropic key. The MCP process gets only Supabase credentials and the conversation, turn and attempt IDs; it refuses to start if the Anthropic key is present.
-  - `/config` serves only the Vapi **public** key and assistant ID, plus the Supabase URL and **publishable** key when login is on.
-- **Call passes (D86, D88):** 32 random bytes, stored only as SHA-256, valid 5 minutes, redeemed once (row lock), and never logged. The existing-customer path matches name AND email to one customer and answers every mismatch identically; it is identification, not authentication. A matched call's customer is set from the pass, never from the caller's words. `/calls/pass` is rate-limited. Staff roles come only from Supabase `app_metadata`, verified by the backend.
-- **The endpoint token is in the URL path**, compared in constant time. Request paths are redacted in logs. Rotate it after demos.
-- **The agent has no built-in tools** (no shell, files or web), only the 6 MCP tools. A tool-list guard fails the turn if the set differs (D21).
-- **Sensitive data:**
-  - Tools never return amounts, currency, stored emails or support notes.
-  - Once a caller is verified, another customer's reference gets the same "not available" answer as a missing one (D44/D57).
-  - Identity takes two identifiers and is stored server-side. Name plus company is accepted, as Scenario 3 requires, and verification unlocks no sensitive data (D63).
-- **Grounding:** every non-social reply is filtered sentence by sentence against this turn's evidence before it's spoken. Known gap: a number-free unsupported claim in an answer (docs/limitations.md).
-- **The web page:** strict CSP (`'unsafe-eval'` and `blob:` only because Vapi/Daily need them), no inline scripts, `frame-ancestors 'none'`.
+  - The agent's process gets only the Anthropic key. The MCP process gets only Supabase credentials and the conversation, turn and attempt IDs, and refuses to start if the Anthropic key is present.
+  - `/config` serves only the Vapi **public** key and assistant ID, plus the Supabase URL and **publishable** key when staff sign-in is on.
+- **Call passes:** 32 random bytes, stored only as SHA-256, valid for 5 minutes, redeemed once (under a row lock) and never logged. The existing-customer path matches name AND email to one customer and answers every mismatch identically. A matched call's customer is set from the pass, never from the caller's words. `/calls/pass` is rate-limited. Staff roles come only from Supabase `app_metadata`, verified by the backend.
+- **The endpoint token is in the URL path**, compared in constant time. Request paths are redacted in logs.
+- **Sensitive data:** tools never return amounts, currency, stored emails or support notes. Identity takes two identifiers and is stored server-side.
+- **The web page:** strict CSP (`'unsafe-eval'` and `blob:` only because Vapi's audio library needs them), no inline scripts, `frame-ancestors 'none'`.
 
 ## Troubleshooting
 
-- **The agent hears itself (echo).** Use earphones: laptop speakers can feed the agent's voice back into the microphone, and it is then transcribed as the caller (smoke test: the agent's own "While I check that—" came back as a caller turn).
+- **The agent hears itself (echo).** Use earphones: laptop speakers can feed the agent's voice back into the microphone, where it's transcribed as the caller.
 
-| Symptom | Cause we hit | Fix |
+| Symptom | Cause | Fix |
 | --- | --- | --- |
-| The call starts, then "Meeting ended due to ejection"; Vapi records `silence-timed-out` or `…did-not-receive-customer-audio` | The browser sent no audio: the CSP blocked Daily's noise-filter worklet (`blob:`) or bundle (`eval`) (D55), or the wrong mic or output device was selected | Check Chrome's console for CSP errors. Use the built-in mic and speakers, disconnect Bluetooth headsets, and close other apps using the mic (Zoom, Teams, WhatsApp, other tabs). The page's error box gives the same steps. |
+| The call starts, then "Meeting ended due to ejection"; Vapi records `silence-timed-out` or `…did-not-receive-customer-audio` | The browser sent no audio: the CSP blocked the audio library's noise-filter worklet (`blob:`) or bundle (`eval`), or the wrong mic or output device was selected | Check Chrome's console for CSP errors. Use the built-in mic and speakers, disconnect Bluetooth headsets, and close other apps using the mic (Zoom, Teams, WhatsApp, other tabs). The page's error box gives the same steps. |
 | "Microphone access is blocked" | Site permission denied | Click the padlock in the address bar → Microphone → Allow, then reload. |
-| "The call couldn't start because the voice component failed to load" | A CSP violation or SDK load failure on our side | See D55. `/csp-report` records violations. |
-| `fetch failed` / `ENOTFOUND` from scripts on a laptop | Intermittent local DNS | Retry. `eval:scenarios` retries connect-level errors itself. It isn't a server problem: check `/health`. |
-| Vapi says the LLM failed (`pipeline-error-custom-llm-…`) after a restart | When developing locally through a tunnel, **the tunnel URL changes on every restart**, so Vapi still points at the old one | Update the assistant's Custom LLM URL and Server URL to the new tunnel URL (keep the `/v/<token>` path), or use the deployed service. |
+| "The call couldn't start because the voice component failed to load" | A CSP violation or a failure loading the voice SDK | `/csp-report` records violations. |
+| `fetch failed` / `ENOTFOUND` from scripts on a laptop | Intermittent local DNS | Retry. `eval:scenarios` retries connection errors itself. It isn't a server problem: check `/health`. |
+| Vapi says the LLM failed (`pipeline-error-custom-llm-…`) after a restart | When developing locally through a tunnel, **the tunnel URL changes on every restart**, so Vapi still points at the old one | Update the assistant's Custom LLM URL and Server URL to the new tunnel URL (keep the `/v/<token>` path), or deploy. |
 | Every reply is "Sorry, I'm having trouble checking that right now…" | Supabase or Anthropic unreachable, or the MCP server failed the tool-list guard | Check `conversation_turns.confidence_note` for the turn, and the deploy logs (`event="turn"`, `request_error`). |
-| "We're getting a lot of calls right now…" | More than 3 agent turns at once in one process (D59), or the process is shutting down (D60) | Expected under load. Raise `RELAYPAY_MAX_CONCURRENT_TURNS` only with more memory per replica. |
+| "We're getting a lot of calls right now…" | More than 3 agent turns at once in one process, or the process is shutting down | Expected under load. Raise `RELAYPAY_MAX_CONCURRENT_TURNS` only with more memory per replica. |
 
-## Docs
+## More docs
 
 | File | What's in it |
 | --- | --- |
-| [docs/one-page.md](docs/one-page.md) | One-page guide to operating the system |
-| [docs/system-overview.md](docs/system-overview.md) | Full current-state architecture, data, security, reliability, cost and testing |
-| [docs/testing-evidence.md](docs/testing-evidence.md) | PRD test table, BEFORE/AFTER eval runs, live calls, logging and latency evidence |
-| [docs/decisions.md](docs/decisions.md) | Every decision (D1–D69): what was observed, what changed, why |
+| [docs/one-page.md](docs/one-page.md) | A one-page guide to operating the system |
+| [docs/system-overview.md](docs/system-overview.md) | The full architecture, data, security, reliability, cost and testing |
+| [docs/testing-evidence.md](docs/testing-evidence.md) | The test table, before-and-after eval runs, live calls, logging and latency evidence |
+| [docs/decisions.md](docs/decisions.md) | Every decision: what was observed, what changed and why |
 | [docs/limitations.md](docs/limitations.md) | Known limitations and future work |
-| [docs/latency.md](docs/latency.md) | Latency measurements, laptop vs deployed, and the init regression |
+| [docs/latency.md](docs/latency.md) | Latency measurements, laptop vs deployed |
 | [docs/model-choice.md](docs/model-choice.md) | Why Haiku 4.5 |
 | [docs/retrieval-eval.md](docs/retrieval-eval.md), [docs/grounding-eval.md](docs/grounding-eval.md) | Retrieval and grounding evaluations |
-| [docs/loom-script.md](docs/loom-script.md) | The demo script |
-| [docs/next-session.md](docs/next-session.md), [docs/pre-submission-checklist.md](docs/pre-submission-checklist.md) | Open items |
-| [docs/assignment-brief.md](docs/assignment-brief.md) | The original assignment brief (formerly this README) |
-| `PRD.md`, `assets/` | The product requirements and the source material: KB, rules, tool spec, schema, seed data, test scenarios |
+| `PRD.md`, `assets/` | The product requirements and the source material: knowledge base, rules, tool spec, schema, seed data and test scenarios |
